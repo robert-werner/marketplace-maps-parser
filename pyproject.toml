@@ -2,4 +2,14 @@
 name = "marketplace-maps-parser"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "httpx>=0.28.1",
+    "invisible-playwright>=0.14.0",
+    "isort>=9.0.1",
+    "loguru>=0.7.3",
+    "mypy>=2.3.1",
+    "playwright>=1.62.0",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "ruff>=0.16.7",
+]

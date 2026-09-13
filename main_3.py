@@ -74,8 +74,8 @@ async def main() -> None:
     )
 
     transport = BrowserJsonTransport(
-        timeout_ms=90_000,
-        settle_ms=2_000,
+        timeout_ms=10_000,
+        settle_ms=1_000,
         debug_dir="debug_ozon",
         humanize=True,
     )
