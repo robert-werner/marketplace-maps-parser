@@ -120,6 +120,12 @@ uv run python -m marketplace_maps_parser \
   --url "https://www.ozon.ru/product/..." \
   --transport hybrid
 
+# Use public_page (default — scrape the public review page DOM, least Cloudflare friction)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --transport public_page
+
 # Use legacy in-page fetch (faster but more Cloudflare 403s)
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
@@ -231,15 +237,21 @@ The script is applied via `page.add_init_script` so it runs before any page JS e
 
 If stealth causes issues with a particular Ozon layout, disable it temporarily with `--no-stealth` for debugging.
 
-### Transport: Playwright vs curl_cffi vs hybrid
+### Transport: public_page vs playwright vs curl_cffi vs hybrid
 
-`--transport` selects between three Ozon transport implementations:
+`--transport` selects between four Ozon transport implementations:
 
-| `--transport` | What it uses | Strengths | Limitations |
+| `--transport` | What it does | Strengths | Limitations |
 |---|---|---|---|
-| `playwright` (default) | `invisible-playwright` (real patched Firefox browser) | Solves Cloudflare JS challenges automatically (browser runs the embedded JS); supports `--strategy scroll`; full DOM access | Heavy (Chromium process); slow (full page rendering per request) |
-| `curl_cffi` | `curl_cffi` library (libcurl with curl-impersonate patches) | 10-50x faster (no browser startup); true browser TLS fingerprint at the byte level (JA3/JA4 match Chrome/Firefox); tiny memory footprint | Cannot solve Cloudflare JS challenges (no JS engine); `--strategy scroll` not supported (no DOM); only `--strategy pagination` (auto is silently coerced to pagination) |
-| `hybrid` | curl_cffi first, falls back to Playwright on persistent CloudflareChallengeError | Fast when Cloudflare is permissive (curl_cffi handles most pages); robust when Cloudflare challenges (Playwright solves the JS challenge on the failing page); supports `--strategy scroll` (delegated to Playwright) | Some pages incur the Playwright startup cost on first challenge; the fallback is per-page, so subsequent pages still try curl_cffi first |
+| `public_page` (default) | Scrapes the **public review page** DOM (`/product/<id>/reviews?page=N`) — no internal API | Least Cloudflare friction (page is on the public CDN, not the API); supports both `--strategy pagination` and `--strategy scroll`; full DOM access; uses the same stealth init script as `playwright` | Slower than `curl_cffi` (full browser, page rendering per request); relies on the page DOM staying stable |
+| `playwright` | Uses invisible-playwright to drive a real browser hitting the **internal API** endpoint (`/api/entrypoint-api.bx/page/json/v2`) | Solves Cloudflare JS challenges automatically (browser runs the embedded JS); supports `--strategy scroll`; full DOM access | Heavy (Chromium process); slow (full page rendering per request); internal API is heavily protected by Cloudflare (many 403 challenges) |
+| `curl_cffi` | Uses curl_cffi (libcurl with curl-impersonate) to hit the internal API endpoint | 10-50x faster than Playwright (no browser startup); true browser TLS fingerprint at the byte level (JA3/JA4 match Chrome/Firefox); tiny memory footprint | Cannot solve Cloudflare JS challenges (no JS engine); `--strategy scroll` not supported (no DOM); only `--strategy pagination` |
+| `hybrid` | Tries curl_cffi first, falls back to Playwright on persistent CloudflareChallengeError | Fast when Cloudflare is permissive (curl_cffi handles most pages); robust when Cloudflare challenges (Playwright solves the JS challenge on the failing page) | Some pages incur the Playwright startup cost on first challenge; the fallback is per-page, so subsequent pages still try curl_cffi first |
+
+Use **`public_page`** (default) when:
+- You want the **least Cloudflare friction** — the public review page is served by Ozon's CDN, not the API endpoint, and is much less aggressively protected
+- You're OK with a full browser (slower than curl_cffi but more reliable)
+- You want both pagination and scroll strategies available
 
 Use **`curl_cffi`** when:
 - Cloudflare is blocking based on TLS fingerprint (JA3/JA4 hash)
@@ -250,6 +262,7 @@ Use **`curl_cffi`** when:
 Use **`playwright`** when:
 - Cloudflare returns the HTML "enable JavaScript" challenge page that requires a real browser to solve
 - You need `--strategy scroll` for products where pagination misses reviews
+- The internal API is the only way to get the data you need
 
 Use **`hybrid`** when:
 - You want the speed of curl_cffi but need a safety net for Cloudflare challenges
@@ -267,6 +280,10 @@ The warmup happens only once per transport lifetime (tracked via the `_warmed_up
 If the warmup page itself returns a Cloudflare challenge (curl_cffi cannot solve JS challenges), the transport logs a warning and continues — the API request will likely also fail, in which case:
 - For `--transport curl_cffi`: the request fails with `CloudflareChallengeError` and retries with backoff until exhausted.
 - For `--transport hybrid`: after curl_cffi retries are exhausted, the hybrid transport switches to Playwright for that page.
+
+#### Why public_page is the default
+
+The internal API endpoint (`/api/entrypoint-api.bx/page/json/v2`) is heavily protected by Cloudflare — even with TLS-fingerprint impersonation, stealth init scripts, and JS-challenge auto-resolution, a significant fraction of requests get 403 challenges. The public review page (`/product/<id>/reviews?page=N`), by contrast, is served by Ozon's CDN to all visitors (including non-logged-in browsers) and is rarely challenged. The `public_page` transport scrapes this page's DOM directly, getting the same review data with much less Cloudflare friction.
 
 ## Architecture
 

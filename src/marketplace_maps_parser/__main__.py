@@ -170,18 +170,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--transport",
-        choices=("playwright", "curl_cffi", "hybrid"),
-        default="playwright",
+        choices=("playwright", "curl_cffi", "hybrid", "public_page"),
+        default="public_page",
         help=(
-            "Ozon only: 'playwright' (default) uses invisible-"
-            "playwright to drive a real browser; 'curl_cffi' uses "
-            "curl_cffi which mimics the TLS fingerprint of real "
-            "Chrome/Firefox — faster, lighter, but cannot solve "
-            "Cloudflare JS challenges and does not support "
-            "--strategy scroll. 'hybrid' tries curl_cffi first and "
-            "falls back to playwright on persistent Cloudflare "
-            "challenge — fast when Cloudflare is permissive, "
-            "robust when it isn't."
+            "Ozon only: 'public_page' (default) scrapes the "
+            "public review page DOM — least Cloudflare friction, "
+            "no internal API; 'playwright' uses invisible-playwright "
+            "to drive a real browser hitting the internal API; "
+            "'curl_cffi' uses curl_cffi which mimics the TLS "
+            "fingerprint of real Chrome/Firefox — faster, lighter, "
+            "but cannot solve Cloudflare JS challenges and does not "
+            "support --strategy scroll. 'hybrid' tries curl_cffi "
+            "first and falls back to playwright on persistent "
+            "Cloudflare challenge."
         ),
     )
     parser.add_argument(
@@ -355,6 +356,18 @@ def _build_ozon_transport(args: argparse.Namespace):
     Protocol (iter_ozon_reviews_json, iter_ozon_reviews_by_scroll,
     iter_all_ozon_reviews, get_ozon_reviews_json).
     """
+    if args.transport == "public_page":
+        from infrastructure.transports.public_page import (
+            PublicPageTransport,
+        )
+        return PublicPageTransport(
+            timeout_ms=args.timeout_ms,
+            settle_ms=args.settle_ms,
+            debug_dir=args.debug_dir,
+            humanize=not args.no_humanize,
+            stealth=not args.no_stealth,
+        )
+
     if args.transport == "curl_cffi":
         from infrastructure.transports.curl_cffi import (
             CurlCffiTransport,
