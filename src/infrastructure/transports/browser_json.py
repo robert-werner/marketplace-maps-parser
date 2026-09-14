@@ -4,7 +4,7 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 def _import_invisible_playwright():
@@ -77,6 +77,14 @@ class BrowserJsonTransport:
 
             seen_paths: set[str] = set()
             processed_pages = 0
+            # Track the page_key of the previous successful request so
+            # we can detect a page_key transition (see
+            # ``_reset_page_in_path`` docstring for the rationale).
+            prev_page_key: str | None = None
+            # True if we have already attempted the page=1 fallback for
+            # the current page_key transition. Prevents infinite loops
+            # if the fallback itself returns 0 reviews.
+            page_key_reset_done = False
 
             while current_path:
                 if (
@@ -139,6 +147,55 @@ class BrowserJsonTransport:
                     payload.get("pageToken"),
                 )
 
+                # ------------------------------------------------------
+                # page_key transition detection
+                # ------------------------------------------------------
+                current_page_key = self._extract_query_param(
+                    current_path, "page_key",
+                )
+                page_key_changed = (
+                    prev_page_key is not None
+                    and current_page_key is not None
+                    and current_page_key != prev_page_key
+                )
+                review_count = len(
+                    self._extract_review_nodes_from_payload(payload),
+                )
+
+                if (
+                    page_key_changed
+                    and review_count == 0
+                    and not page_key_reset_done
+                ):
+                    # Ozon handed us a nextPage with a new page_key but
+                    # kept the old page=7 counter. The new variant
+                    # starts at page=1 — retry with that.
+                    print(
+                        "Ozon: смена page_key ("
+                        f"{prev_page_key[:12]}... -> "
+                        f"{current_page_key[:12]}...) с 0 отзывов; "
+                        "повторяю запрос с page=1"
+                    )
+                    page_key_reset_done = True
+                    reset_path = self._reset_page_in_path(
+                        current_path, page=1,
+                    )
+                    if reset_path not in seen_paths:
+                        # Don't yield this empty payload; retry the
+                        # reset path on the next iteration.
+                        current_path = reset_path
+                        continue
+                    # If the reset path was already seen, fall through
+                    # to normal handling (yield + stop).
+
+                prev_page_key = current_page_key
+                # Reset the "fallback attempted" flag once we successfully
+                # get past a transition (reviews > 0 OR we just did the
+                # reset). This allows a subsequent transition later in
+                # the stream to also be retried.
+                if review_count > 0:
+                    page_key_reset_done = False
+
                 next_path = self.extract_next_path(payload)
 
                 yield processed_pages, payload
@@ -187,6 +244,57 @@ class BrowserJsonTransport:
                     return value
 
         return None
+
+    # ------------------------------------------------------------------
+    # page_key transition detection
+    # ------------------------------------------------------------------
+    #
+    # Ozon's pagination sometimes hands us a ``nextPage`` URL whose
+    # ``page_key`` query parameter differs from the one we just
+    # fetched. This typically signals a transition into a different
+    # "variant" of the review stream (e.g. with-photo vs no-photo,
+    # positive vs negative, sort order change).
+    #
+    # When that transition happens, Ozon's nextPage URL keeps the old
+    # ``page`` and ``layout_page_index`` counters (e.g. page=7) even
+    # though the new variant starts at page=1. Fetching page=7 with
+    # the new page_key returns 0 reviews and Ozon tells us there is
+    # no nextPage — so naive iteration stops short.
+    #
+    # The fix: when we observe (page_key changed) AND (0 reviews
+    # returned), retry the SAME path with ``page=1`` and
+    # ``layout_page_index=1``. If that also returns 0 reviews, we
+    # really are done. If it returns reviews, we continue iteration
+    # from the new variant.
+    @staticmethod
+    def _extract_query_param(
+        path: str,
+        name: str,
+    ) -> str | None:
+        """Extract a single query parameter from a (possibly relative)
+        URL path. Returns ``None`` if the parameter is absent."""
+        parts = urlsplit(path)
+        qs = dict(parse_qsl(parts.query))
+        return qs.get(name)
+
+    @staticmethod
+    def _reset_page_in_path(
+        path: str,
+        *,
+        page: int = 1,
+    ) -> str:
+        """Return a copy of ``path`` with both ``page`` and
+        ``layout_page_index`` set to ``page``.
+
+        Both parameters always move in lockstep in Ozon's nextPage
+        URLs, so resetting them together keeps the URL consistent.
+        If either is absent from the original URL it is added.
+        """
+        parts = urlsplit(path)
+        qs = dict(parse_qsl(parts.query, keep_blank_values=True))
+        qs["page"] = str(page)
+        qs["layout_page_index"] = str(page)
+        return urlunsplit(parts._replace(query=urlencode(qs)))
 
     async def get_ozon_reviews_json(
         self,
