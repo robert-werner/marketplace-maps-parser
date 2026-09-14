@@ -22,6 +22,46 @@ def _import_invisible_playwright():
     return InvisiblePlaywright
 
 
+def _get_retryable_errors() -> tuple[type[BaseException], ...]:
+    """Return the tuple of exception types that should trigger a retry.
+
+    Built dynamically so we can include ``invisible_playwright``'s
+    ``Error`` class only when the library is installed. Always
+    includes ``RuntimeError`` and the standard ``TimeoutError`` /
+    ``asyncio.TimeoutError`` (in Python 3.11+ these are unified, but
+    we keep both for safety on 3.10).
+    """
+    import asyncio as _asyncio
+
+    types: list[type[BaseException]] = [
+        RuntimeError,
+        TimeoutError,
+        _asyncio.TimeoutError,
+    ]
+    try:
+        from invisible_playwright._pw._impl._errors import (
+            Error as PlaywrightError,
+        )
+        types.append(PlaywrightError)
+    except ImportError:
+        # invisible-playwright not installed — that's OK, the retry
+        # still works on RuntimeError and TimeoutError.
+        pass
+
+    return tuple(types)
+
+
+# Module-level cache so we don't re-import on every retry.
+_RETRYABLE_ERRORS: tuple[type[BaseException], ...] | None = None
+
+
+def _retryable_errors() -> tuple[type[BaseException], ...]:
+    global _RETRYABLE_ERRORS
+    if _RETRYABLE_ERRORS is None:
+        _RETRYABLE_ERRORS = _get_retryable_errors()
+    return _RETRYABLE_ERRORS
+
+
 class BrowserJsonTransport:
     """Получает JSON Ozon в одной browser-сессии.
 
@@ -104,10 +144,14 @@ class BrowserJsonTransport:
 
                 reviews_url = self._absolute_url(current_path)
 
-                await page.goto(
-                    reviews_url,
-                    wait_until="domcontentloaded",
-                    timeout=self.timeout_ms,
+                await self._goto_with_retry(
+                    page=page,
+                    reviews_url=reviews_url,
+                    attempts=retry_attempts,
+                    label=(
+                        f"Ozon goto page {processed_pages + 1} "
+                        f"({current_path})"
+                    ),
                 )
 
                 if self.settle_ms > 0:
@@ -727,6 +771,50 @@ class BrowserJsonTransport:
 
         return payload
 
+    async def _goto_with_retry(
+        self,
+        *,
+        page,
+        reviews_url: str,
+        attempts: int = 3,
+        label: str = "Ozon goto",
+    ) -> None:
+        """Wrap ``page.goto`` with exponential-backoff retry.
+
+        ``page.goto`` can fail with the same family of Playwright errors
+        as ``page.evaluate`` ("The operation was aborted", navigation
+        timeout, CDP connection drop). Retrying here lets us survive
+        transient browser hiccups without losing the whole pagination
+        stream.
+        """
+        if attempts <= 1:
+            await page.goto(
+                reviews_url,
+                wait_until="domcontentloaded",
+                timeout=self.timeout_ms,
+            )
+            return
+
+        from shared.retry import retry_async
+
+        async def _goto_once() -> None:
+            await page.goto(
+                reviews_url,
+                wait_until="domcontentloaded",
+                timeout=self.timeout_ms,
+            )
+
+        await retry_async(
+            _goto_once,
+            attempts=attempts,
+            base_delay=2.0,
+            max_delay=20.0,
+            factor=2.0,
+            jitter=0.3,
+            retry_on=_retryable_errors(),
+            label=label,
+        )
+
     async def _fetch_json_with_retry(
         self,
         *,
@@ -737,12 +825,18 @@ class BrowserJsonTransport:
     ) -> dict[str, Any]:
         """Wrap ``_fetch_json_inside_page`` with exponential-backoff retry.
 
-        Retries only on ``RuntimeError`` — the kind of error raised by
-        ``_fetch_json_inside_page`` when Cloudflare returns a non-200,
-        non-JSON, or unparseable response. Other exceptions (network
-        timeouts, page navigation errors) propagate immediately because
-        they typically indicate the browser session is unhealthy and
-        a retry on the same page would not help.
+        Retries on:
+
+        - ``RuntimeError`` — raised by ``_fetch_json_inside_page`` when
+          Cloudflare returns a non-200, non-JSON, or unparseable response.
+        - ``PlaywrightError`` — raised by invisible-playwright when the
+          browser aborts an operation ("Page.evaluate: The operation
+          was aborted"), the page navigation times out, or the CDP
+          connection drops. These are typically transient and a retry
+          on the same page (or with a fresh page) succeeds.
+        - ``TimeoutError`` / ``asyncio.TimeoutError`` — same family.
+
+        Other exceptions propagate immediately.
         """
         if attempts <= 1:
             return await self._fetch_json_inside_page(
@@ -762,7 +856,7 @@ class BrowserJsonTransport:
             max_delay=15.0,
             factor=2.0,
             jitter=0.3,
-            retry_on=(RuntimeError,),
+            retry_on=_retryable_errors(),
             label=label,
         )
 
