@@ -169,6 +169,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--transport",
+        choices=("playwright", "curl_cffi"),
+        default="playwright",
+        help=(
+            "Ozon only: 'playwright' (default) uses invisible-"
+            "playwright to drive a real browser; 'curl_cffi' uses "
+            "curl_cffi which mimics the TLS fingerprint of real "
+            "Chrome/Firefox — faster, lighter, but cannot solve "
+            "Cloudflare JS challenges and does not support "
+            "--strategy scroll."
+        ),
+    )
+    parser.add_argument(
+        "--impersonate",
+        default="chrome120",
+        help=(
+            "curl_cffi only: which browser TLS fingerprint to "
+            "impersonate (default: chrome120). Examples: "
+            "chrome120, chrome119, firefox120, safari17_0. See "
+            "curl_cffi docs for the full list."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -231,21 +254,11 @@ def _load_existing_reviews(
 
 
 async def _collect_ozon(args: argparse.Namespace) -> int:
-    # Lazy import: invisible-playwright is heavy and may not be installed
-    # in environments that only use the Wildberries path.
+    # Lazy import: heavy transport modules are imported only when
+    # the user selects them.
     from infrastructure.marketplaces.ozon import OzonAdapter
-    from infrastructure.transports.browser_json import (
-        BrowserJsonTransport,
-    )
 
-    transport = BrowserJsonTransport(
-        timeout_ms=args.timeout_ms,
-        settle_ms=args.settle_ms,
-        debug_dir=args.debug_dir,
-        humanize=not args.no_humanize,
-        fetch_strategy=args.fetch_strategy,
-        stealth=not args.no_stealth,
-    )
+    transport = _build_ozon_transport(args)
     adapter = OzonAdapter(browser_transport=transport)
 
     output = Path(args.output)
@@ -268,38 +281,99 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
 
     count = 0
 
-    with output.open(file_mode, encoding="utf-8") as file:
-        async for review in adapter.iter_all_reviews(
-            product_url=args.url,
-            strategy=args.strategy,
-            max_reviews=args.max_reviews,
-            pagination_max_pages=args.max_pages,
-            pagination_start_page=args.start_page,
-            page_delay_seconds=args.page_delay_seconds,
-            scroll_pause_seconds=args.scroll_pause_seconds,
-            retry_attempts=args.retry_attempts,
-        ):
-            review_id = review.review_id
-            if review_id and review_id in seen_ids:
-                continue
-            if review_id:
-                seen_ids.add(review_id)
+    # When using curl_cffi, scroll strategy is not supported —
+    # silently coerce it to pagination to avoid a NotImplementedError
+    # at fetch time.
+    effective_strategy = args.strategy
+    if args.transport == "curl_cffi" and effective_strategy == "scroll":
+        print(
+            "[info] --transport curl_cffi не поддерживает "
+            "--strategy scroll; переключаю на pagination"
+        )
+        effective_strategy = "pagination"
+    elif (
+        args.transport == "curl_cffi"
+        and effective_strategy == "auto"
+    ):
+        print(
+            "[info] --transport curl_cffi: auto strategy "
+            "эквивалентна pagination (scroll не поддерживается)"
+        )
+        effective_strategy = "pagination"
 
-            file.write(
-                json.dumps(
-                    _review_to_record(review),
-                    ensure_ascii=False,
-                    default=str,
+    try:
+        with output.open(file_mode, encoding="utf-8") as file:
+            async for review in adapter.iter_all_reviews(
+                product_url=args.url,
+                strategy=effective_strategy,
+                max_reviews=args.max_reviews,
+                pagination_max_pages=args.max_pages,
+                pagination_start_page=args.start_page,
+                page_delay_seconds=args.page_delay_seconds,
+                scroll_pause_seconds=args.scroll_pause_seconds,
+                retry_attempts=args.retry_attempts,
+            ):
+                review_id = review.review_id
+                if review_id and review_id in seen_ids:
+                    continue
+                if review_id:
+                    seen_ids.add(review_id)
+
+                file.write(
+                    json.dumps(
+                        _review_to_record(review),
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
-            file.flush()
-            count += 1
+                file.flush()
+                count += 1
 
-            if count % 100 == 0:
-                print(f"Собрано отзывов: {count}")
+                if count % 100 == 0:
+                    print(f"Собрано отзывов: {count}")
+    finally:
+        # Ensure the transport's HTTP session is closed (curl_cffi
+        # holds a connection pool that should be released).
+        close = getattr(transport, "close", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                pass
 
     return count
+
+
+def _build_ozon_transport(args: argparse.Namespace):
+    """Construct the Ozon transport based on --transport.
+
+    Returns an object that implements the OzonBrowserTransport
+    Protocol (iter_ozon_reviews_json, iter_ozon_reviews_by_scroll,
+    iter_all_ozon_reviews, get_ozon_reviews_json).
+    """
+    if args.transport == "curl_cffi":
+        from infrastructure.transports.curl_cffi import (
+            CurlCffiTransport,
+        )
+        return CurlCffiTransport(
+            timeout=args.timeout_ms / 1000.0,
+            debug_dir=args.debug_dir,
+            impersonate=args.impersonate,
+        )
+
+    # default: playwright
+    from infrastructure.transports.browser_json import (
+        BrowserJsonTransport,
+    )
+    return BrowserJsonTransport(
+        timeout_ms=args.timeout_ms,
+        settle_ms=args.settle_ms,
+        debug_dir=args.debug_dir,
+        humanize=not args.no_humanize,
+        fetch_strategy=args.fetch_strategy,
+        stealth=not args.no_stealth,
+    )
 
 
 async def _collect_wildberries(args: argparse.Namespace) -> int:

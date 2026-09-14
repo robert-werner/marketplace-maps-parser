@@ -100,6 +100,20 @@ uv run python -m marketplace_maps_parser \
   --url "https://www.ozon.ru/product/..." \
   --no-stealth
 
+# Use curl_cffi (TLS-fingerprint impersonation, faster than Playwright)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --transport curl_cffi \
+  --impersonate chrome120
+
+# Use curl_cffi with a different browser fingerprint
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --transport curl_cffi \
+  --impersonate firefox120
+
 # Use legacy in-page fetch (faster but more Cloudflare 403s)
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
@@ -210,6 +224,26 @@ Stealth mode (default: **enabled**, `--no-stealth` to disable) applies an init s
 The script is applied via `page.add_init_script` so it runs before any page JS executes. Combined with `invisible-playwright`'s patched Firefox build, this provides layered protection against Cloudflare's bot detection.
 
 If stealth causes issues with a particular Ozon layout, disable it temporarily with `--no-stealth` for debugging.
+
+### Transport: Playwright vs curl_cffi
+
+`--transport` selects between two Ozon transport implementations:
+
+| `--transport` | What it uses | Strengths | Limitations |
+|---|---|---|---|
+| `playwright` (default) | `invisible-playwright` (real patched Firefox browser) | Solves Cloudflare JS challenges automatically (browser runs the embedded JS); supports `--strategy scroll`; full DOM access | Heavy (Chromium process); slow (full page rendering per request) |
+| `curl_cffi` | `curl_cffi` library (libcurl with curl-impersonate patches) | 10-50x faster (no browser startup); true browser TLS fingerprint at the byte level (JA3/JA4 match Chrome/Firefox); tiny memory footprint | Cannot solve Cloudflare JS challenges (no JS engine); `--strategy scroll` not supported (no DOM); only `--strategy pagination` (auto is silently coerced to pagination) |
+
+Use **`curl_cffi`** when:
+- Cloudflare is blocking based on TLS fingerprint (JA3/JA4 hash)
+- You need to scrape many products fast
+- You're OK with pagination-only (no scroll fallback)
+
+Use **`playwright`** when:
+- Cloudflare returns the HTML "enable JavaScript" challenge page that requires a real browser to solve
+- You need `--strategy scroll` for products where pagination misses reviews
+
+`--impersonate` (curl_cffi only) selects which browser TLS fingerprint to use. Default: `chrome120`. Other useful values: `chrome119`, `firefox120`, `safari17_0`. See the [curl_cffi docs](https://curl-cffi.readthedocs.io/) for the full list.
 
 ## Architecture
 

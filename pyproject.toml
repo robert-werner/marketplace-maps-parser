@@ -9,6 +9,7 @@ authors = [
     { name = "Leonid Kolesnichenko", email = "xperience439@gmail.com" },
 ]
 dependencies = [
+    "curl_cffi>=0.7.0",
     "httpx>=0.28.1",
     "invisible-playwright>=0.14.0",
     "loguru>=0.7.3",
