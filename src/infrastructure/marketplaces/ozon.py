@@ -302,6 +302,7 @@ class OzonAdapter(MarketplaceAdapter):
                 max_reviews=max_reviews,
                 pagination_max_pages=pagination_max_pages,
                 pagination_start_page=pagination_start_page,
+                retry_attempts=retry_attempts,
             ):
                 yield review
             return
@@ -368,6 +369,7 @@ class OzonAdapter(MarketplaceAdapter):
             max_reviews: int | None,
             pagination_max_pages: int | None,
             pagination_start_page: int,
+            retry_attempts: int = 3,
     ) -> AsyncIterator[Review]:
         """Used when the transport doesn't implement ``iter_all_ozon_reviews``.
 
@@ -387,6 +389,7 @@ class OzonAdapter(MarketplaceAdapter):
                     product_path=product_path,
                     start_page=pagination_start_page,
                     max_pages=pagination_max_pages,
+                    retry_attempts=retry_attempts,
                 )
             ):
                 reviews = extract_reviews_from_ozon_payload(

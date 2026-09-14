@@ -7,7 +7,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-from invisible_playwright.async_api import InvisiblePlaywright
+
+def _import_invisible_playwright():
+    """Lazy import; see transports/browser_json.py for rationale."""
+    from invisible_playwright.async_api import InvisiblePlaywright
+    return InvisiblePlaywright
 
 
 class BrowserJsonTransport:
@@ -51,7 +55,7 @@ class BrowserJsonTransport:
         captured: list[dict[str, Any]] = []
         response_log: list[dict[str, Any]] = []
 
-        async with InvisiblePlaywright(
+        async with _import_invisible_playwright()(
             proxy=self.proxy,
             seed=self.seed,
             pin=self.pin,

@@ -61,6 +61,7 @@ class StubTransport:
         *,
         start_page: int = 1,
         max_pages: int | None = None,
+        retry_attempts: int = 3,
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         if self.pagination_error is not None:
             raise self.pagination_error
@@ -352,6 +353,7 @@ class StubTransportWithoutIterAll:
         *,
         start_page: int = 1,
         max_pages: int | None = None,
+        retry_attempts: int = 3,
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         for i, payload in enumerate(self.pagination_payloads):
             if max_pages is not None and i >= max_pages:

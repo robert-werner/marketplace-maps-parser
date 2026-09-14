@@ -6,7 +6,20 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from invisible_playwright.async_api import InvisiblePlaywright
+
+def _import_invisible_playwright():
+    """Lazy import of invisible-playwright.
+
+    The library is heavy (it pulls in a patched Playwright + Chromium
+    binaries) and not available in every environment that imports
+    this module (e.g. unit tests of pure-Python helpers). Importing it
+    lazily inside the async generators that actually need a browser
+    lets the rest of the module — including the constructor and the
+    pure-Python ``_fetch_json_with_retry`` / static helpers — work
+    without the browser stack installed.
+    """
+    from invisible_playwright.async_api import InvisiblePlaywright
+    return InvisiblePlaywright
 
 
 class BrowserJsonTransport:
@@ -42,13 +55,14 @@ class BrowserJsonTransport:
             *,
             start_page: int = 1,
             max_pages: int | None = None,
+            retry_attempts: int = 3,
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         self.debug_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        async with InvisiblePlaywright(
+        async with _import_invisible_playwright()(
                 proxy=self.proxy,
                 seed=self.seed,
                 pin=self.pin,
@@ -93,9 +107,15 @@ class BrowserJsonTransport:
                         self.settle_ms,
                     )
 
-                payload = await self._fetch_json_inside_page(
+                payload = await self._fetch_json_with_retry(
                     page=page,
                     internal_path=current_path,
+                    attempts=retry_attempts,
+                    label=(
+                        f"Ozon pagination page "
+                        f"{processed_pages + 1} "
+                        f"({current_path})"
+                    ),
                 )
 
                 processed_pages += 1
@@ -198,7 +218,7 @@ class BrowserJsonTransport:
             scroll_step: int = 1800,
             pause_ms: int = 1000,
     ) -> AsyncIterator[list[dict[str, Any]]]:
-        async with InvisiblePlaywright(
+        async with _import_invisible_playwright()(
                 proxy=self.proxy,
                 seed=self.seed,
                 pin=self.pin,
@@ -385,6 +405,7 @@ class BrowserJsonTransport:
                 product_path=product_path,
                 start_page=pagination_start_page,
                 max_pages=pagination_max_pages,
+                retry_attempts=retry_attempts,
             ):
                 review_nodes = self._extract_review_nodes_from_payload(
                     payload,
@@ -597,6 +618,45 @@ class BrowserJsonTransport:
             )
 
         return payload
+
+    async def _fetch_json_with_retry(
+        self,
+        *,
+        page,
+        internal_path: str,
+        attempts: int = 3,
+        label: str = "Ozon fetch",
+    ) -> dict[str, Any]:
+        """Wrap ``_fetch_json_inside_page`` with exponential-backoff retry.
+
+        Retries only on ``RuntimeError`` — the kind of error raised by
+        ``_fetch_json_inside_page`` when Cloudflare returns a non-200,
+        non-JSON, or unparseable response. Other exceptions (network
+        timeouts, page navigation errors) propagate immediately because
+        they typically indicate the browser session is unhealthy and
+        a retry on the same page would not help.
+        """
+        if attempts <= 1:
+            return await self._fetch_json_inside_page(
+                page=page,
+                internal_path=internal_path,
+            )
+
+        from shared.retry import retry_async
+
+        return await retry_async(
+            lambda: self._fetch_json_inside_page(
+                page=page,
+                internal_path=internal_path,
+            ),
+            attempts=attempts,
+            base_delay=1.5,
+            max_delay=15.0,
+            factor=2.0,
+            jitter=0.3,
+            retry_on=(RuntimeError,),
+            label=label,
+        )
 
     async def _save_debug(
         self,

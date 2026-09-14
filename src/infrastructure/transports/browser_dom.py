@@ -6,8 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from invisible_playwright.async_api import InvisiblePlaywright
 from typing_extensions import AsyncIterator
+
+
+def _import_invisible_playwright():
+    """Lazy import; see transports/browser_json.py for rationale."""
+    from invisible_playwright.async_api import InvisiblePlaywright
+    return InvisiblePlaywright
 
 
 class BrowserDomTransport:
@@ -36,7 +41,7 @@ class BrowserDomTransport:
     ) -> dict[str, Any]:
         self.debug_dir.mkdir(parents=True, exist_ok=True)
 
-        async with InvisiblePlaywright(
+        async with _import_invisible_playwright()(
             proxy=self.proxy,
             seed=self.seed,
             pin=self.pin,
@@ -371,7 +376,7 @@ class BrowserDomTransport:
             scroll_step: int = 900,
             scroll_pause_ms: int = 600,
     ) -> AsyncIterator[list[dict[str, Any]]]:
-        async with InvisiblePlaywright(
+        async with _import_invisible_playwright()(
                 humanize=True,
         ) as browser:
             page = await browser.new_page()

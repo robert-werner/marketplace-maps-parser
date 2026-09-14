@@ -81,6 +81,19 @@ uv run python -m marketplace_maps_parser \
   --url "https://www.ozon.ru/product/..." \
   --max-reviews 500
 
+# Resume an interrupted run (skip already-collected reviews)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --output ozon_reviews.jsonl \
+  --resume
+
+# Tune per-page retry on transient Cloudflare blocks
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --retry-attempts 5
+
 # Wildberries reviews via public API
 uv run python -m marketplace_maps_parser \
   --marketplace wildberries \
@@ -129,6 +142,30 @@ asyncio.run(main())
 | `auto` (default) | Run pagination first; then run scroll to catch any reviews the API missed (or failed to return). Cross-strategy dedup by `review_id` / `uuid`. Most complete. |
 | `pagination`     | Only the internal `entrypoint-api.bx/page/json/v2` endpoint. Fast but Cloudflare-protected. |
 | `scroll`         | Only DOM scroll. Slower but resilient against API blocks. |
+
+### Resume and retry
+
+`--resume` reads existing `review_id` values from `--output` before
+starting, skips reviews that are already in the file, and appends new
+ones (instead of overwriting). Use it when:
+
+- A previous run was interrupted (Ctrl-C, network outage) and you want
+  to continue without re-scraping everything.
+- You ran with `--strategy pagination` first and want to fill gaps with
+  a second `--strategy auto --resume` run.
+
+`--retry-attempts N` controls per-page retries when the internal Ozon
+API returns a transient failure (HTTP non-200, non-JSON, or unparseable
+body). Retries use exponential backoff with jitter:
+
+```
+delay = min(1.5 * 2^(n-1), 15s) * (1 ± 0.3)
+```
+
+Only `RuntimeError` from `_fetch_json_inside_page` is retried. Other
+exceptions (network timeouts, browser navigation errors) propagate
+immediately — they typically indicate the browser session itself is
+unhealthy and a same-page retry would not help.
 
 ## Architecture
 
@@ -179,12 +216,12 @@ URL → UrlParser → ProductRef → MarketplaceAdapter.iter_reviews()
 - [x] Unified "collect ALL reviews" flow with cross-strategy dedup
 - [x] Structured logging via `loguru` (`shared/logging.py`)
 - [x] Async retry + jittered backoff helpers (`shared/retry.py`)
+- [x] Resume from existing JSONL (`--resume`)
+- [x] Per-page retry of transient Playwright errors inside transport
 - [ ] Yandex Market adapter
 - [ ] `asyncpg` repository for direct DB writes
 - [ ] Proper `pydantic-settings` config loader
 - [ ] CI workflow (ruff + mypy + pytest)
-- [ ] Resume-from-checkpoint (JSONL tail resume on rerun)
-- [ ] Per-page retry of transient Playwright errors inside transport
 
 ## License
 

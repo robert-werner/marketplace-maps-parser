@@ -135,6 +135,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(default: 1.0)."
         ),
     )
+    parser.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=3,
+        help=(
+            "Per-page retry attempts on transient errors "
+            "(HTTP non-200, non-JSON response) with exponential "
+            "backoff + jitter (default: 3)."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume a previous run: read existing review_ids from "
+            "--output and skip them, appending new reviews to the "
+            "file instead of overwriting it. Use this when a "
+            "previous run was interrupted or when running multiple "
+            "times with different --strategy values to fill gaps."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -152,6 +173,38 @@ def _review_to_record(review: Any) -> dict[str, Any]:
         "seller_answer": review.seller_answer,
         "raw": review.raw,
     }
+
+
+def _load_existing_reviews(
+    output: Path,
+) -> set[str]:
+    """Read ``review_id`` values from an existing JSONL file.
+
+    Used by ``--resume`` to skip reviews already collected in a
+    previous run. Returns an empty set if the file does not exist or
+    cannot be parsed (so a corrupted file does not block a fresh run).
+    """
+    if not output.exists():
+        return set()
+
+    seen: set[str] = set()
+    try:
+        with output.open("r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rid = record.get("review_id")
+                if rid:
+                    seen.add(str(rid))
+    except OSError:
+        return set()
+
+    return seen
 
 
 async def _collect_ozon(args: argparse.Namespace) -> int:
@@ -173,10 +226,24 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    seen_ids: set[str] = set()
+    # ``--resume``: load review_ids already in the output file so we
+    # don't re-emit them. Open in append mode so the new run extends
+    # the file rather than overwriting it.
+    if args.resume:
+        seen_ids = _load_existing_reviews(output)
+        if seen_ids:
+            print(
+                f"Resume: {len(seen_ids)} reviews already in "
+                f"{output.name}, will skip them."
+            )
+        file_mode = "a"
+    else:
+        seen_ids = set()
+        file_mode = "w"
+
     count = 0
 
-    with output.open("w", encoding="utf-8") as file:
+    with output.open(file_mode, encoding="utf-8") as file:
         async for review in adapter.iter_all_reviews(
             product_url=args.url,
             strategy=args.strategy,
@@ -185,6 +252,7 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
             pagination_start_page=args.start_page,
             page_delay_seconds=args.page_delay_seconds,
             scroll_pause_seconds=args.scroll_pause_seconds,
+            retry_attempts=args.retry_attempts,
         ):
             review_id = review.review_id
             if review_id and review_id in seen_ids:
