@@ -7,6 +7,8 @@ from pathlib import Path
 from infrastructure.marketplaces.ozon import OzonAdapter
 from infrastructure.transports.browser_json import BrowserJsonTransport
 
+USE_SCROLL_MODE = False
+
 
 async def collect_all_ozon_reviews(
     adapter: OzonAdapter,
@@ -15,19 +17,33 @@ async def collect_all_ozon_reviews(
     output_path: str = "ozon_reviews.jsonl",
     start_page: int = 1,
     max_pages: int | None = None,
+    use_scroll: bool = False,
 ) -> int:
-    """Потоково сохраняет все найденные отзывы Ozon в JSONL."""
     output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     count = 0
 
-    with output.open("w", encoding="utf-8") as file:
-        async for review in adapter.iter_reviews(
-            product_url=product_url,
-            start_page=start_page,
-            max_pages=max_pages,
-        ):
+    with output.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        if use_scroll:
+            iterator = adapter.iter_reviews_by_scroll(
+                product_url=product_url,
+                max_reviews=None,
+            )
+        else:
+            iterator = adapter.iter_reviews(
+                product_url=product_url,
+                start_page=start_page,
+                max_pages=max_pages,
+            )
+
+        async for review in iterator:
             record = {
                 "review_id": review.review_id,
                 "product_id": review.product.product_id,
@@ -50,12 +66,14 @@ async def collect_all_ozon_reviews(
                 )
                 + "\n"
             )
-            file.flush()
 
+            file.flush()
             count += 1
 
             if count % 100 == 0:
-                print(f"Собрано отзывов: {count}")
+                print(
+                    f"Собрано отзывов: {count}"
+                )
 
     return count
 
@@ -80,9 +98,8 @@ async def main() -> None:
     count = await collect_all_ozon_reviews(
         adapter=adapter,
         product_url=product_url,
-        output_path="ozon_reviews.jsonl",
-        start_page=1,
-        max_pages=None,
+        output_path="ozon_reviews_scroll.jsonl",
+        use_scroll=False,
     )
 
     print(f"Сбор завершён. Всего отзывов: {count}")

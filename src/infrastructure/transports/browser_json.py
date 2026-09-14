@@ -37,11 +37,11 @@ class BrowserJsonTransport:
         self.humanize = humanize
 
     async def iter_ozon_reviews_json(
-        self,
-        product_path: str,
-        *,
-        start_page: int = 1,
-        max_pages: int | None = None,
+            self,
+            product_path: str,
+            *,
+            start_page: int = 1,
+            max_pages: int | None = None,
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         self.debug_dir.mkdir(
             parents=True,
@@ -49,27 +49,33 @@ class BrowserJsonTransport:
         )
 
         async with InvisiblePlaywright(
-            proxy=self.proxy,
-            seed=self.seed,
-            pin=self.pin,
-            humanize=self.humanize,
+                proxy=self.proxy,
+                seed=self.seed,
+                pin=self.pin,
+                humanize=self.humanize,
         ) as browser:
             page = await browser.new_page()
+
             current_path = self._build_initial_path(
                 product_path=product_path,
                 page_number=start_page,
             )
+
             seen_paths: set[str] = set()
             processed_pages = 0
 
             while current_path:
                 if (
-                    max_pages is not None
-                    and processed_pages >= max_pages
+                        max_pages is not None
+                        and processed_pages >= max_pages
                 ):
                     return
 
                 if current_path in seen_paths:
+                    print(
+                        "Ozon: повторный nextPage, остановка: "
+                        f"{current_path}"
+                    )
                     return
 
                 seen_paths.add(current_path)
@@ -100,11 +106,67 @@ class BrowserJsonTransport:
                     page_number=processed_pages,
                 )
 
+                print(
+                    "nextPage:",
+                    payload.get("nextPage"),
+                )
+                print(
+                    "pageInfo:",
+                    payload.get("pageInfo"),
+                )
+                print(
+                    "pageToken:",
+                    payload.get("pageToken"),
+                )
+
                 next_path = self.extract_next_path(payload)
 
                 yield processed_pages, payload
 
+                if not next_path:
+                    print(
+                        f"Ozon: у страницы {processed_pages} "
+                        "нет nextPage; сбор завершён"
+                    )
+                    return
+
                 current_path = next_path
+
+    @staticmethod
+    def _build_initial_path(
+            *,
+            product_path: str,
+            page_number: int,
+    ) -> str:
+        return (
+            f"{product_path}/reviews"
+            f"?page={page_number}"
+        )
+
+    @staticmethod
+    def _absolute_url(path: str) -> str:
+        if path.startswith(("http://", "https://")):
+            return path
+
+        return f"https://www.ozon.ru{path}"
+
+    @staticmethod
+    def extract_next_path(
+            payload: dict[str, Any],
+    ) -> str | None:
+        next_page = payload.get("nextPage")
+
+        if isinstance(next_page, str):
+            return next_page or None
+
+        if isinstance(next_page, dict):
+            for key in ("url", "href", "path"):
+                value = next_page.get(key)
+
+                if isinstance(value, str) and value:
+                    return value
+
+        return None
 
     async def get_ozon_reviews_json(
         self,
@@ -125,6 +187,145 @@ class BrowserJsonTransport:
         raise RuntimeError(
             f"Не удалось получить страницу Ozon {page_number}"
         )
+
+    async def iter_ozon_reviews_by_scroll(
+            self,
+            product_path: str,
+            *,
+            max_reviews: int | None = None,
+            max_rounds: int = 500,
+            stable_rounds_limit: int = 3,
+            scroll_step: int = 1800,
+            pause_ms: int = 1000,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        async with InvisiblePlaywright(
+                proxy=self.proxy,
+                seed=self.seed,
+                pin=self.pin,
+                humanize=self.humanize,
+        ) as browser:
+            page = await browser.new_page()
+
+            reviews_url = (
+                f"https://www.ozon.ru"
+                f"{product_path}/reviews/"
+            )
+
+            await page.goto(
+                reviews_url,
+                wait_until="domcontentloaded",
+                timeout=self.timeout_ms,
+            )
+
+            if self.settle_ms > 0:
+                await page.wait_for_timeout(
+                    self.settle_ms,
+                )
+
+            review_locator = page.locator(
+                "[data-review-uuid]"
+            )
+
+            await review_locator.first.wait_for(
+                state="attached",
+                timeout=30_000,
+            )
+
+            seen_ids: set[str] = set()
+            previous_count = 0
+            stable_rounds = 0
+
+            for round_number in range(1, max_rounds + 1):
+                cards = await self._read_review_cards(
+                    review_locator,
+                )
+
+                new_cards = []
+
+                for card in cards:
+                    review_id = card.get("uuid")
+
+                    if not review_id:
+                        continue
+
+                    if review_id in seen_ids:
+                        continue
+
+                    seen_ids.add(review_id)
+                    new_cards.append(card)
+
+                if new_cards:
+                    yield new_cards
+
+                current_count = await review_locator.count()
+
+                if (
+                        max_reviews is not None
+                        and len(seen_ids) >= max_reviews
+                ):
+                    return
+
+                if current_count > previous_count:
+                    previous_count = current_count
+                    stable_rounds = 0
+                else:
+                    stable_rounds += 1
+
+                if stable_rounds >= stable_rounds_limit:
+                    return
+
+                await page.mouse.wheel(
+                    0,
+                    scroll_step,
+                )
+
+                await page.wait_for_timeout(
+                    pause_ms,
+                )
+
+    async def _read_review_cards(
+            self,
+            review_locator,
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+
+        for index in range(await review_locator.count()):
+            card = review_locator.nth(index)
+
+            result.append(
+                {
+                    "uuid": await card.get_attribute(
+                        "data-review-uuid"
+                    ),
+                    "published_at": await card.get_attribute(
+                        "publishedat"
+                    ),
+                    "status_id": await card.get_attribute(
+                        "statusid"
+                    ),
+                    "text": await card.inner_text(),
+                    "images": await self._read_images(card),
+                }
+            )
+
+        return result
+
+    async def _read_images(
+            self,
+            card,
+    ) -> list[str]:
+        result: list[str] = []
+        images = card.locator("img")
+
+        for index in range(await images.count()):
+            src = await images.nth(index).get_attribute(
+                "src"
+            )
+
+            if src:
+                result.append(src)
+
+        return result
 
     async def _fetch_json_inside_page(
         self,

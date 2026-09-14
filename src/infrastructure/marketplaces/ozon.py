@@ -58,11 +58,11 @@ class OzonAdapter(MarketplaceAdapter):
         )
 
     async def iter_reviews(
-        self,
-        product_url: str,
-        *,
-        start_page: int = 1,
-        max_pages: int | None = None,
+            self,
+            product_url: str,
+            *,
+            start_page: int = 1,
+            max_pages: int | None = None,
     ) -> AsyncIterator[Review]:
         product_id = extract_ozon_product_id(product_url)
         product_path = extract_ozon_product_path(product_url)
@@ -73,15 +73,16 @@ class OzonAdapter(MarketplaceAdapter):
             product_id=str(product_id),
         )
 
-        seen_ids: set[str] = set()
+        seen_keys: set[str] = set()
 
         async for page_number, payload in (
-            self.browser_transport.iter_ozon_reviews_json(
-                product_path=product_path,
-                start_page=start_page,
-                max_pages=max_pages,
-            )
+                self.browser_transport.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=start_page,
+                    max_pages=max_pages,
+                )
         ):
+
             reviews = extract_reviews_from_ozon_payload(
                 payload=payload,
                 product=product,
@@ -99,10 +100,10 @@ class OzonAdapter(MarketplaceAdapter):
                         position=position,
                     )
 
-                if key in seen_ids:
+                if key in seen_keys:
                     continue
 
-                seen_ids.add(key)
+                seen_keys.add(key)
                 new_count += 1
                 yield review
 
@@ -111,6 +112,64 @@ class OzonAdapter(MarketplaceAdapter):
                 f"получено={len(reviews)}; "
                 f"новых={new_count}"
             )
+
+    def parse_ozon_dom_card(self,
+            card: dict[str, Any],
+            product: ProductRef,
+    ) -> Review:
+        text = card.get("text") or ""
+
+        lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip()
+        ]
+
+        author = lines[1] if len(lines) > 1 else (
+            lines[0] if lines else None
+        )
+
+        return Review(
+            review_id=card.get("uuid"),
+            product=product,
+            rating=None,
+            text=text or None,
+            author=author,
+            created_at=parse_ozon_date(
+                card.get("published_at")
+            ),
+            raw=card,
+        )
+
+    async def iter_reviews_by_scroll(
+            self,
+            product_url: str,
+            *,
+            max_reviews: int | None = None,
+    ) -> AsyncIterator[Review]:
+        product_id = extract_ozon_product_id(product_url)
+        product_path = extract_ozon_product_path(product_url)
+
+        product = ProductRef(
+            marketplace=self.name,
+            source_url=product_url,
+            product_id=str(product_id),
+        )
+
+        async for cards in (
+                self.browser_transport.iter_ozon_reviews_by_scroll(
+                    product_path=product_path,
+                    max_reviews=max_reviews,
+                )
+        ):
+            for position, card in enumerate(cards):
+                review = self.parse_ozon_dom_card(
+                    card=card,
+                    product=product,
+                )
+
+                if review is not None:
+                    yield review
 
     async def collect_all(
         self,
@@ -357,35 +416,41 @@ def is_review_node(
     text: Any,
     rating: Any,
 ) -> bool:
-    keys = {str(key).lower() for key in node}
+    keys = {
+        str(key).lower()
+        for key in node
+    }
 
     has_id = review_id is not None
 
-    review_markers = {
-        "reviewid",
-        "review_id",
-        "reviewuuid",
-        "review_uuid",
-        "uuid",
-        "publishedat",
-        "published_at",
-        "createdat",
-        "created_at",
-        "author",
-        "authorname",
-        "username",
-        "statusid",
-        "rating",
-        "score",
-        "stars",
-        "reviewtext",
-        "review_text",
-        "comment",
-        "advantages",
-        "disadvantages",
-    }
+    has_review_marker = bool(
+        keys
+        & {
+            "reviewid",
+            "review_id",
+            "reviewuuid",
+            "review_uuid",
+            "uuid",
+            "publishedat",
+            "published_at",
+            "createdat",
+            "created_at",
+            "author",
+            "authorname",
+            "username",
+            "statusid",
+            "rating",
+            "score",
+            "stars",
+            "reviewtext",
+            "review_text",
+            "comment",
+            "advantages",
+            "disadvantages",
+        }
+    )
 
-    return has_id and bool(keys & review_markers)
+    return has_id and has_review_marker
 
 
 def normalize_text(value: Any) -> str | None:

@@ -69,8 +69,7 @@ async def collect_all_ozon_reviews(
 
 async def main() -> None:
     product_url = (
-        "https://www.ozon.ru/product/"
-        "ip-telefon-yealink-sip-t30-voip-ofisnyy-680123890"
+        "https://www.ozon.ru/product/ip-telefon-yealink-sip-t30-voip-ofisnyy-680123890"
     )
 
     transport = BrowserJsonTransport(
