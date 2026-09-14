@@ -92,6 +92,16 @@ class BrowserJsonTransport:
     Сначала открывается страница отзывов, затем внутренний endpoint
     вызывается из этой же страницы через window.fetch(). Следующая
     страница берётся из поля nextPage ответа Ozon.
+
+    Two fetch strategies are supported (controlled by
+    ``fetch_strategy`` constructor arg):
+
+    - ``"navigation"`` (default): ``page.goto(api_url)`` — opens the
+      API URL directly in the browser tab. Cloudflare sees a real
+      browser navigation and is much less likely to return 403.
+    - ``"fetch"`` (legacy): ``page.evaluate(fetch(api_url))`` — calls
+      ``fetch()`` from the page's JS context. Faster but Cloudflare
+      blocks it more aggressively.
     """
 
     def __init__(
@@ -104,6 +114,7 @@ class BrowserJsonTransport:
         seed: int | None = None,
         pin: dict[str, Any] | None = None,
         humanize: bool = True,
+        fetch_strategy: str = "navigation",
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -112,6 +123,12 @@ class BrowserJsonTransport:
         self.seed = seed
         self.pin = pin
         self.humanize = humanize
+        if fetch_strategy not in ("navigation", "fetch"):
+            raise ValueError(
+                f"Unknown fetch_strategy: {fetch_strategy!r}. "
+                "Use 'navigation' or 'fetch'."
+            )
+        self.fetch_strategy = fetch_strategy
 
     async def iter_ozon_reviews_json(
             self,
@@ -920,6 +937,181 @@ class BrowserJsonTransport:
         page,
         internal_path: str,
     ) -> dict[str, Any]:
+        """Fetch the Ozon reviews JSON for ``internal_path``.
+
+        Dispatches to one of two strategies based on
+        ``self.fetch_strategy``:
+
+        - ``"navigation"`` (default): ``page.goto(api_url)`` —
+          navigate the page directly to the API URL. Cloudflare
+          treats this as a real browser navigation and is much
+          less likely to return 403.
+        - ``"fetch"``: ``page.evaluate(fetch(api_url))`` — call
+          ``fetch()`` from the page's JS context. Faster but
+          Cloudflare blocks it more aggressively.
+        """
+        if self.fetch_strategy == "fetch":
+            return await self._fetch_json_inside_page_via_fetch(
+                page=page,
+                internal_path=internal_path,
+            )
+        return await self._fetch_json_via_navigation(
+            page=page,
+            internal_path=internal_path,
+        )
+
+    async def _fetch_json_via_navigation(
+        self,
+        *,
+        page,
+        internal_path: str,
+    ) -> dict[str, Any]:
+        """Fetch Ozon reviews JSON by navigating the page directly
+        to the API endpoint.
+
+        Cloudflare's bot detection distinguishes between real browser
+        navigations (page.goto) and in-page JS fetch() calls. The
+        former pass through cleanly because they look like a user
+        clicking a link; the latter often get 403 with a challenge
+        body.
+
+        After navigation, the response body is the raw JSON. We
+        extract it via ``document.body.textContent`` and parse.
+        """
+        endpoint = (
+            "https://www.ozon.ru"
+            "/api/entrypoint-api.bx/page/json/v2"
+        )
+        endpoint_url = (
+            f"{endpoint}?"
+            f"{urlencode({'url': internal_path})}"
+        )
+
+        # Navigate directly to the API URL. The browser sends all
+        # session cookies and produces a request that Cloudflare
+        # cannot distinguish from a real user navigation.
+        response = await page.goto(
+            endpoint_url,
+            wait_until="domcontentloaded",
+            timeout=self.timeout_ms,
+        )
+
+        # Extract response metadata via the Playwright response
+        # object (more reliable than parsing document headers).
+        status = 0
+        response_url = endpoint_url
+        content_type = ""
+
+        if response is not None:
+            try:
+                status = response.status
+            except Exception:
+                status = 0
+            try:
+                response_url = response.url
+            except Exception:
+                response_url = endpoint_url
+            try:
+                content_type = (
+                    response.headers.get("content-type", "") or ""
+                ).lower()
+            except Exception:
+                content_type = ""
+
+        # Read the response body from the rendered page. Ozon's
+        # API returns raw JSON, which browsers render as plain text
+        # inside <body><pre>...</pre></body>.
+        try:
+            body = await page.evaluate(
+                """
+                () => {
+                    const pre = document.querySelector("pre");
+                    if (pre) {
+                        return pre.textContent || "";
+                    }
+                    return document.body
+                        ? (document.body.textContent || "")
+                        : "";
+                }
+                """
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Ozon navigation fetch: не удалось прочитать тело "
+                f"ответа: {exc}"
+            ) from exc
+
+        body = body or ""
+
+        if status == 0:
+            # Some Playwright responses don't expose status (e.g.
+            # when the page is served from cache). Treat as 200 if
+            # the body looks like JSON, otherwise fail.
+            if body.lstrip().startswith(("{", "[")):
+                status = 200
+            else:
+                raise RuntimeError(
+                    "Ozon navigation fetch: нет HTTP статуса и "
+                    f"body не JSON: body={body[:200]}"
+                )
+
+        if status < 200 or status >= 300:
+            if status == 403 and self._is_cloudflare_challenge(body):
+                raise CloudflareChallengeError(
+                    status=status,
+                    url=response_url,
+                    body=body,
+                )
+            raise RuntimeError(
+                "Ozon navigation fetch завершился ошибкой: "
+                f"HTTP {status}; url={response_url}; "
+                f"body={body[:1000]}"
+            )
+
+        if not content_type:
+            # If we couldn't read content-type from the response
+            # headers, fall back to body inspection.
+            stripped = body.lstrip()
+            if stripped.startswith(("{", "[")):
+                content_type = "application/json"
+            else:
+                content_type = "text/html"
+
+        if "json" not in content_type and not body.lstrip().startswith(
+            ("{", "[")
+        ):
+            raise RuntimeError(
+                "Ozon navigation fetch вернул не JSON: "
+                f"content-type={content_type}; "
+                f"body={body[:500]}"
+            )
+
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Не удалось декодировать JSON Ozon: {body[:500]}"
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                "Корень JSON Ozon не является dict"
+            )
+
+        return payload
+
+    async def _fetch_json_inside_page_via_fetch(
+        self,
+        *,
+        page,
+        internal_path: str,
+    ) -> dict[str, Any]:
+        """Legacy fetch strategy: call ``fetch()`` from the page's
+        JS context.
+
+        Kept for fallback / comparison. Cloudflare blocks this much
+        more aggressively than the direct-navigation strategy.
+        """
         endpoint = (
             "https://www.ozon.ru"
             "/api/entrypoint-api.bx/page/json/v2"
@@ -959,10 +1151,6 @@ class BrowserJsonTransport:
         body = result["body"]
 
         if status < 200 or status >= 300:
-            # Cloudflare returns HTTP 403 with a challenge.html body
-            # when the browser session is flagged as suspicious. Use
-            # a dedicated exception so the retry helper can apply a
-            # much longer backoff (Cloudflare expects 10s+ waits).
             if status == 403 and self._is_cloudflare_challenge(body):
                 raise CloudflareChallengeError(
                     status=status,

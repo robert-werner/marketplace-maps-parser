@@ -146,6 +146,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fetch-strategy",
+        choices=("navigation", "fetch"),
+        default="navigation",
+        help=(
+            "Ozon only: 'navigation' opens the API URL directly "
+            "in the browser tab (default, Cloudflare-friendly); "
+            "'fetch' calls fetch() from the page's JS context "
+            "(legacy, faster but Cloudflare blocks it more "
+            "aggressively)."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -220,6 +232,7 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
         settle_ms=args.settle_ms,
         debug_dir=args.debug_dir,
         humanize=not args.no_humanize,
+        fetch_strategy=args.fetch_strategy,
     )
     adapter = OzonAdapter(browser_transport=transport)
 

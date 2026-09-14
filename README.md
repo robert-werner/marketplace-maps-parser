@@ -94,6 +94,18 @@ uv run python -m marketplace_maps_parser \
   --url "https://www.ozon.ru/product/..." \
   --retry-attempts 5
 
+# Use legacy in-page fetch (faster but more Cloudflare 403s)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --fetch-strategy fetch
+
+# Default: navigate directly to API URL (Cloudflare-friendly)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --fetch-strategy navigation
+
 # Wildberries reviews via public API
 uv run python -m marketplace_maps_parser \
   --marketplace wildberries \
@@ -166,6 +178,15 @@ Only `RuntimeError` from `_fetch_json_inside_page` is retried. Other
 exceptions (network timeouts, browser navigation errors) propagate
 immediately — they typically indicate the browser session itself is
 unhealthy and a same-page retry would not help.
+
+### Fetch strategy
+
+`--fetch-strategy` controls how the Ozon API endpoint is hit:
+
+| `--fetch-strategy` | What it does | When to use |
+|---|---|---|
+| `navigation` (default) | `page.goto(api_url)` — opens the API URL directly in the browser tab. Cloudflare sees a real browser navigation and is much less likely to return 403. | When Cloudflare blocks the legacy fetch strategy (typical production scenario). |
+| `fetch` (legacy) | `page.evaluate(fetch(api_url))` — calls `fetch()` from the page's JS context. Faster (no full page navigation) but Cloudflare distinguishes this from a real browser navigation and returns 403 more aggressively. | When the navigation strategy is too slow, or for local testing without Cloudflare protection. |
 
 ## Architecture
 
