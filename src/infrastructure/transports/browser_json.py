@@ -975,8 +975,11 @@ class BrowserJsonTransport:
         clicking a link; the latter often get 403 with a challenge
         body.
 
-        After navigation, the response body is the raw JSON. We
-        extract it via ``document.body.textContent`` and parse.
+        When Cloudflare returns its HTML "Browser Challenge" page
+        (``Пожалуйста, включите JavaScript``), the embedded JS needs
+        time to execute, submit the challenge token, and redirect
+        to the actual JSON. We detect that page and wait for the
+        body to change before reading the final response.
         """
         endpoint = (
             "https://www.ozon.ru"
@@ -1021,25 +1024,31 @@ class BrowserJsonTransport:
         # Read the response body from the rendered page. Ozon's
         # API returns raw JSON, which browsers render as plain text
         # inside <body><pre>...</pre></body>.
-        try:
-            body = await page.evaluate(
-                """
-                () => {
-                    const pre = document.querySelector("pre");
-                    if (pre) {
-                        return pre.textContent || "";
-                    }
-                    return document.body
-                        ? (document.body.textContent || "")
-                        : "";
-                }
-                """
+        body = await self._read_page_body(page)
+
+        # ----------------------------------------------------------
+        # Cloudflare JS challenge handling
+        # ----------------------------------------------------------
+        # Cloudflare's "Browser Challenge" page contains JS that
+        # automatically solves a proof-of-work challenge and
+        # redirects to the actual URL. With ``wait_until="domcontent-
+        # loaded"``, ``page.goto`` returns the moment the challenge
+        # HTML loads — before the JS has time to execute and submit
+        # the challenge. We detect that case and wait for the body
+        # to change.
+        if self._is_cloudflare_challenge(body) or (
+            status == 403 and self._is_cloudflare_challenge(body)
+        ):
+            body, status, response_url, content_type = (
+                await self._wait_for_challenge_completion(
+                    page=page,
+                    endpoint_url=endpoint_url,
+                    initial_body=body,
+                    initial_status=status,
+                    initial_url=response_url,
+                    initial_content_type=content_type,
+                )
             )
-        except Exception as exc:
-            raise RuntimeError(
-                "Ozon navigation fetch: не удалось прочитать тело "
-                f"ответа: {exc}"
-            ) from exc
 
         body = body or ""
 
@@ -1099,6 +1108,133 @@ class BrowserJsonTransport:
             )
 
         return payload
+
+    async def _read_page_body(self, page) -> str:
+        """Read the rendered page's body text.
+
+        Ozon's API returns raw JSON which browsers render inside a
+        ``<pre>`` element. We prefer ``<pre>`` over ``document.body``
+        because some browsers add whitespace/annotations to the
+        body text.
+        """
+        try:
+            return await page.evaluate(
+                """
+                () => {
+                    const pre = document.querySelector("pre");
+                    if (pre) {
+                        return pre.textContent || "";
+                    }
+                    return document.body
+                        ? (document.body.textContent || "")
+                        : "";
+                }
+                """
+            ) or ""
+        except Exception as exc:
+            raise RuntimeError(
+                "Ozon navigation fetch: не удалось прочитать тело "
+                f"ответа: {exc}"
+            ) from exc
+
+    async def _wait_for_challenge_completion(
+        self,
+        *,
+        page,
+        endpoint_url: str,
+        initial_body: str,
+        initial_status: int,
+        initial_url: str,
+        initial_content_type: str,
+        max_wait_seconds: int = 30,
+    ) -> tuple[str, int, str, str]:
+        """Wait for a Cloudflare JS challenge page to auto-resolve.
+
+        Cloudflare's challenge HTML contains embedded JavaScript
+        that solves a proof-of-work challenge and then redirects
+        (via form submission) to the original URL. After the
+        redirect, the browser loads the actual JSON response.
+
+        We poll ``page.evaluate`` to read the body every 500ms. Once
+        the body no longer looks like a challenge page (or starts
+        looking like JSON), we stop waiting and return the new
+        body / status / url / content-type.
+
+        If the challenge doesn't resolve within ``max_wait_seconds``,
+        we return the initial values (so the caller raises
+        ``CloudflareChallengeError``).
+        """
+        import asyncio
+
+        print(
+            "Ozon: обнаружена Cloudflare challenge страница; "
+            f"жду до {max_wait_seconds}s завершения JS challenge..."
+        )
+
+        deadline = asyncio.get_event_loop().time() + max_wait_seconds
+        poll_interval = 0.5
+
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(poll_interval)
+
+            # Check if the URL changed (Cloudflare redirects after
+            # challenge completion).
+            try:
+                current_url = page.url
+            except Exception:
+                current_url = initial_url
+
+            # Read the current body
+            try:
+                current_body = await self._read_page_body(page)
+            except Exception:
+                # Page might be navigating — try again
+                continue
+
+            # Challenge resolved?
+            if not self._is_cloudflare_challenge(current_body):
+                # The body changed. If it looks like JSON, we're done.
+                stripped = current_body.lstrip()
+                if stripped.startswith(("{", "[")):
+                    print(
+                        "Ozon: Cloudflare challenge решён, "
+                        "получен JSON ответ"
+                    )
+                    # We don't have a reliable status for the
+                    # post-challenge response — use 200 as the
+                    # body is clearly JSON.
+                    return (
+                        current_body,
+                        200,
+                        current_url,
+                        "application/json",
+                    )
+                # Body changed but isn't JSON — could be the actual
+                # HTML page (e.g. an error page). Stop waiting and
+                # let the caller decide.
+                print(
+                    "Ozon: Cloudflare challenge страница исчезла, "
+                    "но ответ не JSON; возвращаю body как есть"
+                )
+                return (
+                    current_body,
+                    200,  # assume 200 since challenge resolved
+                    current_url,
+                    "",
+                )
+
+        # Timed out — return the initial challenge body so the
+        # caller raises CloudflareChallengeError.
+        print(
+            f"Ozon: Cloudflare challenge не решена за "
+            f"{max_wait_seconds}s; возвращаю challenge body для retry"
+        )
+        return (
+            initial_body,
+            initial_status,
+            initial_url,
+            initial_content_type,
+        )
 
     async def _fetch_json_inside_page_via_fetch(
         self,
@@ -1291,9 +1427,19 @@ class BrowserJsonTransport:
 
     @staticmethod
     def _is_cloudflare_challenge(body: str) -> bool:
-        """Heuristic for detecting a Cloudflare challenge response
-        body. Ozon's challenge bodies include ``incidentId`` and
-        ``challengeURL`` keys in a small JSON envelope.
+        """Heuristic for detecting a Cloudflare challenge response body.
+
+        Two known shapes:
+
+        1. JSON envelope (older API-level challenge):
+           ``{"incidentId": "fab_chlg_...", "challengeURL": "..."}``
+
+        2. HTML "Browser Challenge" page (Cloudflare Under-Attack
+           interstitial):
+           Contains ``Пожалуйста, включите JavaScript`` /
+           ``enable JavaScript to continue`` /
+           ``We need to make sure that you are not a robot`` /
+           an ``ID: fab_chlg_...`` line.
         """
         if not body:
             return False
@@ -1302,6 +1448,14 @@ class BrowserJsonTransport:
             "challengeurl" in body_lower
             or "incidentid" in body_lower
             or "challenge.html" in body_lower
+            # HTML challenge page markers
+            or "fab_chlg_" in body_lower
+            or "enable javascript" in body_lower
+            or "включите javascript" in body_lower
+            or "we need to make sure that you are not a robot"
+            in body_lower
+            or "нам нужно убедиться, что вы не робот"
+            in body_lower
         )
 
     async def _save_debug(

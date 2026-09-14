@@ -142,8 +142,15 @@ async def test_fetch_via_navigation_happy_path():
 
 
 @pytest.mark.asyncio
-async def test_fetch_via_navigation_raises_cloudflare_challenge_on_403():
-    """HTTP 403 with a challenge body raises CloudflareChallengeError."""
+async def test_fetch_via_navigation_raises_cloudflare_challenge_on_403(
+    monkeypatch,
+):
+    """HTTP 403 with a challenge body raises CloudflareChallengeError.
+
+    The challenge page never resolves (the fake page always returns
+    the same body), so the wait times out and the caller raises
+    CloudflareChallengeError.
+    """
     transport = BrowserJsonTransport()
 
     challenge_body = (
@@ -158,6 +165,27 @@ async def test_fetch_via_navigation_raises_cloudflare_challenge_on_403():
         content_type="text/html",
     )
 
+    # Speed up the test by patching asyncio.sleep so the challenge
+    # wait loop doesn't actually wait 30 seconds.
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    # Also patch _wait_for_challenge_completion to use a tiny timeout
+    # so the test doesn't loop 60 times.
+    async def fast_wait(*args, **kwargs):
+        # Return the initial values immediately — challenge didn't
+        # resolve, so the caller should raise CloudflareChallengeError.
+        return (
+            kwargs.get("initial_body", challenge_body),
+            kwargs.get("initial_status", 403),
+            kwargs.get("initial_url", "https://www.ozon.ru/api/..."),
+            kwargs.get("initial_content_type", "text/html"),
+        )
+    monkeypatch.setattr(
+        transport, "_wait_for_challenge_completion", fast_wait,
+    )
+
     with pytest.raises(CloudflareChallengeError) as exc_info:
         await transport._fetch_json_via_navigation(
             page=page,
@@ -166,6 +194,227 @@ async def test_fetch_via_navigation_raises_cloudflare_challenge_on_403():
 
     assert exc_info.value.status == 403
     assert "incidentId" in exc_info.value.body
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare HTML challenge page detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_cloudflare_challenge_detects_html_enable_javascript():
+    """The new HTML challenge body from Cloudflare contains
+    'enable JavaScript' / 'включите JavaScript' markers and should
+    be detected as a Cloudflare challenge.
+    """
+    html_body = """
+    <div class="container">
+        <div class="message">
+            <div class="variant">
+                <h2 class="h2">Пожалуйста, включите JavaScript для продолжения</h2>
+                <span class="subtitle">Нам нужно убедиться, что вы не робот.</span>
+            </div>
+            <div class="variant" lang="en">
+                <h2 class="h2">Please, enable JavaScript to continue</h2>
+                <span class="subtitle">We need to make sure that you are not a robot.</span>
+            </div>
+        </div>
+        <div class="details">
+            <span class="details-text"><b>ID:</b> fab_chlg_20260914183121_01M2GK090SFR62ZB347M17WHM0</span>,
+            <span class="details-text"><b>IP:</b> 85.95.182.24</span>,
+        </div>
+    </div>
+    """
+    assert BrowserJsonTransport._is_cloudflare_challenge(html_body)
+
+
+def test_is_cloudflare_challenge_detects_fab_chlg_prefix():
+    """The ``fab_chlg_`` incident ID prefix is a reliable marker."""
+    body = "some random HTML with ID: fab_chlg_2026_abc123"
+    assert BrowserJsonTransport._is_cloudflare_challenge(body)
+
+
+def test_is_cloudflare_challenge_detects_russian_text():
+    """Russian text 'Нам нужно убедиться, что вы не робот' is detected."""
+    body = "Нам нужно убедиться, что вы не робот"
+    assert BrowserJsonTransport._is_cloudflare_challenge(body)
+
+
+def test_is_cloudflare_challenge_detects_english_text():
+    """English text 'We need to make sure that you are not a robot'."""
+    body = "We need to make sure that you are not a robot"
+    assert BrowserJsonTransport._is_cloudflare_challenge(body)
+
+
+# ---------------------------------------------------------------------------
+# Challenge wait — challenge resolves to JSON
+# ---------------------------------------------------------------------------
+
+
+class _FakePageChallengeResolving:
+    """A fake page that first returns the challenge body, then after
+    a few reads returns the JSON body (simulating the Cloudflare JS
+    challenge completing and redirecting)."""
+
+    def __init__(
+        self,
+        *,
+        challenge_body: str,
+        json_body: str,
+        resolve_after_reads: int = 2,
+    ) -> None:
+        self._challenge_body = challenge_body
+        self._json_body = json_body
+        self._resolve_after = resolve_after_reads
+        self._read_count = 0
+        self.goto_calls = 0
+
+    async def goto(self, url: str, **kwargs) -> _FakeResponse:
+        self.goto_calls += 1
+        # Initial goto returns the challenge page (403)
+        return _FakeResponse(
+            status=403,
+            url=url,
+            headers={"content-type": "text/html"},
+        )
+
+    async def evaluate(self, expression: str, *args) -> Any:
+        self._read_count += 1
+        if self._read_count <= self._resolve_after:
+            return self._challenge_body
+        return self._json_body
+
+    @property
+    def url(self) -> str:
+        return "https://www.ozon.ru/api/entrypoint-api.bx/..."
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_via_navigation_waits_for_challenge_to_resolve(monkeypatch):
+    """When Cloudflare returns the HTML challenge page, we should
+    wait for the embedded JS to solve the challenge and redirect
+    to the actual JSON. After the challenge resolves, the body
+    changes to JSON and we return it.
+    """
+    transport = BrowserJsonTransport()
+
+    challenge_body = (
+        '<h2>Пожалуйста, включите JavaScript для продолжения</h2>'
+        '<span>Нам нужно убедиться, что вы не робот.</span>'
+        '<span>ID: fab_chlg_2026_abc</span>'
+    )
+    import json as _json
+    json_body = _json.dumps({
+        "nextPage": "/product/foo/reviews?page=2",
+        "reviews": [{"reviewId": "r1", "rating": 5}],
+    })
+
+    page = _FakePageChallengeResolving(
+        challenge_body=challenge_body,
+        json_body=json_body,
+        resolve_after_reads=2,  # challenge resolves on 3rd body read
+    )
+
+    # Speed up the wait loop
+    async def _fast_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+
+    result = await transport._fetch_json_via_navigation(
+        page=page,
+        internal_path="/product/foo-123/reviews?page=1",
+    )
+
+    assert result == {
+        "nextPage": "/product/foo/reviews?page=2",
+        "reviews": [{"reviewId": "r1", "rating": 5}],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Challenge wait — challenge never resolves (timeout → CloudflareChallengeError)
+# ---------------------------------------------------------------------------
+
+
+class _FakePageChallengeNeverResolves:
+    """A fake page that always returns the challenge body (simulating
+    the JS challenge failing to complete)."""
+
+    def __init__(self, *, challenge_body: str) -> None:
+        self._challenge_body = challenge_body
+        self.goto_calls = 0
+
+    async def goto(self, url: str, **kwargs) -> _FakeResponse:
+        self.goto_calls += 1
+        return _FakeResponse(
+            status=403,
+            url=url,
+            headers={"content-type": "text/html"},
+        )
+
+    async def evaluate(self, expression: str, *args) -> Any:
+        return self._challenge_body
+
+    @property
+    def url(self) -> str:
+        return "https://www.ozon.ru/api/entrypoint-api.bx/..."
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_via_navigation_raises_when_challenge_never_resolves(
+    monkeypatch,
+):
+    """When the Cloudflare challenge never resolves (JS fails to
+    execute or times out), we should raise CloudflareChallengeError
+    after the max wait timeout."""
+    transport = BrowserJsonTransport()
+
+    challenge_body = (
+        '<h2>Пожалуйста, включите JavaScript для продолжения</h2>'
+        '<span>ID: fab_chlg_2026_abc</span>'
+    )
+
+    page = _FakePageChallengeNeverResolves(
+        challenge_body=challenge_body,
+    )
+
+    # Speed up the wait loop — don't actually sleep
+    async def _fast_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+
+    # Patch _wait_for_challenge_completion to use a tiny max_wait
+    # so the test doesn't loop forever
+    import asyncio as _asyncio
+
+    async def fast_wait(*args, **kwargs):
+        # Simulate the challenge timing out immediately
+        return (
+            kwargs["initial_body"],
+            kwargs["initial_status"],
+            kwargs["initial_url"],
+            kwargs["initial_content_type"],
+        )
+    monkeypatch.setattr(
+        transport, "_wait_for_challenge_completion", fast_wait,
+    )
+
+    with pytest.raises(CloudflareChallengeError):
+        await transport._fetch_json_via_navigation(
+            page=page,
+            internal_path="/p",
+        )
 
 
 # ---------------------------------------------------------------------------
