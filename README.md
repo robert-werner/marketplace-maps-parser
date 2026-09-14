@@ -94,6 +94,12 @@ uv run python -m marketplace_maps_parser \
   --url "https://www.ozon.ru/product/..." \
   --retry-attempts 5
 
+# Disable stealth init script (for debugging)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --no-stealth
+
 # Use legacy in-page fetch (faster but more Cloudflare 403s)
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
@@ -187,6 +193,23 @@ unhealthy and a same-page retry would not help.
 |---|---|---|
 | `navigation` (default) | `page.goto(api_url)` — opens the API URL directly in the browser tab. Cloudflare sees a real browser navigation and is much less likely to return 403. | When Cloudflare blocks the legacy fetch strategy (typical production scenario). |
 | `fetch` (legacy) | `page.evaluate(fetch(api_url))` — calls `fetch()` from the page's JS context. Faster (no full page navigation) but Cloudflare distinguishes this from a real browser navigation and returns 403 more aggressively. | When the navigation strategy is too slow, or for local testing without Cloudflare protection. |
+
+### Stealth mode
+
+Stealth mode (default: **enabled**, `--no-stealth` to disable) applies an init script to every fresh browser page that patches the most common signals Cloudflare uses to detect automated browsers:
+
+- `navigator.webdriver` → `undefined`
+- `window.chrome.runtime` → fake object (real Chrome exposes it)
+- `Notification.permission` → `'default'` (headless reports `'denied'`)
+- `navigator.plugins` → fake PDF viewer entries
+- `navigator.mimeTypes` → fake PDF mime types
+- `navigator.languages` → `['ru', 'ru-RU', 'en-US', 'en']`
+- `window.outerWidth` / `outerHeight` → non-zero values (headless reports `0`)
+- `navigator.permissions.query` for notifications → `'default'`
+
+The script is applied via `page.add_init_script` so it runs before any page JS executes. Combined with `invisible-playwright`'s patched Firefox build, this provides layered protection against Cloudflare's bot detection.
+
+If stealth causes issues with a particular Ozon layout, disable it temporarily with `--no-stealth` for debugging.
 
 ## Architecture
 

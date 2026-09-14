@@ -158,6 +158,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-stealth",
+        action="store_true",
+        help=(
+            "Disable stealth init script (default: stealth enabled). "
+            "Stealth patches navigator.webdriver, chrome.runtime, "
+            "Notification.permission and other signals Cloudflare "
+            "uses to detect automated browsers. Disable for "
+            "debugging or when stealth causes issues."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -233,6 +244,7 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
         debug_dir=args.debug_dir,
         humanize=not args.no_humanize,
         fetch_strategy=args.fetch_strategy,
+        stealth=not args.no_stealth,
     )
     adapter = OzonAdapter(browser_transport=transport)
 

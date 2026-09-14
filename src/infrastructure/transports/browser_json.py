@@ -62,6 +62,119 @@ def _retryable_errors() -> tuple[type[BaseException], ...]:
     return _RETRYABLE_ERRORS
 
 
+# Stealth init script — patches the most common signals Cloudflare
+# uses to detect automated / headless browsers. Adapted from the
+# open-source playwright-stealth project (https://github.com/
+# Mattwmaster58/playwright_stealth) and tailored for Firefox.
+#
+# Applied to every fresh page via ``page.add_init_script`` so the
+# patches run before any page JS executes.
+_STEALTH_INIT_SCRIPT = """
+// Hide that we're a WebDriver-controlled browser.
+Object.defineProperty(navigator, 'webdriver', {
+    get: () => undefined,
+    configurable: true,
+});
+
+// Pretend we have the Chrome runtime object that real Chrome
+// browsers expose. Some bot detection scripts check for its
+// presence.
+if (!window.chrome) {
+    window.chrome = {
+        runtime: {},
+        app: {},
+        csi: () => {},
+        loadTimes: () => {},
+    };
+}
+
+// Override Notification.permission so it doesn't say "denied" —
+// real browsers say "default" until the user has interacted.
+if (window.Notification) {
+    Object.defineProperty(Notification, 'permission', {
+        get: () => 'default',
+        configurable: true,
+    });
+}
+
+// Pretend we have plugins (real browsers have at least PDF viewer).
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        {
+            name: 'PDF Viewer',
+            filename: 'internal-pdf-viewer',
+            description: 'Portable Document Format',
+            length: 1,
+        },
+        {
+            name: 'Chrome PDF Viewer',
+            filename: 'internal-pdf-viewer',
+            description: 'Portable Document Format',
+            length: 1,
+        },
+    ],
+    configurable: true,
+});
+
+// Pretend we have a non-zero set of mime types.
+Object.defineProperty(navigator, 'mimeTypes', {
+    get: () => [
+        {
+            type: 'application/pdf',
+            suffixes: 'pdf',
+            description: 'Portable Document Format',
+        },
+        {
+            type: 'text/pdf',
+            suffixes: 'pdf',
+            description: 'Portable Document Format',
+        },
+    ],
+    configurable: true,
+});
+
+// Make the navigator.languages look real.
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['ru', 'ru-RU', 'en-US', 'en'],
+    configurable: true,
+});
+
+// Patch permissions query so it doesn't say "denied" for
+// notifications.
+const originalQuery = window.navigator.permissions
+    ? window.navigator.permissions.query
+    : null;
+if (originalQuery) {
+    window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications'
+            ? Promise.resolve({state: 'default'})
+            : originalQuery(parameters)
+    );
+}
+
+// Make window.outerWidth / outerHeight look non-zero (headless
+// browsers often report 0).
+if (window.outerWidth === 0 || window.outerHeight === 0) {
+    Object.defineProperty(window, 'outerWidth', {
+        get: () => window.innerWidth || 1280,
+        configurable: true,
+    });
+    Object.defineProperty(window, 'outerHeight', {
+        get: () => window.innerHeight + 85 || 720,
+        configurable: true,
+    });
+}
+
+// Webdriver test: some detection scripts check
+// ``window.navigator.webdriver === false`` explicitly. Set it.
+try {
+    delete Object.getPrototypeOf(navigator).webdriver;
+} catch (e) {
+    // Some builds don't allow delete on the prototype.
+}
+"""
+
+
 class CloudflareChallengeError(RuntimeError):
     """Raised when Ozon returns HTTP 403 with a Cloudflare
     ``challenge.html`` body instead of the expected JSON.
@@ -102,6 +215,11 @@ class BrowserJsonTransport:
     - ``"fetch"`` (legacy): ``page.evaluate(fetch(api_url))`` — calls
       ``fetch()`` from the page's JS context. Faster but Cloudflare
       blocks it more aggressively.
+
+    Stealth mode (``stealth=True`` by default) applies an init
+    script to every fresh page that patches ``navigator.webdriver``,
+    ``chrome.runtime``, ``Notification.permission``, and other
+    signals Cloudflare uses to detect automated browsers.
     """
 
     def __init__(
@@ -115,6 +233,7 @@ class BrowserJsonTransport:
         pin: dict[str, Any] | None = None,
         humanize: bool = True,
         fetch_strategy: str = "navigation",
+        stealth: bool = True,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -123,6 +242,7 @@ class BrowserJsonTransport:
         self.seed = seed
         self.pin = pin
         self.humanize = humanize
+        self.stealth = stealth
         if fetch_strategy not in ("navigation", "fetch"):
             raise ValueError(
                 f"Unknown fetch_strategy: {fetch_strategy!r}. "
@@ -170,6 +290,25 @@ class BrowserJsonTransport:
                     except Exception:
                         pass
                 new_page = await browser.new_page()
+                # Apply stealth init script to every fresh page. This
+                # patches ``navigator.webdriver``, ``chrome.runtime``,
+                # ``Notification.permission``, ``window.outerWidth`` /
+                # ``window.outerHeight`` and other signals that
+                # Cloudflare uses to detect headless / automated
+                # browsers. See ``_STEALTH_INIT_SCRIPT`` for the full
+                # patch list.
+                if self.stealth:
+                    try:
+                        await new_page.add_init_script(
+                            _STEALTH_INIT_SCRIPT,
+                        )
+                    except Exception as exc:
+                        # Don't fail hard — invisible-playwright may
+                        # not support add_init_script in some builds.
+                        print(
+                            "Ozon: warning — не удалось применить "
+                            f"stealth init script: {exc}"
+                        )
                 current_page_holder["page"] = new_page
                 return new_page
 
@@ -1021,10 +1160,34 @@ class BrowserJsonTransport:
             except Exception:
                 content_type = ""
 
-        # Read the response body from the rendered page. Ozon's
-        # API returns raw JSON, which browsers render as plain text
-        # inside <body><pre>...</pre></body>.
-        body = await self._read_page_body(page)
+        # Read the response body. We have two options:
+        #
+        # 1. ``response.text()`` — the raw HTTP response body as
+        #    received by the browser, before any rendering. This is
+        #    the only reliable way to get JSON when the browser
+        #    renders it through its built-in JSON viewer (Firefox
+        #    shows a tree UI for ``application/json`` URLs, and
+        #    ``document.body.textContent`` returns the viewer text,
+        #    not the raw JSON).
+        #
+        # 2. ``page.evaluate(document.body.textContent)`` — what
+        #    the rendered DOM looks like. Used as a fallback when
+        #    ``response`` is None (e.g. when Cloudflare returns a
+        #    redirect chain and the final response isn't the one
+        #    ``page.goto`` returned).
+        body = ""
+        if response is not None:
+            try:
+                body = await response.text() or ""
+            except Exception:
+                body = ""
+
+        if not body:
+            # Fallback: read from the rendered DOM (works when
+            # ``response.text()`` is unavailable or when the body
+            # was already rendered into <pre> by a non-JSON-viewer
+            # browser).
+            body = await self._read_page_body(page)
 
         # ----------------------------------------------------------
         # Cloudflare JS challenge handling
