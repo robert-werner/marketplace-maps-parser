@@ -161,7 +161,13 @@ class OzonAdapter(MarketplaceAdapter):
             card: dict[str, Any],
             product: ProductRef,
     ) -> Review:
-        text = card.get("text") or ""
+        # ``text`` from the DOM is multi-line: avatar initials, author
+        # name, date, review text, "Вам помог этот отзыв?", "Да N Нет M".
+        # We split into lines to extract author and review text.
+        raw_text = card.get("text") or ""
+        # ``review_text`` is a pre-extracted cleaner version when the
+        # DOM transport already did the line-by-line filtering.
+        text = card.get("review_text") or raw_text
 
         lines = [
             line.strip()
@@ -169,14 +175,25 @@ class OzonAdapter(MarketplaceAdapter):
             if line.strip()
         ]
 
-        author = lines[1] if len(lines) > 1 else (
-            lines[0] if lines else None
-        )
+        # Author extraction: DOM transport already extracts this when
+        # available; fall back to line-based heuristic for raw cards.
+        author = card.get("author")
+        if author is None:
+            author = lines[1] if len(lines) > 1 else (
+                lines[0] if lines else None
+            )
+
+        # Rating: DOM transport extracts it from SVG star colors
+        # (BrowserDomTransport._read_review_rating). When the scroll
+        # mode in browser_json.py is used, rating is not extracted
+        # (see _read_review_cards in browser_json.py); we fall back to
+        # the explicit "rating" key in the card dict if present.
+        rating = card.get("rating")
 
         return Review(
             review_id=card.get("uuid"),
             product=product,
-            rating=None,
+            rating=rating,
             text=text or None,
             author=author,
             created_at=parse_ozon_date(
@@ -696,6 +713,19 @@ def is_review_node(
     text: Any,
     rating: Any,
 ) -> bool:
+    """Heuristic for deciding whether a dict in the Ozon payload is a
+    review node.
+
+    A node is a review if it has a stable ``review_id`` (or UUID key)
+    AND at least one "review-ish" marker key (rating, author, date,
+    pros/cons, text, etc.).
+
+    Reviews with rating-only (no text) are accepted — many Ozon
+    shoppers leave a star rating without writing anything, and we
+    want to collect those too. The ``has_review_marker`` check covers
+    them because they still have ``rating`` / ``score`` / ``stars``
+    keys in the JSON.
+    """
     keys = {
         str(key).lower()
         for key in node

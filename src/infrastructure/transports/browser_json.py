@@ -62,6 +62,30 @@ def _retryable_errors() -> tuple[type[BaseException], ...]:
     return _RETRYABLE_ERRORS
 
 
+class CloudflareChallengeError(RuntimeError):
+    """Raised when Ozon returns HTTP 403 with a Cloudflare
+    ``challenge.html`` body instead of the expected JSON.
+
+    Triggers a much longer backoff than a generic transient error:
+    Cloudflare expects clients to wait 10+ seconds between
+    challenge-failed retries, otherwise it keeps returning the
+    challenge indefinitely. Subclasses RuntimeError so existing
+    retry_on filters that include RuntimeError still catch it.
+    """
+
+    def __init__(self, status: int, url: str, body: str) -> None:
+        self.status = status
+        self.url = url
+        self.body = body
+        # Truncate the body so log lines stay readable — the
+        # challenge body is a long base64-ish blob.
+        preview = body[:200] + "..." if len(body) > 200 else body
+        super().__init__(
+            f"Cloudflare challenge (HTTP {status}) on {url}: "
+            f"body={preview}"
+        )
+
+
 class BrowserJsonTransport:
     """Получает JSON Ozon в одной browser-сессии.
 
@@ -571,11 +595,107 @@ class BrowserJsonTransport:
                         "statusid"
                     ),
                     "text": await card.inner_text(),
+                    "rating": await self._read_review_rating(card),
                     "images": await self._read_images(card),
                 }
             )
 
         return result
+
+    async def _read_review_rating(self, card) -> int | None:
+        """Read the per-review star rating from the DOM card.
+
+        Each star is an SVG; the filled vs unfilled star has a
+        different computed color (yellow vs grey). We count the
+        yellow (filled) stars. The selector matches the rating
+        container that Ozon wraps around the stars.
+
+        Mirrors ``BrowserDomTransport._read_review_rating`` — kept
+        duplicated (not shared) to avoid coupling the two transport
+        classes together.
+        """
+        rating_container = card.locator(
+            '[class*="rpProducta9c"]'
+        )
+
+        if await rating_container.count() == 0:
+            return None
+
+        stars = rating_container.locator("svg")
+        star_count = await stars.count()
+
+        if star_count == 0:
+            return None
+
+        filled = 0
+
+        for star_index in range(star_count):
+            star = stars.nth(star_index)
+
+            try:
+                color = await star.evaluate(
+                    """
+                    (element) => {
+                        const path = element.querySelector("path");
+                        if (!path) {
+                            return null;
+                        }
+
+                        return {
+                            elementColor:
+                                getComputedStyle(element).color,
+                            pathFill:
+                                getComputedStyle(path).fill,
+                            pathAttribute:
+                                path.getAttribute("fill"),
+                            className:
+                                element.getAttribute("class") || ""
+                        };
+                    }
+                    """
+                )
+            except Exception:
+                continue
+
+            if self._is_filled_star(color):
+                filled += 1
+
+        return filled if filled else None
+
+    @staticmethod
+    def _is_filled_star(color: dict[str, Any] | None) -> bool:
+        """Heuristic for deciding whether a star SVG is filled yellow
+        (counted) or unfilled grey (not counted). Mirrors
+        ``BrowserDomTransport._is_filled_star``.
+        """
+        if not color:
+            return False
+
+        values = " ".join(
+            str(value).lower()
+            for value in color.values()
+            if value is not None
+        )
+
+        # Yellow star markers — Ozon may change the exact RGB.
+        yellow_markers = (
+            "rgb(255, 198, 0)",
+            "rgb(255, 198, 51)",
+            "#ffc600",
+            "#ffc633",
+            "#ffce00",
+            "ffc600",
+            "ffc633",
+            "ffce00",
+        )
+        if any(marker in values for marker in yellow_markers):
+            return True
+
+        # Class-based marker used by some Ozon layouts.
+        if "filled" in values and "empty" not in values:
+            return True
+
+        return False
 
     async def _read_images(
             self,
@@ -839,6 +959,16 @@ class BrowserJsonTransport:
         body = result["body"]
 
         if status < 200 or status >= 300:
+            # Cloudflare returns HTTP 403 with a challenge.html body
+            # when the browser session is flagged as suspicious. Use
+            # a dedicated exception so the retry helper can apply a
+            # much longer backoff (Cloudflare expects 10s+ waits).
+            if status == 403 and self._is_cloudflare_challenge(body):
+                raise CloudflareChallengeError(
+                    status=status,
+                    url=response_url,
+                    body=body,
+                )
             raise RuntimeError(
                 "Ozon browser fetch завершился ошибкой: "
                 f"HTTP {status}; url={response_url}; "
@@ -931,6 +1061,11 @@ class BrowserJsonTransport:
         Playwright ``Error`` ("Page.evaluate: The operation was
         aborted", navigation timeouts, CDP connection drops).
 
+        ``CloudflareChallengeError`` gets a longer backoff (10s base,
+        60s max) because Cloudflare expects long waits between
+        challenge-failed retries. Other ``RuntimeError`` subclasses
+        get the standard 1.5s/15s backoff.
+
         Note: the ``page`` argument here is the same page object across
         all attempts. If the page itself becomes unhealthy (the
         Playwright execution context is lost), this retry may still
@@ -946,18 +1081,39 @@ class BrowserJsonTransport:
 
         from shared.retry import retry_async
 
+        # CloudflareChallengeError is a RuntimeError subclass, so
+        # retry_on=_retryable_errors() catches it automatically. We
+        # use a moderately longer base delay (3s) and cap (30s) than
+        # the original 1.5s/15s so Cloudflare challenges don't get
+        # immediately re-fired (which makes Cloudflare more
+        # suspicious, not less).
         return await retry_async(
             lambda: self._fetch_json_inside_page(
                 page=page,
                 internal_path=internal_path,
             ),
             attempts=attempts,
-            base_delay=1.5,
-            max_delay=15.0,
+            base_delay=3.0,
+            max_delay=30.0,
             factor=2.0,
             jitter=0.3,
             retry_on=_retryable_errors(),
             label=label,
+        )
+
+    @staticmethod
+    def _is_cloudflare_challenge(body: str) -> bool:
+        """Heuristic for detecting a Cloudflare challenge response
+        body. Ozon's challenge bodies include ``incidentId`` and
+        ``challengeURL`` keys in a small JSON envelope.
+        """
+        if not body:
+            return False
+        body_lower = body.lower()
+        return (
+            "challengeurl" in body_lower
+            or "incidentid" in body_lower
+            or "challenge.html" in body_lower
         )
 
     async def _save_debug(
