@@ -1,15 +1,64 @@
 [project]
 name = "marketplace-maps-parser"
 version = "0.1.0"
+description = "Async review scraper for Russian e-commerce marketplaces (Ozon, Wildberries, Yandex Market — planned)."
+readme = "README.md"
 requires-python = ">=3.14"
+license = { text = "Proprietary" }
+authors = [
+    { name = "Leonid Kolesnichenko", email = "xperience439@gmail.com" },
+]
 dependencies = [
     "httpx>=0.28.1",
     "invisible-playwright>=0.14.0",
-    "isort>=9.0.1",
     "loguru>=0.7.3",
-    "mypy>=2.3.1",
     "playwright>=1.62.0",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
-    "ruff>=0.16.7",
+    "typing_extensions>=4.12",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "isort>=9.0.1",
+    "mypy>=2.3.1",
+    "ruff>=0.16.7",
+    "pytest>=8.4",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+marketplace-maps-parser = "marketplace_maps_parser.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Source root is src/. Each subfolder is a top-level importable package
+# (matching the existing `from domain...`, `from infrastructure...` imports).
+packages = [
+    "src/marketplace_maps_parser",
+    "src/domain",
+    "src/application",
+    "src/infrastructure",
+    "src/shared",
+    "src/app",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+ignore_missing_imports = true

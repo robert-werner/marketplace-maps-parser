@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from domain.entities import ProductRef, Review, ReviewPage
 from infrastructure.marketplaces.base import MarketplaceAdapter
@@ -12,6 +12,32 @@ from shared.url_parsers import (
     extract_ozon_product_id,
     extract_ozon_product_path,
 )
+
+
+class OzonBrowserTransport(Protocol):
+    """Subset of BrowserJsonTransport / BrowserDomTransport used by OzonAdapter."""
+
+    def iter_ozon_reviews_json(
+        self,
+        product_path: str,
+        *,
+        start_page: int = ...,
+        max_pages: int | None = ...,
+    ) -> AsyncIterator[tuple[int, dict[str, Any]]]: ...
+
+    async def get_ozon_reviews_json(
+        self,
+        product_path: str,
+        *,
+        page_number: int = ...,
+    ) -> dict[str, Any]: ...
+
+    def iter_ozon_reviews_by_scroll(
+        self,
+        product_path: str,
+        *,
+        max_reviews: int | None = ...,
+    ) -> AsyncIterator[list[dict[str, Any]]]: ...
 
 
 UUID_RE = re.compile(
@@ -27,7 +53,10 @@ UUID_RE = re.compile(
 class OzonAdapter(MarketplaceAdapter):
     name = "ozon"
 
-    def __init__(self, browser_transport) -> None:
+    def __init__(
+        self,
+        browser_transport: OzonBrowserTransport,
+    ) -> None:
         self.browser_transport = browser_transport
 
     async def collect(self, product_url: str) -> ReviewPage:

@@ -2,17 +2,30 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from domain.entities import ProductRef, Review, ReviewPage
 from infrastructure.marketplaces.base import MarketplaceAdapter
 from shared.url_parsers import extract_nm_id
 
 
+class WildberriesHttpTransport(Protocol):
+    async def get_json(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = ...,
+        headers: dict[str, str] | None = ...,
+    ) -> dict[str, Any]: ...
+
+
 class WildberriesAdapter(MarketplaceAdapter):
     name = "wildberries"
 
-    def __init__(self, transport) -> None:
+    def __init__(
+        self,
+        transport: WildberriesHttpTransport,
+    ) -> None:
         self.transport = transport
 
     async def collect(self, product_url: str) -> ReviewPage:

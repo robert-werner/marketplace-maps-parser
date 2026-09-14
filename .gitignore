@@ -1,0 +1,71 @@
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.installed.cfg
+*.whl
+MANIFEST
+
+# ----- Virtual envs -----
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ----- uv -----
+.uv-cache/
+
+# ----- Testing / coverage -----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.cache
+nosetests.xml
+
+# ----- Type checkers / linters -----
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# ----- IDE / editors -----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ----- Secrets / env -----
+.env
+.env.local
+.env.*.local
+
+# ----- Project runtime artifacts -----
+debug_ozon/
+debug_wb/
+debug_*/
+ozon_reviews*.jsonl
+wildberries_reviews*.jsonl
+yandex_reviews*.jsonl
+*_reviews.jsonl
+*.log
+
+# ----- Jupyter -----
+.ipynb_checkpoints/
+*.ipynb

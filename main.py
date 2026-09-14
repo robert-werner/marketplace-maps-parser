@@ -1,24 +1,33 @@
 # main.py
+#
+# DEPRECATED — use the unified CLI instead:
+#
+#     uv run python -m marketplace_maps_parser \
+#         --marketplace ozon \
+#         --url "https://www.ozon.ru/product/..." \
+#         --output ozon_reviews.jsonl
+#
+# This file is kept only for backward reference and historical diff
+# context. It will be removed in a future release.
 from __future__ import annotations
 
 import asyncio
-import json
+import sys
 
-from app.container import build_registry
-from application.review_service import ReviewService
 from infrastructure.marketplaces.ozon import OzonAdapter
-from infrastructure.repositories.jsonl_repository import JsonlReviewRepository
-from infrastructure.transports.browser import BrowserJsonTransport
-from infrastructure.transports.browser_dom import BrowserDomTransport
-from infrastructure.transports.http import HttpJsonTransport
+from infrastructure.repositories.jsonl_repository import (
+    JsonlReviewRepository,
+)
+from infrastructure.transports.browser_dom import (
+    BrowserDomTransport,
+)
+
 
 async def collect_all_ozon_reviews(
     adapter: OzonAdapter,
     product_url: str,
 ) -> int:
-    repository = JsonlReviewRepository(
-        "ozon_reviews.jsonl",
-    )
+    repository = JsonlReviewRepository("ozon_reviews.jsonl")
 
     count = 0
 
@@ -35,15 +44,14 @@ async def collect_all_ozon_reviews(
     return count
 
 
-import asyncio
-
-from infrastructure.marketplaces.ozon import OzonAdapter
-from infrastructure.transports.browser_dom import BrowserDomTransport
-
-
 async def main() -> None:
+    print(
+        "[deprecation] main.py is deprecated; "
+        "use `python -m marketplace_maps_parser` instead.",
+        file=sys.stderr,
+    )
     adapter = OzonAdapter(
-        dom_transport=BrowserDomTransport(),
+        browser_transport=BrowserDomTransport(),
     )
 
     count = await collect_all_ozon_reviews(

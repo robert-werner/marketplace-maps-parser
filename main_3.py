@@ -1,11 +1,25 @@
+# main_3.py
+#
+# DEPRECATED — use the unified CLI instead:
+#
+#     uv run python -m marketplace_maps_parser \
+#         --marketplace ozon \
+#         --url "https://www.ozon.ru/product/..." \
+#         --output ozon_reviews.jsonl
+#
+# This file is kept only for backward reference and historical diff
+# context. It will be removed in a future release.
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 from infrastructure.marketplaces.ozon import OzonAdapter
-from infrastructure.transports.browser_json import BrowserJsonTransport
+from infrastructure.transports.browser_json import (
+    BrowserJsonTransport,
+)
 
 
 async def collect_all_ozon_reviews(
@@ -68,6 +82,11 @@ async def collect_all_ozon_reviews(
 
 
 async def main() -> None:
+    print(
+        "[deprecation] main_3.py is deprecated; "
+        "use `python -m marketplace_maps_parser` instead.",
+        file=sys.stderr,
+    )
     product_url = (
         "https://www.ozon.ru/product/ip-telefon-yealink-sip-t30-voip-ofisnyy-680123890"
     )
