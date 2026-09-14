@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
 from typing import Any
@@ -10,6 +11,16 @@ from infrastructure.marketplaces.base import MarketplaceAdapter
 from shared.url_parsers import (
     extract_ozon_product_id,
     extract_ozon_product_path,
+)
+
+
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-"
+    r"[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-"
+    r"[0-9a-f]{12}$",
+    re.IGNORECASE,
 )
 
 
@@ -24,7 +35,6 @@ class OzonAdapter(MarketplaceAdapter):
         product_path = extract_ozon_product_path(product_url)
 
         raw = await self.browser_transport.get_ozon_reviews_json(
-            product_url=product_url,
             product_path=product_path,
             page_number=1,
         )
@@ -48,11 +58,11 @@ class OzonAdapter(MarketplaceAdapter):
         )
 
     async def iter_reviews(
-            self,
-            product_url: str,
-            *,
-            start_page: int = 1,
-            max_pages: int | None = None,
+        self,
+        product_url: str,
+        *,
+        start_page: int = 1,
+        max_pages: int | None = None,
     ) -> AsyncIterator[Review]:
         product_id = extract_ozon_product_id(product_url)
         product_path = extract_ozon_product_path(product_url)
@@ -66,12 +76,11 @@ class OzonAdapter(MarketplaceAdapter):
         seen_ids: set[str] = set()
 
         async for page_number, payload in (
-                self.browser_transport.iter_ozon_reviews_json(
-                    product_url=product_url,
-                    product_path=product_path,
-                    start_page=start_page,
-                    max_pages=max_pages,
-                )
+            self.browser_transport.iter_ozon_reviews_json(
+                product_path=product_path,
+                start_page=start_page,
+                max_pages=max_pages,
+            )
         ):
             reviews = extract_reviews_from_ozon_payload(
                 payload=payload,
@@ -80,11 +89,15 @@ class OzonAdapter(MarketplaceAdapter):
 
             new_count = 0
 
-            for review in reviews:
-                key = (
-                        review.review_id
-                        or build_review_key(review)
-                )
+            for position, review in enumerate(reviews):
+                key = review.review_id
+
+                if not key:
+                    key = build_review_key(
+                        review,
+                        page_number=page_number,
+                        position=position,
+                    )
 
                 if key in seen_ids:
                     continue
@@ -94,10 +107,11 @@ class OzonAdapter(MarketplaceAdapter):
                 yield review
 
             print(
-                f"Ozon: страница {page_number}, "
-                f"найдено {len(reviews)}, "
-                f"новых {new_count}"
+                f"Ozon: страница {page_number}; "
+                f"получено={len(reviews)}; "
+                f"новых={new_count}"
             )
+
     async def collect_all(
         self,
         product_url: str,
@@ -105,7 +119,6 @@ class OzonAdapter(MarketplaceAdapter):
         start_page: int = 1,
         max_pages: int | None = None,
     ) -> ReviewPage:
-        """Собирает все найденные страницы в один ReviewPage."""
         product_id = extract_ozon_product_id(product_url)
 
         product = ProductRef(
@@ -149,7 +162,11 @@ def extract_reviews_from_ozon_payload(
         if review is None:
             continue
 
-        key = review.review_id or build_review_key(review)
+        key = review.review_id or build_review_key(
+            review,
+            page_number=0,
+            position=len(result),
+        )
 
         if key in seen_ids:
             continue
@@ -160,18 +177,36 @@ def extract_reviews_from_ozon_payload(
     return result
 
 
-def walk_json(value: Any) -> Iterator[Any]:
-    yield value
-
+def walk_json(
+    value: Any,
+    *,
+    key_name: str | None = None,
+) -> Iterator[Any]:
     if isinstance(value, dict):
-        for child in value.values():
-            yield from walk_json(child)
+        current = dict(value)
+
+        if key_name:
+            current["_ozon_key"] = key_name
+
+        yield current
+
+        for key, child in value.items():
+            yield from walk_json(
+                child,
+                key_name=str(key),
+            )
+
         return
 
     if isinstance(value, list):
+        yield value
+
         for child in value:
             yield from walk_json(child)
+
         return
+
+    yield value
 
     if not isinstance(value, str):
         return
@@ -186,22 +221,17 @@ def walk_json(value: Any) -> Iterator[Any]:
     except (TypeError, ValueError):
         return
 
-    yield from walk_json(decoded)
+    yield from walk_json(
+        decoded,
+        key_name=key_name,
+    )
 
 
 def map_ozon_review_node(
     node: dict[str, Any],
     product: ProductRef,
 ) -> Review | None:
-    review_id = first_value(
-        node,
-        "reviewId",
-        "review_id",
-        "reviewID",
-        "reviewUuid",
-        "review_uuid",
-        "uuid",
-    )
+    review_id = extract_review_id(node)
 
     text = first_value(
         node,
@@ -232,11 +262,7 @@ def map_ozon_review_node(
         return None
 
     return Review(
-        review_id=(
-            str(review_id)
-            if review_id is not None
-            else None
-        ),
+        review_id=review_id,
         product=product,
         rating=normalize_rating(rating),
         text=normalize_text(text),
@@ -283,6 +309,34 @@ def map_ozon_review_node(
     )
 
 
+def extract_review_id(
+    node: dict[str, Any],
+) -> str | None:
+    value = first_value(
+        node,
+        "reviewId",
+        "review_id",
+        "reviewID",
+        "reviewUuid",
+        "review_uuid",
+        "feedbackId",
+        "feedback_id",
+        "commentId",
+        "comment_id",
+        "uuid",
+    )
+
+    if value is not None:
+        return str(value)
+
+    key_name = node.get("_ozon_key")
+
+    if isinstance(key_name, str) and UUID_RE.fullmatch(key_name):
+        return key_name
+
+    return None
+
+
 def first_value(
     node: dict[str, Any],
     *keys: str,
@@ -305,27 +359,33 @@ def is_review_node(
 ) -> bool:
     keys = {str(key).lower() for key in node}
 
+    has_id = review_id is not None
+
     review_markers = {
         "reviewid",
         "review_id",
         "reviewuuid",
         "review_uuid",
-        "reviewtext",
-        "review_text",
+        "uuid",
         "publishedat",
         "published_at",
+        "createdat",
+        "created_at",
+        "author",
+        "authorname",
+        "username",
+        "statusid",
+        "rating",
+        "score",
+        "stars",
+        "reviewtext",
+        "review_text",
+        "comment",
         "advantages",
         "disadvantages",
     }
 
-    has_marker = bool(keys & review_markers)
-    has_content = text is not None or rating is not None
-
-    return (
-        review_id is not None and has_content
-    ) or (
-        has_marker and has_content
-    )
+    return has_id and bool(keys & review_markers)
 
 
 def normalize_text(value: Any) -> str | None:
@@ -422,13 +482,20 @@ def extract_seller_answer(
     return normalize_text(answer)
 
 
-def build_review_key(review: Review) -> str:
+def build_review_key(
+    review: Review,
+    *,
+    page_number: int,
+    position: int,
+) -> str:
     return "|".join(
         (
             review.product.product_id,
+            str(page_number),
+            str(position),
             review.author or "",
-            review.text or "",
-            str(review.rating),
             str(review.created_at),
+            str(review.rating),
+            review.text or "",
         )
     )

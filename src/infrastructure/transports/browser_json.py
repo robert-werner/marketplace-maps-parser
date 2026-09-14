@@ -1,4 +1,3 @@
-# src/infrastructure/transports/browser_json.py
 from __future__ import annotations
 
 import json
@@ -11,7 +10,12 @@ from invisible_playwright.async_api import InvisiblePlaywright
 
 
 class BrowserJsonTransport:
-    """Получение JSON Ozon внутри одного browser context."""
+    """Получает JSON Ozon в одной browser-сессии.
+
+    Сначала открывается страница отзывов, затем внутренний endpoint
+    вызывается из этой же страницы через window.fetch(). Следующая
+    страница берётся из поля nextPage ответа Ozon.
+    """
 
     def __init__(
         self,
@@ -34,16 +38,11 @@ class BrowserJsonTransport:
 
     async def iter_ozon_reviews_json(
         self,
-        product_url: str,
         product_path: str,
         *,
         start_page: int = 1,
         max_pages: int | None = None,
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
-        """Последовательно получает страницы отзывов Ozon.
-
-        Браузер и страница создаются один раз.
-        """
         self.debug_dir.mkdir(
             parents=True,
             exist_ok=True,
@@ -56,22 +55,26 @@ class BrowserJsonTransport:
             humanize=self.humanize,
         ) as browser:
             page = await browser.new_page()
-
-            seen_review_ids: set[str] = set()
-            page_number = start_page
+            current_path = self._build_initial_path(
+                product_path=product_path,
+                page_number=start_page,
+            )
+            seen_paths: set[str] = set()
             processed_pages = 0
 
-            while True:
+            while current_path:
                 if (
                     max_pages is not None
                     and processed_pages >= max_pages
                 ):
                     return
 
-                reviews_url = self._build_reviews_url(
-                    product_path=product_path,
-                    page_number=page_number,
-                )
+                if current_path in seen_paths:
+                    return
+
+                seen_paths.add(current_path)
+
+                reviews_url = self._absolute_url(current_path)
 
                 await page.goto(
                     reviews_url,
@@ -84,69 +87,43 @@ class BrowserJsonTransport:
                         self.settle_ms,
                     )
 
-                internal_path = self._build_internal_path(
-                    product_path=product_path,
-                    page_number=page_number,
-                )
-
                 payload = await self._fetch_json_inside_page(
                     page=page,
-                    internal_path=internal_path,
-                    referer=reviews_url,
+                    internal_path=current_path,
                 )
+
+                processed_pages += 1
 
                 await self._save_debug(
                     page=page,
                     payload=payload,
-                    page_number=page_number,
+                    page_number=processed_pages,
                 )
 
-                current_review_ids = (
-                    self.extract_real_review_ids(payload)
-                )
+                next_path = self.extract_next_path(payload)
 
-                new_review_ids = (
-                    set(current_review_ids)
-                    - seen_review_ids
-                )
+                yield processed_pages, payload
 
-                seen_review_ids.update(current_review_ids)
-
-                processed_pages += 1
-
-                yield page_number, payload
-
-                # Останавливаемся только если страница действительно
-                # не содержит отзывов или целиком повторяет предыдущую.
-                if not current_review_ids:
-                    return
-
-                if not new_review_ids:
-                    return
-
-                page_number += 1
+                current_path = next_path
 
     async def get_ozon_reviews_json(
         self,
-        product_url: str,
         product_path: str,
         *,
         page_number: int = 1,
     ) -> dict[str, Any]:
-        """Получает одну страницу отзывов."""
         async for current_page, payload in (
             self.iter_ozon_reviews_json(
-                product_url=product_url,
                 product_path=product_path,
                 start_page=page_number,
                 max_pages=1,
             )
         ):
-            if current_page == page_number:
+            if current_page == 1:
                 return payload
 
         raise RuntimeError(
-            f"Не удалось получить страницу отзывов {page_number}"
+            f"Не удалось получить страницу Ozon {page_number}"
         )
 
     async def _fetch_json_inside_page(
@@ -154,32 +131,27 @@ class BrowserJsonTransport:
         *,
         page,
         internal_path: str,
-        referer: str,
     ) -> dict[str, Any]:
         endpoint = (
             "https://www.ozon.ru"
             "/api/entrypoint-api.bx/page/json/v2"
         )
 
+        endpoint_url = (
+            f"{endpoint}?"
+            f"{urlencode({'url': internal_path})}"
+        )
+
         result = await page.evaluate(
             """
-            async ({ endpoint, internalPath, referer }) => {
-                const url = new URL(endpoint);
-                url.searchParams.set("url", internalPath);
-
-                const response = await fetch(
-                    url.toString(),
-                    {
-                        method: "GET",
-                        credentials: "include",
-                        headers: {
-                            "Accept": "application/json",
-                            "Referer": referer,
-                            "X-Requested-With":
-                                "XMLHttpRequest"
-                        }
+            async (endpointUrl) => {
+                const response = await fetch(endpointUrl, {
+                    method: "GET",
+                    credentials: "include",
+                    headers: {
+                        "Accept": "application/json"
                     }
-                );
+                });
 
                 return {
                     status: response.status,
@@ -190,11 +162,7 @@ class BrowserJsonTransport:
                 };
             }
             """,
-            {
-                "endpoint": endpoint,
-                "internalPath": internal_path,
-                "referer": referer,
-            },
+            endpoint_url,
         )
 
         status = result["status"]
@@ -205,8 +173,7 @@ class BrowserJsonTransport:
         if status < 200 or status >= 300:
             raise RuntimeError(
                 "Ozon browser fetch завершился ошибкой: "
-                f"HTTP {status}; "
-                f"url={response_url}; "
+                f"HTTP {status}; url={response_url}; "
                 f"body={body[:1000]}"
             )
 
@@ -217,7 +184,12 @@ class BrowserJsonTransport:
                 f"body={body[:500]}"
             )
 
-        payload = json.loads(body)
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Не удалось декодировать JSON Ozon: {body[:500]}"
+            ) from exc
 
         if not isinstance(payload, dict):
             raise RuntimeError(
@@ -259,156 +231,35 @@ class BrowserJsonTransport:
         )
 
     @staticmethod
-    def _build_reviews_url(
+    def _absolute_url(path: str) -> str:
+        if path.startswith("http://") or path.startswith("https://"):
+            return path
+
+        return f"https://www.ozon.ru{path}"
+
+    @staticmethod
+    def _build_initial_path(
         *,
         product_path: str,
         page_number: int,
     ) -> str:
-        query = urlencode(
-            {"page": page_number}
-        )
-
-        return (
-            f"https://www.ozon.ru"
-            f"{product_path}/reviews/?{query}"
-        )
+        query = urlencode({"page": page_number})
+        return f"{product_path}/reviews?{query}"
 
     @staticmethod
-    def _build_internal_path(
-        *,
-        product_path: str,
-        page_number: int,
-    ) -> str:
-        query = urlencode(
-            {"page": page_number}
-        )
+    def extract_next_path(
+        payload: dict[str, Any],
+    ) -> str | None:
+        next_page = payload.get("nextPage")
 
-        return (
-            f"{product_path}/reviews"
-            f"?{query}"
-        )
+        if isinstance(next_page, str):
+            return next_page or None
 
-    @classmethod
-    def extract_real_review_ids(
-        cls,
-        payload: Any,
-    ) -> list[str]:
-        """Извлекает UUID только из объектов, похожих на отзыв."""
-        result: list[str] = []
+        if isinstance(next_page, dict):
+            for key in ("url", "href", "path"):
+                value = next_page.get(key)
 
-        for node in cls.walk_json(payload):
-            if not isinstance(node, dict):
-                continue
+                if isinstance(value, str) and value:
+                    return value
 
-            if not cls.looks_like_review(node):
-                continue
-
-            review_id = (
-                node.get("reviewId")
-                or node.get("review_id")
-                or node.get("reviewUuid")
-                or node.get("review_uuid")
-                or node.get("uuid")
-            )
-
-            if review_id is not None:
-                result.append(str(review_id))
-
-        return list(dict.fromkeys(result))
-
-    @staticmethod
-    def looks_like_review(
-        node: dict[str, Any],
-    ) -> bool:
-        keys = {
-            str(key).lower()
-            for key in node
-        }
-
-        has_id = bool(
-            keys
-            & {
-                "reviewid",
-                "review_id",
-                "reviewuuid",
-                "review_uuid",
-            }
-        )
-
-        has_review_text = bool(
-            keys
-            & {
-                "reviewtext",
-                "review_text",
-                "review",
-                "comment",
-                "advantages",
-                "disadvantages",
-            }
-        )
-
-        has_rating = bool(
-            keys
-            & {
-                "rating",
-                "score",
-                "stars",
-                "productrating",
-                "product_rating",
-            }
-        )
-
-        has_date = bool(
-            keys
-            & {
-                "createdat",
-                "created_at",
-                "publishedat",
-                "published_at",
-                "date",
-            }
-        )
-
-        return (
-            has_id
-            and (
-                has_review_text
-                or has_rating
-                or has_date
-            )
-        )
-
-    @staticmethod
-    def walk_json(value: Any):
-        yield value
-
-        if isinstance(value, dict):
-            for child in value.values():
-                yield from BrowserJsonTransport.walk_json(
-                    child
-                )
-            return
-
-        if isinstance(value, list):
-            for child in value:
-                yield from BrowserJsonTransport.walk_json(
-                    child
-                )
-            return
-
-        if not isinstance(value, str):
-            return
-
-        text = value.strip()
-
-        if not text or text[0] not in "[{":
-            return
-
-        try:
-            decoded = json.loads(text)
-        except (TypeError, ValueError):
-            return
-
-        yield from BrowserJsonTransport.walk_json(
-            decoded
-        )
+        return None

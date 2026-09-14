@@ -16,9 +16,10 @@ async def collect_all_ozon_reviews(
     start_page: int = 1,
     max_pages: int | None = None,
 ) -> int:
-    """Потоково собирает отзывы со страниц Ozon в JSONL."""
+    """Потоково сохраняет все найденные отзывы Ozon в JSONL."""
     output = Path(output_path)
-    seen_ids: set[str] = set()
+    output.parent.mkdir(parents=True, exist_ok=True)
+
     count = 0
 
     with output.open("w", encoding="utf-8") as file:
@@ -27,14 +28,6 @@ async def collect_all_ozon_reviews(
             start_page=start_page,
             max_pages=max_pages,
         ):
-            review_id = review.review_id
-
-            if review_id and review_id in seen_ids:
-                continue
-
-            if review_id:
-                seen_ids.add(review_id)
-
             record = {
                 "review_id": review.review_id,
                 "product_id": review.product.product_id,
@@ -74,7 +67,7 @@ async def main() -> None:
     )
 
     transport = BrowserJsonTransport(
-        timeout_ms=30_000,
+        timeout_ms=90_000,
         settle_ms=2_000,
         debug_dir="debug_ozon",
         humanize=True,
@@ -97,3 +90,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
