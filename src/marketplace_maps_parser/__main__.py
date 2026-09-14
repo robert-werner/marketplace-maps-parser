@@ -170,7 +170,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--transport",
-        choices=("playwright", "curl_cffi"),
+        choices=("playwright", "curl_cffi", "hybrid"),
         default="playwright",
         help=(
             "Ozon only: 'playwright' (default) uses invisible-"
@@ -178,7 +178,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "curl_cffi which mimics the TLS fingerprint of real "
             "Chrome/Firefox — faster, lighter, but cannot solve "
             "Cloudflare JS challenges and does not support "
-            "--strategy scroll."
+            "--strategy scroll. 'hybrid' tries curl_cffi first and "
+            "falls back to playwright on persistent Cloudflare "
+            "challenge — fast when Cloudflare is permissive, "
+            "robust when it isn't."
         ),
     )
     parser.add_argument(
@@ -360,6 +363,23 @@ def _build_ozon_transport(args: argparse.Namespace):
             timeout=args.timeout_ms / 1000.0,
             debug_dir=args.debug_dir,
             impersonate=args.impersonate,
+        )
+
+    if args.transport == "hybrid":
+        from infrastructure.transports.hybrid import HybridTransport
+        return HybridTransport(
+            curl_cffi_kwargs={
+                "timeout": args.timeout_ms / 1000.0,
+                "impersonate": args.impersonate,
+            },
+            playwright_kwargs={
+                "timeout_ms": args.timeout_ms,
+                "settle_ms": args.settle_ms,
+                "humanize": not args.no_humanize,
+                "fetch_strategy": args.fetch_strategy,
+                "stealth": not args.no_stealth,
+            },
+            debug_dir=args.debug_dir,
         )
 
     # default: playwright

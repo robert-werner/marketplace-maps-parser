@@ -152,6 +152,7 @@ class CurlCffiTransport:
         proxy: str | None = None,
         headers: dict[str, str] | None = None,
         max_redirects: int = 10,
+        warmup: bool = True,
     ) -> None:
         self.timeout = timeout
         self.debug_dir = Path(debug_dir)
@@ -159,6 +160,15 @@ class CurlCffiTransport:
         self.proxy = proxy
         self.headers = {**_DEFAULT_HEADERS, **(headers or {})}
         self.max_redirects = max_redirects
+        # When True, before the first API request we visit the product
+        # page (https://www.ozon.ru/product/<id>) to obtain Cloudflare
+        # cookies (``cf_clearance``, ``__cf_bm``). Without these
+        # cookies, the API endpoint returns 403 challenge on every
+        # request.
+        self.warmup = warmup
+        # Track whether warmup has been performed so we don't redo it
+        # on every iteration of iter_ozon_reviews_json.
+        self._warmed_up = False
         # Lazily created AsyncSession — kept open for the lifetime of
         # the transport so cookies persist across requests.
         self._session = None
@@ -188,6 +198,88 @@ class CurlCffiTransport:
             kwargs["proxy"] = self.proxy
         self._session = curl_requests.AsyncSession(**kwargs)
         return self._session
+
+    async def _warmup_session(
+        self,
+        *,
+        product_path: str,
+    ) -> None:
+        """Visit the product page to obtain Cloudflare cookies.
+
+        Cloudflare's bot protection issues two cookies that gate
+        access to the Ozon API endpoint:
+
+        - ``__cf_bm`` — short-lived (30 min) bot-management cookie,
+          set on the first HTML navigation.
+        - ``cf_clearance`` — long-lived (1-2 hours) clearance cookie,
+          set after the browser solves the Cloudflare challenge JS.
+
+        Without these cookies, the API endpoint
+        (``/api/entrypoint-api.bx/page/json/v2``) returns HTTP 403
+        with a challenge body on every request from a cold session.
+
+        curl_cffi cannot solve the JS challenge (no JS engine), but
+        for many Cloudflare configurations the bot-management cookie
+        is sufficient to pass the API endpoint — visiting the
+        product page first is enough.
+
+        After this method returns, the session has the necessary
+        cookies and subsequent API requests will succeed (or at
+        least not fail with a 403 challenge).
+
+        If the warmup page itself returns a Cloudflare challenge,
+        we print a warning and continue — the API endpoint may
+        still be accessible without ``cf_clearance`` depending on
+        Cloudflare's per-site configuration.
+        """
+        # Visit the product page (HTML). The product_path looks
+        # like "/product/ip-telefon-yealink-sip-t30-...".
+        product_url = f"https://www.ozon.ru{product_path}"
+
+        print(
+            f"Ozon (curl_cffi): warmup — открываю {product_url} для "
+            "получения Cloudflare cookies..."
+        )
+
+        session = await self._ensure_session()
+
+        try:
+            response = await session.get(
+                product_url,
+                headers=self.headers,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Ozon curl_cffi warmup: сетевая ошибка: {exc}"
+            ) from exc
+
+        status = response.status_code
+        body = response.text or ""
+
+        if status == 200:
+            print(
+                "Ozon (curl_cffi): warmup OK — Cloudflare cookies "
+                "получены"
+            )
+            return
+
+        if status == 403 and self._is_cloudflare_challenge(body):
+            # Warmup itself got a challenge — curl_cffi can't solve
+            # JS challenges. Print a clear warning and continue;
+            # the API requests will likely also fail.
+            print(
+                "Ozon (curl_cffi): WARNING — warmup также получил "
+                "Cloudflare challenge (HTTP 403). curl_cffi не может "
+                "решить JS challenge — используйте --transport "
+                "playwright для этого сайта."
+            )
+            return
+
+        # Other non-200 — log and continue
+        print(
+            f"Ozon (curl_cffi): warmup вернул HTTP {status}; "
+            "продолжаю без cookies"
+        )
 
     async def close(self) -> None:
         """Close the underlying curl_cffi session."""
@@ -220,6 +312,20 @@ class CurlCffiTransport:
         retry_async = _import_retry_async()
 
         await self._ensure_session()
+
+        # Warm-up: visit the product page first to obtain Cloudflare
+        # cookies (cf_clearance, __cf_bm). Without them the API
+        # endpoint returns 403 challenge on every cold-session
+        # request.
+        if self.warmup and not self._warmed_up:
+            try:
+                await self._warmup_session(product_path=product_path)
+                self._warmed_up = True
+            except Exception as exc:
+                print(
+                    "Ozon (curl_cffi): warmup не удался — "
+                    f"продолжаю без него: {exc}"
+                )
 
         current_path = self._build_initial_path(
             product_path=product_path,

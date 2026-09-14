@@ -114,6 +114,12 @@ uv run python -m marketplace_maps_parser \
   --transport curl_cffi \
   --impersonate firefox120
 
+# Use hybrid (curl_cffi first, Playwright fallback on Cloudflare challenge)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --transport hybrid
+
 # Use legacy in-page fetch (faster but more Cloudflare 403s)
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
@@ -225,25 +231,42 @@ The script is applied via `page.add_init_script` so it runs before any page JS e
 
 If stealth causes issues with a particular Ozon layout, disable it temporarily with `--no-stealth` for debugging.
 
-### Transport: Playwright vs curl_cffi
+### Transport: Playwright vs curl_cffi vs hybrid
 
-`--transport` selects between two Ozon transport implementations:
+`--transport` selects between three Ozon transport implementations:
 
 | `--transport` | What it uses | Strengths | Limitations |
 |---|---|---|---|
 | `playwright` (default) | `invisible-playwright` (real patched Firefox browser) | Solves Cloudflare JS challenges automatically (browser runs the embedded JS); supports `--strategy scroll`; full DOM access | Heavy (Chromium process); slow (full page rendering per request) |
 | `curl_cffi` | `curl_cffi` library (libcurl with curl-impersonate patches) | 10-50x faster (no browser startup); true browser TLS fingerprint at the byte level (JA3/JA4 match Chrome/Firefox); tiny memory footprint | Cannot solve Cloudflare JS challenges (no JS engine); `--strategy scroll` not supported (no DOM); only `--strategy pagination` (auto is silently coerced to pagination) |
+| `hybrid` | curl_cffi first, falls back to Playwright on persistent CloudflareChallengeError | Fast when Cloudflare is permissive (curl_cffi handles most pages); robust when Cloudflare challenges (Playwright solves the JS challenge on the failing page); supports `--strategy scroll` (delegated to Playwright) | Some pages incur the Playwright startup cost on first challenge; the fallback is per-page, so subsequent pages still try curl_cffi first |
 
 Use **`curl_cffi`** when:
 - Cloudflare is blocking based on TLS fingerprint (JA3/JA4 hash)
 - You need to scrape many products fast
 - You're OK with pagination-only (no scroll fallback)
+- Cloudflare's bot protection is permissive enough that warmup with the product page is sufficient
 
 Use **`playwright`** when:
 - Cloudflare returns the HTML "enable JavaScript" challenge page that requires a real browser to solve
 - You need `--strategy scroll` for products where pagination misses reviews
 
-`--impersonate` (curl_cffi only) selects which browser TLS fingerprint to use. Default: `chrome120`. Other useful values: `chrome119`, `firefox120`, `safari17_0`. See the [curl_cffi docs](https://curl-cffi.readthedocs.io/) for the full list.
+Use **`hybrid`** when:
+- You want the speed of curl_cffi but need a safety net for Cloudflare challenges
+- Cloudflare challenges are intermittent (most pages work with curl_cffi, but some need Playwright)
+- You're not sure which transport to use — hybrid tries the fast path first
+
+`--impersonate` (curl_cffi and hybrid) selects which browser TLS fingerprint to use. Default: `chrome120`. Other useful values: `chrome119`, `firefox120`, `safari17_0`. See the [curl_cffi docs](https://curl-cffi.readthedocs.io/) for the full list.
+
+#### Cloudflare warmup (curl_cffi and hybrid)
+
+curl_cffi and hybrid transports perform a "warmup" request to the product page before the first API request. This obtains the Cloudflare bot-management cookies (`__cf_bm`, `cf_clearance`) that gate access to the API endpoint. Without warmup, the API endpoint returns HTTP 403 with a challenge body on every cold-session request.
+
+The warmup happens only once per transport lifetime (tracked via the `_warmed_up` flag), not on every iteration of `iter_ozon_reviews_json`.
+
+If the warmup page itself returns a Cloudflare challenge (curl_cffi cannot solve JS challenges), the transport logs a warning and continues — the API request will likely also fail, in which case:
+- For `--transport curl_cffi`: the request fails with `CloudflareChallengeError` and retries with backoff until exhausted.
+- For `--transport hybrid`: after curl_cffi retries are exhausted, the hybrid transport switches to Playwright for that page.
 
 ## Architecture
 

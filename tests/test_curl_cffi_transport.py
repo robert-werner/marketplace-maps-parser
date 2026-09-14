@@ -277,6 +277,10 @@ async def test_iter_ozon_reviews_json_follows_next_page(monkeypatch):
     session = _FakeAsyncSession(responses_by_url=responses)
     _patch_session(monkeypatch, transport, session)
 
+    # Disable warmup for this test — it's a pure HTTP test of the
+    # pagination iterator. Warmup is tested separately.
+    transport.warmup = False
+
     # Speed up the retry sleep (in case it's triggered)
     async def _noop_sleep(*a, **kw):
         return None
@@ -293,7 +297,7 @@ async def test_iter_ozon_reviews_json_follows_next_page(monkeypatch):
     assert len(pages_yielded) == 2
     assert pages_yielded[0][0] == 1
     assert pages_yielded[1][0] == 2
-    # Both URLs were fetched
+    # Both API URLs were fetched (no warmup since warmup=False)
     assert len(session.requests_made) == 2
 
 
