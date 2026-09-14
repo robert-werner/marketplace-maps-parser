@@ -62,9 +62,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--strategy",
-        choices=("pagination", "scroll"),
-        default="pagination",
-        help="Ozon only: pagination via internal API or DOM scroll.",
+        choices=("auto", "pagination", "scroll"),
+        default="auto",
+        help=(
+            "Ozon only: 'auto' runs pagination first then scroll as a "
+            "fallback / supplement (default, most complete); "
+            "'pagination' uses only the internal Ozon API; "
+            "'scroll' uses only DOM scroll."
+        ),
     )
     parser.add_argument(
         "--start-page",
@@ -86,7 +91,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Ozon scroll: stop after this many unique reviews. "
+            "Stop after this many unique reviews. "
             "Default: unlimited."
         ),
     )
@@ -111,6 +116,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-humanize",
         action="store_true",
         help="Disable invisible-playwright humanize mode.",
+    )
+    parser.add_argument(
+        "--page-delay-seconds",
+        type=float,
+        default=1.5,
+        help=(
+            "Jittered delay between pagination page fetches in "
+            "seconds (default: 1.5)."
+        ),
+    )
+    parser.add_argument(
+        "--scroll-pause-seconds",
+        type=float,
+        default=1.0,
+        help=(
+            "Pause between scroll steps in seconds "
+            "(default: 1.0)."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -154,19 +177,15 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
     count = 0
 
     with output.open("w", encoding="utf-8") as file:
-        if args.strategy == "scroll":
-            iterator = adapter.iter_reviews_by_scroll(
-                product_url=args.url,
-                max_reviews=args.max_reviews,
-            )
-        else:
-            iterator = adapter.iter_reviews(
-                product_url=args.url,
-                start_page=args.start_page,
-                max_pages=args.max_pages,
-            )
-
-        async for review in iterator:
+        async for review in adapter.iter_all_reviews(
+            product_url=args.url,
+            strategy=args.strategy,
+            max_reviews=args.max_reviews,
+            pagination_max_pages=args.max_pages,
+            pagination_start_page=args.start_page,
+            page_delay_seconds=args.page_delay_seconds,
+            scroll_pause_seconds=args.scroll_pause_seconds,
+        ):
             review_id = review.review_id
             if review_id and review_id in seen_ids:
                 continue

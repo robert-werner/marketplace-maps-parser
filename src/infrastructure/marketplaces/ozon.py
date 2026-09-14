@@ -39,6 +39,21 @@ class OzonBrowserTransport(Protocol):
         max_reviews: int | None = ...,
     ) -> AsyncIterator[list[dict[str, Any]]]: ...
 
+    def iter_all_ozon_reviews(
+        self,
+        product_path: str,
+        *,
+        max_reviews: int | None = ...,
+        pagination_max_pages: int | None = ...,
+        pagination_start_page: int = ...,
+        scroll_max_rounds: int = ...,
+        page_delay_seconds: float = ...,
+        scroll_pause_seconds: float = ...,
+        retry_attempts: int = ...,
+    ) -> AsyncIterator[
+        tuple[str, dict[str, Any]]
+    ]: ...
+
 
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-"
@@ -199,6 +214,239 @@ class OzonAdapter(MarketplaceAdapter):
 
                 if review is not None:
                     yield review
+
+    # ------------------------------------------------------------------
+    # Unified "collect ALL reviews" stream
+    # ------------------------------------------------------------------
+    async def iter_all_reviews(
+            self,
+            product_url: str,
+            *,
+            strategy: str = "auto",
+            max_reviews: int | None = None,
+            pagination_max_pages: int | None = None,
+            pagination_start_page: int = 1,
+            scroll_max_rounds: int = 500,
+            page_delay_seconds: float = 1.5,
+            scroll_pause_seconds: float = 1.0,
+            retry_attempts: int = 3,
+    ) -> AsyncIterator[Review]:
+        """Stream every review for an Ozon product.
+
+        Strategy modes:
+
+        - ``"auto"`` (default): run pagination first, then scroll as a
+          fallback / supplement. Reviews are deduplicated by their
+          stable id (``reviewId`` / ``uuid``) across both strategies.
+        - ``"pagination"``: only the internal Ozon API pagination.
+        - ``"scroll"``: only the DOM scroll.
+
+        Always streams — never materializes the full set in memory.
+        """
+        from shared.logging import get_logger
+
+        log = get_logger("marketplaces.ozon")
+
+        product_id = extract_ozon_product_id(product_url)
+        product_path = extract_ozon_product_path(product_url)
+
+        product = ProductRef(
+            marketplace=self.name,
+            source_url=product_url,
+            product_id=str(product_id),
+        )
+
+        seen_keys: set[str] = set()
+        yielded = 0
+
+        if strategy == "pagination":
+            async for review in self.iter_reviews(
+                product_url=product_url,
+                start_page=pagination_start_page,
+                max_pages=pagination_max_pages,
+            ):
+                yield review
+                yielded += 1
+                if (
+                    max_reviews is not None
+                    and yielded >= max_reviews
+                ):
+                    return
+            return
+
+        if strategy == "scroll":
+            async for review in self.iter_reviews_by_scroll(
+                product_url=product_url,
+                max_reviews=max_reviews,
+            ):
+                yield review
+            return
+
+        if strategy != "auto":
+            raise ValueError(
+                f"Unknown strategy: {strategy!r}. "
+                "Use 'auto', 'pagination', or 'scroll'."
+            )
+
+        # ------------------ auto: pagination + scroll ------------------
+        if not hasattr(
+            self.browser_transport, "iter_all_ozon_reviews"
+        ):
+            log.warning(
+                "Ozon: transport does not implement "
+                "iter_all_ozon_reviews; using adapter-level fallback."
+            )
+            async for review in self._iter_all_reviews_adapter_fallback(
+                product=product,
+                product_path=product_path,
+                max_reviews=max_reviews,
+                pagination_max_pages=pagination_max_pages,
+                pagination_start_page=pagination_start_page,
+            ):
+                yield review
+            return
+
+        async for strategy_name, node in (
+            self.browser_transport.iter_all_ozon_reviews(
+                product_path=product_path,
+                max_reviews=max_reviews,
+                pagination_max_pages=pagination_max_pages,
+                pagination_start_page=pagination_start_page,
+                scroll_max_rounds=scroll_max_rounds,
+                page_delay_seconds=page_delay_seconds,
+                scroll_pause_seconds=scroll_pause_seconds,
+                retry_attempts=retry_attempts,
+            )
+        ):
+            if strategy_name == "pagination":
+                review = map_ozon_review_node(
+                    node=node,
+                    product=product,
+                )
+            else:
+                review = self.parse_ozon_dom_card(
+                    card=node,
+                    product=product,
+                )
+
+            if review is None:
+                continue
+
+            key = review.review_id or build_review_key(
+                review,
+                page_number=0,
+                position=yielded,
+            )
+
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            yield review
+            yielded += 1
+
+            if (
+                max_reviews is not None
+                and yielded >= max_reviews
+            ):
+                log.info(
+                    "Ozon: reached max_reviews={}, stopping",
+                    max_reviews,
+                )
+                return
+
+        log.info(
+            "Ozon: auto strategy done, {} unique reviews",
+            yielded,
+        )
+
+    async def _iter_all_reviews_adapter_fallback(
+            self,
+            product: ProductRef,
+            product_path: str,
+            *,
+            max_reviews: int | None,
+            pagination_max_pages: int | None,
+            pagination_start_page: int,
+    ) -> AsyncIterator[Review]:
+        """Used when the transport doesn't implement ``iter_all_ozon_reviews``.
+
+        Runs pagination first, then scroll, with adapter-level
+        cross-strategy dedup by ``review_id``.
+        """
+        from shared.logging import get_logger
+
+        log = get_logger("marketplaces.ozon")
+        seen_keys: set[str] = set()
+        yielded = 0
+
+        # --- pagination ---
+        try:
+            async for page_num, payload in (
+                self.browser_transport.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=pagination_start_page,
+                    max_pages=pagination_max_pages,
+                )
+            ):
+                reviews = extract_reviews_from_ozon_payload(
+                    payload=payload,
+                    product=product,
+                )
+                for review in reviews:
+                    key = review.review_id or build_review_key(
+                        review, page_number=page_num, position=yielded,
+                    )
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    yield review
+                    yielded += 1
+                    if (
+                        max_reviews is not None
+                        and yielded >= max_reviews
+                    ):
+                        return
+        except Exception as exc:
+            log.warning(
+                "Ozon: pagination failed in fallback: {} — "
+                "trying scroll only",
+                exc,
+            )
+
+        # --- scroll ---
+        try:
+            async for cards in (
+                self.browser_transport.iter_ozon_reviews_by_scroll(
+                    product_path=product_path,
+                    max_reviews=None,
+                )
+            ):
+                for card in cards:
+                    review = self.parse_ozon_dom_card(
+                        card=card, product=product,
+                    )
+                    if review is None:
+                        continue
+                    key = review.review_id or build_review_key(
+                        review, page_number=0, position=yielded,
+                    )
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    yield review
+                    yielded += 1
+                    if (
+                        max_reviews is not None
+                        and yielded >= max_reviews
+                    ):
+                        return
+        except Exception as exc:
+            log.error(
+                "Ozon: scroll failed in fallback: {}", exc,
+            )
+            if yielded == 0:
+                raise
 
     async def collect_all(
         self,

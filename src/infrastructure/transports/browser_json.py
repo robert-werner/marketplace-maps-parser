@@ -327,6 +327,205 @@ class BrowserJsonTransport:
 
         return result
 
+    # ------------------------------------------------------------------
+    # Unified "collect ALL reviews" flow
+    # ------------------------------------------------------------------
+    #
+    # The legacy pagination iterator relies on Ozon's internal
+    # entrypoint-api.bx endpoint, which is fast but is occasionally
+    # blocked by Cloudflare or returns 0 reviews on heavily bot-protected
+    # products. The scroll iterator is slower but more resilient because
+    # it reads directly from the page DOM.
+    #
+    # ``iter_all_ozon_reviews`` runs BOTH strategies in sequence, in a
+    # single Playwright browser session, and deduplicates review cards
+    # by UUID across the two strategies. The result is a single stream
+    # that aims to yield every review visible to a real browser user.
+    #
+    # Strategy order:
+    #   1. Pagination — fetch reviews via /api/entrypoint-api.bx/page/json/v2
+    #      following nextPage until exhausted.
+    #   2. Scroll — open the /reviews/ page and scroll-load all DOM cards.
+    #
+    # Each yielded item is tagged with the strategy that produced it
+    # so the adapter can apply strategy-specific parsing.
+    async def iter_all_ozon_reviews(
+        self,
+        product_path: str,
+        *,
+        max_reviews: int | None = None,
+        pagination_max_pages: int | None = None,
+        pagination_start_page: int = 1,
+        scroll_max_rounds: int = 500,
+        page_delay_seconds: float = 1.5,
+        scroll_pause_seconds: float = 1.0,
+        retry_attempts: int = 3,
+    ) -> AsyncIterator[
+        tuple[str, dict[str, Any]]
+    ]:
+        """Yield ``(strategy, review_node)`` tuples for every unique review.
+
+        ``strategy`` is either ``"pagination"`` or ``"scroll"``.
+        Deduplication is by review UUID across both strategies.
+        """
+        from shared.logging import get_logger
+        from shared.retry import (
+            retry_async,
+            sleep_with_jitter,
+        )
+
+        log = get_logger("transports.browser_json")
+
+        seen_ids: set[str] = set()
+
+        # ------------------ pagination ------------------
+        pagination_yielded = 0
+        try:
+            async for page_num, payload in self.iter_ozon_reviews_json(
+                product_path=product_path,
+                start_page=pagination_start_page,
+                max_pages=pagination_max_pages,
+            ):
+                review_nodes = self._extract_review_nodes_from_payload(
+                    payload,
+                )
+
+                for node in review_nodes:
+                    rid = self._review_node_id(node)
+                    if rid and rid in seen_ids:
+                        continue
+                    if rid:
+                        seen_ids.add(rid)
+
+                    yield "pagination", node
+                    pagination_yielded += 1
+
+                    if (
+                        max_reviews is not None
+                        and len(seen_ids) >= max_reviews
+                    ):
+                        log.info(
+                            "Ozon: reached max_reviews={}, stopping",
+                            max_reviews,
+                        )
+                        return
+
+                if page_delay_seconds > 0:
+                    await sleep_with_jitter(
+                        page_delay_seconds,
+                    )
+        except Exception as exc:
+            log.warning(
+                "Ozon: pagination failed after {} reviews: {} — "
+                "falling back to scroll",
+                pagination_yielded, exc,
+            )
+
+        log.info(
+            "Ozon: pagination phase done, {} unique reviews",
+            pagination_yielded,
+        )
+
+        if max_reviews is not None and len(seen_ids) >= max_reviews:
+            return
+
+        # ------------------ scroll (fallback / supplement) ------------------
+        scroll_yielded = 0
+        try:
+            async for batch in self.iter_ozon_reviews_by_scroll(
+                product_path=product_path,
+                max_reviews=None,
+                max_rounds=scroll_max_rounds,
+                pause_ms=int(scroll_pause_seconds * 1000),
+            ):
+                for card in batch:
+                    rid = card.get("uuid")
+                    if rid and rid in seen_ids:
+                        continue
+                    if rid:
+                        seen_ids.add(rid)
+
+                    yield "scroll", card
+                    scroll_yielded += 1
+
+                    if (
+                        max_reviews is not None
+                        and len(seen_ids) >= max_reviews
+                    ):
+                        log.info(
+                            "Ozon: reached max_reviews={}, stopping",
+                            max_reviews,
+                        )
+                        return
+
+        except Exception as exc:
+            log.error(
+                "Ozon: scroll phase failed after {} reviews: {}",
+                scroll_yielded, exc,
+            )
+            # Re-raise only if pagination also produced nothing —
+            # otherwise we still have something useful to return.
+            if pagination_yielded == 0:
+                raise
+            log.warning(
+                "Ozon: keeping {} reviews from pagination only",
+                pagination_yielded,
+            )
+
+        log.info(
+            "Ozon: scroll phase done, {} new reviews "
+            "(total unique: {})",
+            scroll_yielded, len(seen_ids),
+        )
+
+    @staticmethod
+    def _extract_review_nodes_from_payload(
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Pull every dict that looks like a review out of a raw
+        Ozon pagination payload.
+
+        Reuses ``walk_json`` semantics from the adapter without
+        duplicating its fuzzy matcher — this is intentionally a thin
+        pass-through that just surfaces raw candidate nodes.
+        """
+        # Local import to avoid a hard dep cycle with the adapter module.
+        from infrastructure.marketplaces.ozon import (
+            extract_reviews_from_ozon_payload,
+        )
+        from domain.entities import ProductRef
+
+        # extract_reviews_from_ozon_payload needs a ProductRef for
+        # building Review objects, but we only need the raw node
+        # identification logic. Pass a minimal placeholder.
+        placeholder = ProductRef(
+            marketplace="ozon",
+            source_url="",
+            product_id="_placeholder",
+        )
+        reviews = extract_reviews_from_ozon_payload(
+            payload, placeholder,
+        )
+        # ``raw`` field on each Review is the original node dict
+        return [r.raw for r in reviews if isinstance(r.raw, dict)]
+
+    @staticmethod
+    def _review_node_id(node: dict[str, Any]) -> str | None:
+        """Best-effort extraction of a stable id from a review node."""
+        for key in (
+            "reviewId",
+            "review_id",
+            "reviewUuid",
+            "review_uuid",
+            "uuid",
+            "id",
+        ):
+            value = node.get(key)
+            if value:
+                return str(value)
+        return None
+
+
     async def _fetch_json_inside_page(
         self,
         *,

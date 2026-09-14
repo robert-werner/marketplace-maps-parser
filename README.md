@@ -54,18 +54,32 @@ cp .env.example .env
 ### CLI
 
 ```bash
-# Ozon reviews via pagination (default)
+# Ozon reviews via auto strategy (DEFAULT — pagination + scroll fallback)
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
   --url "https://www.ozon.ru/product/ip-telefon-yealink-sip-t30-voip-ofisnyy-680123890" \
   --output ozon_reviews.jsonl
 
-# Ozon reviews via DOM scroll
+# Ozon reviews via DOM scroll only
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
   --url "https://www.ozon.ru/product/..." \
   --strategy scroll \
   --output ozon_reviews_scroll.jsonl
+
+# Ozon reviews via internal pagination API only
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --strategy pagination \
+  --max-pages 10 \
+  --output ozon_reviews_paged.jsonl
+
+# Cap total reviews across both strategies
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --max-reviews 500
 
 # Wildberries reviews via public API
 uv run python -m marketplace_maps_parser \
@@ -96,15 +110,25 @@ async def main():
     )
     adapter = OzonAdapter(browser_transport=transport)
 
-    async for review in adapter.iter_reviews(
+    # auto: pagination first, scroll as fallback / supplement
+    # All reviews are deduplicated by review_id across both strategies.
+    async for review in adapter.iter_all_reviews(
         product_url="https://www.ozon.ru/product/...",
-        start_page=1,
-        max_pages=None,
+        strategy="auto",
+        max_reviews=None,
     ):
         print(review.review_id, review.rating, (review.text or "")[:80])
 
 asyncio.run(main())
 ```
+
+### Strategy reference
+
+| `--strategy`  | Behavior |
+|----------------|----------|
+| `auto` (default) | Run pagination first; then run scroll to catch any reviews the API missed (or failed to return). Cross-strategy dedup by `review_id` / `uuid`. Most complete. |
+| `pagination`     | Only the internal `entrypoint-api.bx/page/json/v2` endpoint. Fast but Cloudflare-protected. |
+| `scroll`         | Only DOM scroll. Slower but resilient against API blocks. |
 
 ## Architecture
 
@@ -152,13 +176,15 @@ URL → UrlParser → ProductRef → MarketplaceAdapter.iter_reviews()
 
 ## Roadmap
 
+- [x] Unified "collect ALL reviews" flow with cross-strategy dedup
+- [x] Structured logging via `loguru` (`shared/logging.py`)
+- [x] Async retry + jittered backoff helpers (`shared/retry.py`)
 - [ ] Yandex Market adapter
 - [ ] `asyncpg` repository for direct DB writes
 - [ ] Proper `pydantic-settings` config loader
-- [ ] Retry/backoff helpers in `shared/retry.py`
-- [ ] Structured logging via `loguru` in `shared/logging.py`
 - [ ] CI workflow (ruff + mypy + pytest)
-- [ ] CLI tests, payload-parser tests, registry tests
+- [ ] Resume-from-checkpoint (JSONL tail resume on rerun)
+- [ ] Per-page retry of transient Playwright errors inside transport
 
 ## License
 
