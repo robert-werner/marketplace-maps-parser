@@ -529,3 +529,165 @@ async def test_page_key_same_across_pages_no_reset_attempted(
     # No reset attempt.
     assert fetch_calls == [page1, page2]
     assert len(pages_yielded) == 2
+
+
+@pytest.mark.asyncio
+async def test_nextpage_loop_guard_synthesizes_variant_b_pages(monkeypatch):
+    """Reproduces the exact scenario from the user's log:
+
+    - Page 1-6 with page_key=A: 30 reviews each, nextPage=page=N+1 + page_key=A
+    - Page 6's nextPage points to page=7 with NEW page_key=B (bug trigger)
+    - Page 7 (page_key=B, page=7): 0 reviews → triggers page_key reset
+    - Reset URL: page=1 + page_key=B → returns 30 reviews
+    - nextPage of the reset is page=2 + page_key=A (OLD key — Ozon points back)
+    - WITHOUT the loop guard, this would loop forever (already seen) or stop
+    - WITH the loop guard, we synthesize page=2 + page_key=B and continue
+    - page=2 + page_key=B returns 30 reviews, nextPage=page=3 + page_key=B
+    - ... etc until nextPage=None
+    """
+    transport = _make_transport()
+
+    # URLs for variant A (already collected 6 pages before this run)
+    page1_a = "/product/foo-123/reviews?page=1"
+    page2_a = (
+        "/product/foo-123/reviews?page=2&page_key=AAAA1111&"
+        "layout_page_index=2"
+    )
+    # ... up to page 6, but for the test we only need page 6 to feed
+    # the transition to variant B.
+    page6_a = (
+        "/product/foo-123/reviews?page=6&page_key=AAAA1111&"
+        "layout_page_index=6"
+    )
+    # Page 7 with new page_key — 0 reviews, no nextPage (the bug trigger)
+    page7_b_buggy = (
+        "/product/foo-123/reviews?page=7&page_key=BBBB2222&"
+        "layout_page_index=7"
+    )
+    # Reset URL — page 1 with new page_key
+    page1_b = (
+        "/product/foo-123/reviews?page=1&page_key=BBBB2222&"
+        "layout_page_index=1"
+    )
+    # nextPage of page1_b — Ozon points back to variant A page 2 (OLD key)
+    # We've already seen page2_a, so the loop guard should synthesize
+    # page 2 with page_key=B instead.
+    page2_b_synthesized = (
+        "/product/foo-123/reviews?page=2&page_key=BBBB2222&"
+        "layout_page_index=2"
+    )
+    # nextPage of page2_b (correctly points to page 3 with page_key=B)
+    page3_b = (
+        "/product/foo-123/reviews?page=3&page_key=BBBB2222&"
+        "layout_page_index=3"
+    )
+
+    # Pre-seed seen_paths by simulating pages 1-6 of variant A.
+    # For simplicity, we only set up pages 1, 2, 6 in this test, but
+    # in the real flow the iterator visits all of them in order.
+    payloads_by_path: dict[str, dict[str, Any]] = {
+        # Variant A: 1, 2, then jump to 6 (skipping 3-5 for the test).
+        page1_a: _reviews_payload(
+            [f"a1-{i}" for i in range(30)],
+            next_path=page2_a,
+        ),
+        page2_a: _reviews_payload(
+            [f"a2-{i}" for i in range(30)],
+            # For the test we shortcut to page 6 to keep the test short.
+            next_path=page6_a,
+        ),
+        page6_a: _reviews_payload(
+            [f"a6-{i}" for i in range(30)],
+            # nextPage of page 6 has the NEW page_key but page=7 — bug trigger
+            next_path=page7_b_buggy,
+        ),
+        page7_b_buggy: _reviews_payload([], next_path=None),
+        # The reset — page 1 of variant B
+        page1_b: _reviews_payload(
+            [f"b1-{i}" for i in range(30)],
+            # nextPage of page1_b points BACK to variant A page 2 (OLD key)
+            next_path=page2_a,
+        ),
+        # The synthesized page 2 of variant B (created by our loop guard)
+        page2_b_synthesized: _reviews_payload(
+            [f"b2-{i}" for i in range(30)],
+            next_path=page3_b,  # nextPage correctly points to page 3 with key B
+        ),
+        page3_b: _reviews_payload(
+            [f"b3-{i}" for i in range(30)],
+            next_path=None,  # end of variant B
+        ),
+    }
+
+    fetch_calls: list[str] = []
+
+    async def fake_fetch(self, *, page, internal_path, attempts=3, label="fetch"):
+        fetch_calls.append(internal_path)
+        if internal_path not in payloads_by_path:
+            raise RuntimeError(f"unexpected fetch: {internal_path}")
+        return payloads_by_path[internal_path]
+
+    monkeypatch.setattr(
+        BrowserJsonTransport, "_fetch_json_with_retry", fake_fetch,
+    )
+
+    class _FakeBrowser:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def new_page(self):
+            return _StubPage()
+
+    monkeypatch.setattr(
+        "infrastructure.transports.browser_json."
+        "_import_invisible_playwright",
+        lambda: lambda **kw: _FakeBrowser(),
+    )
+    async def fake_save_debug(self, *, page, payload, page_number):
+        return None
+    monkeypatch.setattr(
+        BrowserJsonTransport, "_save_debug", fake_save_debug,
+    )
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    pages_yielded: list[tuple[int, dict[str, Any]]] = []
+    async for page_num, payload in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        start_page=1,
+        retry_attempts=1,
+    ):
+        pages_yielded.append((page_num, payload))
+
+    # The fetch sequence MUST include the synthesized variant B page 2:
+    #   1. page1_a         (variant A page 1)
+    #   2. page2_a         (variant A page 2)
+    #   3. page6_a         (variant A page 6)
+    #   4. page7_b_buggy   (variant B page 7 — empty, triggers reset)
+    #   5. page1_b         (variant B page 1 — reset succeeds)
+    #   6. page2_b_synthesized  (synthesized page 2 with new key — LOOP GUARD)
+    #   7. page3_b         (variant B page 3 — nextPage=None, stop)
+    assert fetch_calls == [
+        page1_a,
+        page2_a,
+        page6_a,
+        page7_b_buggy,
+        page1_b,
+        page2_b_synthesized,
+        page3_b,
+    ], (
+        f"Expected synthesized variant B page 2 in fetch sequence. "
+        f"Got: {fetch_calls}"
+    )
+
+    # Total pages yielded = 6 (all except the empty page7_b_buggy)
+    assert len(pages_yielded) == 6
+
+    # Total reviews = 30 * 6 = 180
+    total_reviews = sum(
+        len(p.get("_review_nodes", []))
+        for _, p in pages_yielded
+    )
+    assert total_reviews == 180

@@ -108,7 +108,31 @@ class BrowserJsonTransport:
                 pin=self.pin,
                 humanize=self.humanize,
         ) as browser:
-            page = await browser.new_page()
+
+            # Page factory: always returns a fresh page. Each retry
+            # attempt asks for a new page so that a broken execution
+            # context (CDP error, "operation aborted") doesn't poison
+            # subsequent fetches.
+            #
+            # We close the previous page before creating a new one so
+            # we don't leak browser tabs. The first call has nothing
+            # to close; subsequent calls close the page that was
+            # returned by the previous successful _goto_with_retry /
+            # _fetch_json_with_retry cycle.
+            current_page_holder: dict[str, Any] = {"page": None}
+
+            async def page_factory() -> Any:
+                old = current_page_holder["page"]
+                if old is not None:
+                    try:
+                        await old.close()
+                    except Exception:
+                        pass
+                new_page = await browser.new_page()
+                current_page_holder["page"] = new_page
+                return new_page
+
+            page = await page_factory()
 
             current_path = self._build_initial_path(
                 product_path=product_path,
@@ -144,8 +168,11 @@ class BrowserJsonTransport:
 
                 reviews_url = self._absolute_url(current_path)
 
-                await self._goto_with_retry(
-                    page=page,
+                # _goto_with_retry recreates the page on each attempt
+                # and returns the page that successfully completed
+                # the navigation. We use that same page for the fetch.
+                page = await self._goto_with_retry(
+                    page_factory=page_factory,
                     reviews_url=reviews_url,
                     attempts=retry_attempts,
                     label=(
@@ -159,16 +186,46 @@ class BrowserJsonTransport:
                         self.settle_ms,
                     )
 
-                payload = await self._fetch_json_with_retry(
-                    page=page,
-                    internal_path=current_path,
-                    attempts=retry_attempts,
-                    label=(
-                        f"Ozon pagination page "
-                        f"{processed_pages + 1} "
-                        f"({current_path})"
-                    ),
-                )
+                # If the fetch fails with an execution-context-lost
+                # style error, recreate the page and retry. This is a
+                # second line of defense after _goto_with_retry: the
+                # goto can succeed but the page can still die before
+                # the fetch runs.
+                try:
+                    payload = await self._fetch_json_with_retry(
+                        page=page,
+                        internal_path=current_path,
+                        attempts=retry_attempts,
+                        label=(
+                            f"Ozon pagination page "
+                            f"{processed_pages + 1} "
+                            f"({current_path})"
+                        ),
+                    )
+                except _retryable_errors() as exc:
+                    print(
+                        f"Ozon: fetch retry exhausted on page "
+                        f"{processed_pages + 1}; пересоздаю страницу "
+                        f"и повторяю один раз: {exc}"
+                    )
+                    page = await page_factory()
+                    await page.goto(
+                        reviews_url,
+                        wait_until="domcontentloaded",
+                        timeout=self.timeout_ms,
+                    )
+                    if self.settle_ms > 0:
+                        await page.wait_for_timeout(self.settle_ms)
+                    payload = await self._fetch_json_with_retry(
+                        page=page,
+                        internal_path=current_path,
+                        attempts=retry_attempts,
+                        label=(
+                            f"Ozon pagination page "
+                            f"{processed_pages + 1} "
+                            f"({current_path}) [retry-after-recreate]"
+                        ),
+                    )
 
                 processed_pages += 1
 
@@ -241,6 +298,44 @@ class BrowserJsonTransport:
                     page_key_reset_done = False
 
                 next_path = self.extract_next_path(payload)
+
+                # ------------------------------------------------------
+                # nextPage-loop guard
+                # ------------------------------------------------------
+                # When we just completed a page_key reset (page=1 of
+                # variant B), Ozon's nextPage can point back to variant A
+                # page 2 — a path we already saw. If we blindly followed
+                # it we would either loop forever or stop short. Instead,
+                # when the suggested next_path is already in seen_paths
+                # AND we're currently on a non-empty variant (page_key is
+                # set and we got reviews), we synthesize the next page
+                # by incrementing the page counter on the CURRENT path
+                # (which carries the right page_key).
+                if (
+                    next_path is not None
+                    and next_path in seen_paths
+                    and current_page_key is not None
+                    and review_count > 0
+                ):
+                    # Try page+1 with the current page_key.
+                    current_page_num = self._extract_query_param(
+                        current_path, "page",
+                    )
+                    try:
+                        next_num = int(current_page_num) + 1
+                    except (TypeError, ValueError):
+                        next_num = 2
+                    synthesized = self._reset_page_in_path(
+                        current_path, page=next_num,
+                    )
+                    if synthesized not in seen_paths:
+                        print(
+                            "Ozon: nextPage уже был в seen_paths; "
+                            f"синтезирую следующий URL для текущего "
+                            f"page_key ({current_page_key[:12]}...): "
+                            f"page={next_num}"
+                        )
+                        next_path = synthesized
 
                 yield processed_pages, payload
 
@@ -774,37 +869,44 @@ class BrowserJsonTransport:
     async def _goto_with_retry(
         self,
         *,
-        page,
+        page_factory,
         reviews_url: str,
         attempts: int = 3,
         label: str = "Ozon goto",
-    ) -> None:
+    ) -> Any:
         """Wrap ``page.goto`` with exponential-backoff retry.
 
         ``page.goto`` can fail with the same family of Playwright errors
         as ``page.evaluate`` ("The operation was aborted", navigation
-        timeout, CDP connection drop). Retrying here lets us survive
-        transient browser hiccups without losing the whole pagination
-        stream.
+        timeout, CDP connection drop). When that happens we close the
+        current page and ask ``page_factory()`` for a fresh one, then
+        retry the goto on the new page. This survives "execution
+        context lost" errors that would otherwise kill the whole
+        pagination stream.
         """
         if attempts <= 1:
+            page = await page_factory()
             await page.goto(
                 reviews_url,
                 wait_until="domcontentloaded",
                 timeout=self.timeout_ms,
             )
-            return
+            return page
 
         from shared.retry import retry_async
 
-        async def _goto_once() -> None:
+        async def _goto_once() -> Any:
+            # Always create a fresh page on each attempt — the
+            # previous one is likely in a broken state if we got here.
+            page = await page_factory()
             await page.goto(
                 reviews_url,
                 wait_until="domcontentloaded",
                 timeout=self.timeout_ms,
             )
+            return page
 
-        await retry_async(
+        return await retry_async(
             _goto_once,
             attempts=attempts,
             base_delay=2.0,
@@ -825,18 +927,16 @@ class BrowserJsonTransport:
     ) -> dict[str, Any]:
         """Wrap ``_fetch_json_inside_page`` with exponential-backoff retry.
 
-        Retries on:
+        Retries on RuntimeError (Cloudflare non-200/non-JSON) and on
+        Playwright ``Error`` ("Page.evaluate: The operation was
+        aborted", navigation timeouts, CDP connection drops).
 
-        - ``RuntimeError`` — raised by ``_fetch_json_inside_page`` when
-          Cloudflare returns a non-200, non-JSON, or unparseable response.
-        - ``PlaywrightError`` — raised by invisible-playwright when the
-          browser aborts an operation ("Page.evaluate: The operation
-          was aborted"), the page navigation times out, or the CDP
-          connection drops. These are typically transient and a retry
-          on the same page (or with a fresh page) succeeds.
-        - ``TimeoutError`` / ``asyncio.TimeoutError`` — same family.
-
-        Other exceptions propagate immediately.
+        Note: the ``page`` argument here is the same page object across
+        all attempts. If the page itself becomes unhealthy (the
+        Playwright execution context is lost), this retry may still
+        fail repeatedly. For navigation-level retries (``page.goto``)
+        we use ``_goto_with_retry`` instead, which recreates the page
+        between attempts.
         """
         if attempts <= 1:
             return await self._fetch_json_inside_page(

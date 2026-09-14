@@ -229,7 +229,11 @@ async def test_fetch_with_retry_exhausts_on_continuous_playwright_error(
 
 @pytest.mark.asyncio
 async def test_goto_with_retry_succeeds_after_transient_abort(monkeypatch):
-    """page.goto raises 'operation aborted' twice, succeeds on third."""
+    """page.goto raises 'operation aborted' twice, succeeds on third.
+
+    _goto_with_retry now recreates the page on each attempt, so the
+    page_factory is called 3 times total.
+    """
     transport = BrowserJsonTransport()
 
     PlaywrightError = _get_playwright_error_class()
@@ -255,15 +259,20 @@ async def test_goto_with_retry_succeeds_after_transient_abort(monkeypatch):
             lambda: (RuntimeError, TimeoutError, asyncio.TimeoutError, PlaywrightError),
         )
 
-    page = _FakePageWithGoto()
-    await transport._goto_with_retry(
-        page=page,
+    async def page_factory():
+        return _FakePageWithGoto()
+
+    page = await transport._goto_with_retry(
+        page_factory=page_factory,
         reviews_url="https://www.ozon.ru/product/foo-123/reviews?page=1",
         attempts=5,
         label="test goto",
     )
 
+    # page_factory was called 3 times (one per attempt) — the 3rd
+    # attempt's goto succeeded.
     assert call_count["n"] == 3
+    assert isinstance(page, _FakePageWithGoto)
 
 
 @pytest.mark.asyncio
@@ -288,10 +297,12 @@ async def test_goto_with_retry_exhausts_attempts(monkeypatch):
             lambda: (RuntimeError, TimeoutError, asyncio.TimeoutError, PlaywrightError),
         )
 
-    page = _FakePageWithGoto()
+    async def page_factory():
+        return _FakePageWithGoto()
+
     with pytest.raises(PlaywrightError, match="timeout"):
         await transport._goto_with_retry(
-            page=page,
+            page_factory=page_factory,
             reviews_url="https://www.ozon.ru/product/foo-123/reviews?page=1",
             attempts=3,
             label="test goto",
@@ -313,10 +324,12 @@ async def test_goto_with_retry_propagates_non_retryable(monkeypatch):
 
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    page = _FakePageWithGoto()
+    async def page_factory():
+        return _FakePageWithGoto()
+
     with pytest.raises(TypeError, match="not a retryable error"):
         await transport._goto_with_retry(
-            page=page,
+            page_factory=page_factory,
             reviews_url="https://www.ozon.ru/product/foo-123/reviews?page=1",
             attempts=5,
             label="test goto",
@@ -338,12 +351,15 @@ async def test_goto_with_retry_attempts_le_1_skips_retry(monkeypatch):
             call_count["n"] += 1
             return None
 
-    page = _FakePageWithGoto()
-    await transport._goto_with_retry(
-        page=page,
+    async def page_factory():
+        return _FakePageWithGoto()
+
+    page = await transport._goto_with_retry(
+        page_factory=page_factory,
         reviews_url="https://www.ozon.ru/product/foo-123/reviews?page=1",
         attempts=1,
         label="test goto",
     )
 
     assert call_count["n"] == 1
+    assert isinstance(page, _FakePageWithGoto)
