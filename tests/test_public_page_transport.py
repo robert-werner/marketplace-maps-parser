@@ -195,6 +195,16 @@ class _FakeStarOrImageItemLocator:
         return None
 
 
+class _FakeCookieContext:
+    """Records add_cookies calls (stand-in for page.context)."""
+
+    def __init__(self) -> None:
+        self.added: list[dict[str, Any]] = []
+
+    async def add_cookies(self, cookies: list[dict[str, Any]]) -> None:
+        self.added.extend(cookies)
+
+
 class _FakePage:
     """Stand-in for a Playwright Page.
 
@@ -227,6 +237,11 @@ class _FakePage:
         # ``page.mouse.on_wheel_callback = ...`` (set by the test)
         # persists across accesses.
         self._mouse: "_FakeMouse | None" = None
+        self._cookie_context = _FakeCookieContext()
+
+    @property
+    def context(self) -> _FakeCookieContext:
+        return self._cookie_context
 
     @property
     def _in_challenge(self) -> bool:
@@ -1369,3 +1384,45 @@ async def test_randomized_rotates_proxy_when_session_fails(monkeypatch):
         "http://proxy-1:10000",
     ]
     assert len(browsers_created) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Logged-in session cookies
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_cookies_injected_into_every_page(monkeypatch):
+    """When cookies are configured, every page created by the
+    transport gets them via page.context.add_cookies BEFORE any
+    navigation (so the first request is already authenticated)."""
+    cards_by_page = {1: [_make_card("r1")], 2: []}
+    fake_browser = _patch_browser(monkeypatch, cards_by_page)
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    session_cookies = [{
+        "name": "session_id",
+        "value": "abc123",
+        "domain": ".ozon.ru",
+        "path": "/",
+    }]
+    transport = PublicPageTransport(
+        settle_ms=0, max_idle_pages=1, cookies=session_cookies,
+    )
+    pages_seen = []
+    async for _ in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        pass
+
+    for page in fake_browser.pages_created:
+        pages_seen.append(page)
+        assert page.context.added == session_cookies
+        # injection happens before the first navigation
+        first_goto_index = 0
+        assert page.add_init_script_calls == []  # no stealth script
+        assert len(page.goto_calls) > first_goto_index

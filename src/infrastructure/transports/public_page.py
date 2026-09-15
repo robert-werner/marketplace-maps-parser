@@ -114,6 +114,11 @@ class PublicPageTransport:
         scroll_pause_ms: int = 800,
         randomize_fingerprint: bool = False,
         warmup: bool = True,
+        # Playwright-format cookies of a logged-in Ozon session
+        # (see cookie_loader.load_cookies_file). Injected into
+        # every page — unlocks the full review list; anonymous
+        # sessions cap at ~33 widget pages (measured 2026-09-15).
+        cookies: list[dict[str, Any]] | None = None,
         # How long to wait for review cards to attach. Measured
         # 2026-09-15: on slow proxy sessions Ozon's reviews widget
         # renders later than 30 s — a premature "no cards" verdict
@@ -157,6 +162,7 @@ class PublicPageTransport:
         # «Похоже, нет соединения» far more often than warmed-up
         # navigations.
         self.warmup = warmup
+        self.cookies = cookies
         self.card_wait_ms = card_wait_ms
 
     # ------------------------------------------------------------------
@@ -1143,7 +1149,20 @@ class PublicPageTransport:
 
         The ``stealth`` constructor flag is kept for CLI
         compatibility but no longer injects anything."""
-        return await browser.new_page()
+        page = await browser.new_page()
+        if self.cookies:
+            # Logged-in session cookies — must land in the context
+            # BEFORE the first navigation. page.context works for
+            # both a BrowserContext-backed and a browser.new_page()
+            # page.
+            try:
+                await page.context.add_cookies(self.cookies)
+            except Exception as exc:
+                print(
+                    "Ozon (public): WARNING — не удалось подставить "
+                    f"cookies ({type(exc).__name__}: {exc})"
+                )
+        return page
 
     async def _fetch_page_cards(
         self,

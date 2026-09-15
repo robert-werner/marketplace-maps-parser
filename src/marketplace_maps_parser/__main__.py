@@ -247,6 +247,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--cookies",
+        default=None,
+        help=(
+            "Path to cookies of a LOGGED-IN Ozon session, injected "
+            "into every browser page. Unlocks the full review list "
+            "— anonymous sessions cap at ~33 review pages (~990 "
+            "reviews). Formats: Playwright/DevTools JSON list "
+            "(export with any cookie-editor extension) or Netscape "
+            "cookie file (curl/wget)."
+        ),
+    )
+    parser.add_argument(
         "--free-proxy-country",
         default=None,
         help=(
@@ -433,6 +445,16 @@ def _build_ozon_transport(args: argparse.Namespace):
         from infrastructure.transports.public_page import (
             PublicPageTransport,
         )
+        cookies = None
+        if args.cookies:
+            from infrastructure.transports.cookie_loader import (
+                load_cookies_file,
+            )
+            cookies = load_cookies_file(args.cookies)
+            print(
+                f"Ozon: загружено cookies из {args.cookies}: "
+                f"{len(cookies)} шт."
+            )
         return PublicPageTransport(
             timeout_ms=args.timeout_ms,
             settle_ms=args.settle_ms,
@@ -442,6 +464,7 @@ def _build_ozon_transport(args: argparse.Namespace):
             humanize=not args.no_humanize,
             stealth=not args.no_stealth,
             randomize_fingerprint=args.randomize_fingerprint,
+            cookies=cookies,
         )
 
     if args.transport == "curl_cffi":
