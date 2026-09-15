@@ -269,3 +269,126 @@ def test_free_proxy_pool_dedup_within_batch(monkeypatch):
 
     pool = FreeProxyPool()
     assert pool.size == 2  # dedup: 1.1.1.1 appears once
+
+
+# ---------------------------------------------------------------------------
+# Russian proxy default + CIS fallback
+# ---------------------------------------------------------------------------
+
+
+def test_free_proxy_pool_defaults_to_ru(monkeypatch):
+    """When country_id is None (default), FreeProxyPool should
+    default to ['RU'] — Russian proxies first.
+    """
+    received_countries: list = []
+
+    class _CountryTrackingFreeProxy(_FakeFreeProxy):
+        def __init__(self, **kwargs):
+            received_countries.append(kwargs.get("country_id"))
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        fpp_module, "_import_free_proxy",
+        lambda: _CountryTrackingFreeProxy,
+    )
+
+    pool = FreeProxyPool()  # country_id=None → default RU
+    # The first refill (round 0) should request RU proxies
+    assert received_countries[0] == ["RU"]
+
+
+def test_free_proxy_pool_cis_fallback_on_refill(monkeypatch):
+    """When RU proxies run out (all blocked), the next refill
+    should fetch CIS countries (BY, UA, KZ), not re-try RU.
+    """
+    received_countries: list = []
+
+    class _CountryTrackingFreeProxy(_FakeFreeProxy):
+        def __init__(self, **kwargs):
+            received_countries.append(kwargs.get("country_id"))
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        fpp_module, "_import_free_proxy",
+        lambda: _CountryTrackingFreeProxy,
+    )
+
+    _FakeFreeProxy._proxy_strings = ["1.1.1.1:80"]
+
+    pool = FreeProxyPool()  # round 0: RU
+    assert received_countries == [["RU"]]
+
+    # Block the only proxy
+    pool.mark_blocked({"server": "http://1.1.1.1:80"})
+
+    # Change the stub to return different proxies for CIS
+    _FakeFreeProxy._proxy_strings = ["9.9.9.9:80"]
+
+    # next() should auto-refill → round 1: CIS countries
+    proxy = pool.next()
+    assert proxy is not None
+    assert proxy["server"] == "http://9.9.9.9:80"
+    # Second refill should have requested CIS countries
+    assert received_countries[1] == ["BY", "UA", "KZ"]
+
+
+def test_free_proxy_pool_all_countries_fallback(monkeypatch):
+    """After CIS fallback, the next refill should try all
+    countries (None filter).
+    """
+    received_countries: list = []
+
+    class _CountryTrackingFreeProxy(_FakeFreeProxy):
+        def __init__(self, **kwargs):
+            received_countries.append(kwargs.get("country_id"))
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        fpp_module, "_import_free_proxy",
+        lambda: _CountryTrackingFreeProxy,
+    )
+
+    _FakeFreeProxy._proxy_strings = ["1.1.1.1:80"]
+
+    pool = FreeProxyPool()  # round 0: RU
+    pool.mark_blocked({"server": "http://1.1.1.1:80"})
+    pool.next()  # round 1: CIS
+
+    # Block again
+    pool.mark_blocked({"server": "http://9.9.9.9:80"})
+    _FakeFreeProxy._proxy_strings = ["8.8.8.8:80"]
+    pool.next()  # round 2: all countries (None)
+
+    assert received_countries == [
+        ["RU"],         # round 0
+        ["BY", "UA", "KZ"],  # round 1 (CIS fallback)
+        None,           # round 2 (all countries)
+    ]
+
+
+def test_free_proxy_pool_custom_country_no_cis_fallback(monkeypatch):
+    """When the user explicitly specifies a non-RU country, the
+    CIS fallback should NOT activate (the pool just refills with
+    the user's country, then falls to all countries).
+    """
+    received_countries: list = []
+
+    class _CountryTrackingFreeProxy(_FakeFreeProxy):
+        def __init__(self, **kwargs):
+            received_countries.append(kwargs.get("country_id"))
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        fpp_module, "_import_free_proxy",
+        lambda: _CountryTrackingFreeProxy,
+    )
+
+    _FakeFreeProxy._proxy_strings = ["1.1.1.1:80"]
+
+    pool = FreeProxyPool(country_id=["US"])  # explicit non-RU
+    pool.mark_blocked({"server": "http://1.1.1.1:80"})
+    _FakeFreeProxy._proxy_strings = ["2.2.2.2:80"]
+    pool.next()  # refill
+
+    # Should NOT have CIS fallback — just re-request US
+    assert received_countries == [["US"], ["US"]]

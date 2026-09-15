@@ -237,6 +237,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Automatically fetch free public proxies via the "
             "'free-proxy' PyPI package. Proxies are rotated per "
             "page with auto-refill when all are blocked. "
+            "DEFAULT: Russian (RU) proxies first, with fallback "
+            "to CIS countries (BY, UA, KZ) and then all "
+            "countries. Use --free-proxy-country to override. "
             "WARNING: free proxies are usually datacenter IPs "
             "(not residential) — Cloudflare may still block "
             "them. For production, use --proxy-list with "
@@ -249,7 +252,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "--free-proxy only: filter proxies by country. "
             "Comma-separated ISO country codes, e.g. 'RU' or "
-            "'RU,UA,KZ'. Default: any country."
+            "'RU,UA,KZ'. DEFAULT: 'RU' (Russian proxies first, "
+            "then CIS fallback: Belarus, Ukraine, Kazakhstan)."
         ),
     )
     parser.add_argument(

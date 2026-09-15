@@ -363,20 +363,13 @@ When `--proxy-list` is active, the transport automatically switches to **per-pag
 When you don't have a residential proxy list handy, `--free-proxy` automatically fetches free public proxies via the [`free-proxy`](https://pypi.org/project/free-proxy/) PyPI package and rotates them per page:
 
 ```bash
-# Auto-fetch free proxies and rotate
+# Auto-fetch free proxies and rotate (defaults to Russian proxies first!)
 python -m marketplace_maps_parser \
   --marketplace ozon \
   --url "https://www.ozon.ru/product/..." \
   --free-proxy
 
-# Filter by country (Russian proxies — best for Ozon)
-python -m marketplace_maps_parser \
-  --marketplace ozon \
-  --url "https://www.ozon.ru/product/..." \
-  --free-proxy \
-  --free-proxy-country RU
-
-# Elite (high-anonymity) proxies only
+# Explicitly specify Russian proxies + elite (high-anonymity)
 python -m marketplace_maps_parser \
   --marketplace ozon \
   --url "https://www.ozon.ru/product/..." \
@@ -385,14 +378,25 @@ python -m marketplace_maps_parser \
   --free-proxy-elite
 ```
 
+**Russian proxy priority** (default behavior when `--free-proxy-country` is not specified):
+
+| Refill round | Countries tried | Description |
+|---|---|---|
+| Round 0 | `RU` | Russian proxies first — Ozon is a Russian marketplace, RU IPs are least likely to be blocked |
+| Round 1 | `BY`, `UA`, `KZ` | CIS fallback — Belarus, Ukraine, Kazakhstan (geographically close to Russia) |
+| Round 2+ | All countries | Last resort — no country filter, widest pool |
+
+When all proxies from one round are blocked, the pool automatically advances to the next round and fetches a fresh batch. `reset_blocked()` resets the round counter back to 0 (RU first).
+
 When all fetched proxies are blocked, `FreeProxyPool` automatically fetches a new batch (auto-refill). Blocked proxies from previous batches are remembered and skipped.
 
 **⚠️ WARNING**: Free public proxies are:
 - Usually **datacenter IPs** (not residential) — Cloudflare may still block them
 - **Unreliable** — high failure rate, proxies go offline frequently
 - **Slow** — high latency, limited bandwidth
+- **Few RU proxies** — free-proxy typically has only 1-5 RU proxies, so CIS fallback kicks in quickly
 
-For production scraping, use `--proxy-list` with residential proxies. Use `--free-proxy` for development, testing, or quick prototyping.
+For production scraping, use `--proxy-list` with **residential Russian proxies** from providers like Bright Data, Smartproxy, or IPRoyal. Use `--free-proxy` for development, testing, or quick prototyping.
 
 ## Architecture
 

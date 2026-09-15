@@ -41,9 +41,21 @@ class FreeProxyPool:
     ``FreeProxy.get_proxy_list()``. When all fetched proxies are
     blocked, automatically fetches a new batch (``refill()``).
 
+    **Russian proxy priority**: Ozon is a Russian marketplace —
+    Russian IPs are least likely to be blocked by Cloudflare. When
+    ``country_id`` is ``None`` (default), the pool automatically
+    uses ``['RU']`` as the primary country. If RU proxies run out,
+    it falls back to neighboring CIS countries (Belarus, Ukraine,
+    Kazakhstan) before trying all countries.
+
     Constructor options mirror ``FreeProxy.__init__``:
     ``country_id``, ``timeout``, ``elite``, ``https``, etc.
     """
+
+    # CIS countries that are geographically close to Russia and
+    # may also work for Ozon. Used as fallback when RU proxies run
+    # out.
+    _CIS_FALLBACK_COUNTRIES = ["BY", "UA", "KZ"]
 
     def __init__(
         self,
@@ -54,6 +66,11 @@ class FreeProxyPool:
         https: bool = False,
         batch_size: int = 100,
     ) -> None:
+        # Default to Russian proxies when no country specified —
+        # Ozon is a Russian marketplace and RU IPs are least likely
+        # to be blocked by Cloudflare.
+        if country_id is None:
+            country_id = ["RU"]
         self._country_id = country_id
         self._timeout = timeout
         self._elite = elite
@@ -63,31 +80,66 @@ class FreeProxyPool:
         self._index = 0
         self._blocked: set[str] = set()
         self._lock = threading.Lock()
+        # Track which country sets we've already tried (for
+        # fallback logic in _refill_sync).
+        self._refill_round = 0
         # Fetch the initial batch
         self._refill_sync()
 
     def _refill_sync(self) -> None:
         """Fetch a new batch of free proxies (synchronous, called
         from __init__ and from _refill under the lock).
+
+        Fallback logic for Russian proxy rotation:
+
+        - Round 0: fetch from the user-specified country (default
+          ``['RU']``).
+        - Round 1: if RU proxies are exhausted, fetch from CIS
+          fallback countries (Belarus, Ukraine, Kazakhstan).
+        - Round 2+: fetch from all countries (no country filter).
+
+        Each refill increments ``_refill_round``, so the pool
+        progressively widens its search when RU proxies run out.
         """
         FreeProxy = _import_free_proxy()
-        fp = FreeProxy(
-            country_id=self._country_id,
-            timeout=self._timeout,
-            elite=self._elite,
-            https=self._https,
+
+        # Determine which countries to fetch from based on the
+        # current refill round.
+        countries_to_try = self._get_countries_for_round(
+            self._refill_round,
         )
-        try:
-            raw_list = fp.get_proxy_list(repeat=False)
-        except Exception as exc:
-            print(
-                f"FreeProxyPool: не удалось получить список proxy: "
-                f"{exc}"
+        self._refill_round += 1
+
+        all_raw: list[str] = []
+        for countries in countries_to_try:
+            fp = FreeProxy(
+                country_id=countries,
+                timeout=self._timeout,
+                elite=self._elite,
+                https=self._https,
             )
-            return
+            try:
+                raw_list = fp.get_proxy_list(repeat=False)
+            except Exception as exc:
+                print(
+                    f"FreeProxyPool: не удалось получить proxy "
+                    f"для стран {countries}: {exc}"
+                )
+                continue
+
+            if raw_list:
+                print(
+                    f"FreeProxyPool: получено {len(raw_list)} proxy "
+                    f"для стран {countries}"
+                )
+                all_raw.extend(raw_list)
+                # If we got enough proxies from this country set,
+                # don't try the next fallback.
+                if len(all_raw) >= 10:
+                    break
 
         new_proxies: list[dict[str, str]] = []
-        for raw in raw_list:
+        for raw in all_raw:
             # FreeProxy returns "host:port" (no scheme). We add
             # "http://" prefix since free proxies rarely support
             # HTTPS tunneling.
@@ -110,8 +162,37 @@ class FreeProxyPool:
         # previous batch might reappear in the new batch. Keep
         # them blocked so we don't retry a known-bad proxy.
         print(
-            f"FreeProxyPool: загружено {len(new_proxies)} proxy"
+            f"FreeProxyPool: загружено {len(new_proxies)} proxy "
+            f"(round {self._refill_round - 1})"
         )
+
+    def _get_countries_for_round(
+        self,
+        round_num: int,
+    ) -> list[list[str]]:
+        """Return the list of country sets to try for a given
+        refill round.
+
+        Round 0: user-specified country (default ``['RU']``).
+        Round 1: CIS fallback countries (BY, UA, KZ).
+        Round 2+: all countries (``None`` — no filter).
+
+        Returns a list of country lists to try in order. The
+        ``_refill_sync`` method iterates this list and stops as
+        soon as it gets enough proxies from a set.
+        """
+        if round_num == 0:
+            return [self._country_id]
+        elif round_num == 1:
+            # Fallback to CIS countries if RU proxies ran out.
+            # Only do this if the user didn't explicitly specify
+            # a non-RU country.
+            if self._country_id == ["RU"]:
+                return [self._CIS_FALLBACK_COUNTRIES]
+            return [self._country_id]
+        else:
+            # Last resort: all countries, no filter.
+            return [None]
 
     def refill(self) -> None:
         """Fetch a new batch of free proxies (async-safe).
@@ -171,9 +252,10 @@ class FreeProxyPool:
             self._blocked.add(self._proxy_key(proxy))
 
     def reset_blocked(self) -> None:
-        """Clear the blocked set and refill with fresh proxies."""
+        """Clear the blocked set and restart from RU proxies."""
         with self._lock:
             self._blocked.clear()
+            self._refill_round = 0  # restart from RU
             self._refill_sync()
 
     def all_blocked(self) -> bool:
