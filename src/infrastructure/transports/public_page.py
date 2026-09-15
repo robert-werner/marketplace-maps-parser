@@ -1006,51 +1006,51 @@ class PublicPageTransport:
 
         return result
 
+    # Star-rating extractor. Ozon rotates the obfuscated CSS class
+    # names of the star container (rpProducta9c → a5d5_5_1-a → …),
+    # so any class-based selector dies within weeks. What does NOT
+    # rotate: the star glyph path data (one ``d`` attribute shared
+    # by all 5 star slots of a row, filled = currentColor with the
+    # computed orange rgb(255, 168, 0)) — measured 2026-09-15.
+    _RATING_JS = """
+    (card) => {
+        const byGlyph = new Map();
+        card.querySelectorAll('svg path').forEach(p => {
+            const d = p.getAttribute('d');
+            if (!d) return;
+            if (!byGlyph.has(d)) byGlyph.set(d, []);
+            byGlyph.get(d).push(getComputedStyle(p).fill);
+        });
+        // The star row is the glyph that appears 3-6 times; other
+        // svg icons in a card appear once or twice.
+        let starFills = null;
+        for (const fills of byGlyph.values()) {
+            if (fills.length >= 3 && fills.length <= 6) {
+                if (!starFills || fills.length > starFills.length) {
+                    starFills = fills;
+                }
+            }
+        }
+        if (!starFills) return null;
+        let orange = 0;
+        for (const f of starFills) {
+            const m = f.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+            if (!m) continue;
+            const r = +m[1], g = +m[2], b = +m[3];
+            if (r >= 200 && g >= 120 && g <= 220 && b <= 100) orange++;
+        }
+        return orange > 0 ? orange : null;
+    }
+    """
+
     async def _read_review_rating(self, card) -> int | None:
-        """Read the per-review star rating by counting filled SVG
-        stars. Mirrors ``BrowserDomTransport._read_review_rating``.
+        """Read the per-review star rating by counting orange-filled
+        star SVGs (see ``_RATING_JS`` for why this is glyph-based).
         """
-        rating_container = card.locator('[class*="rpProducta9c"]')
-
-        if await rating_container.count() == 0:
+        try:
+            return await card.evaluate(self._RATING_JS)
+        except Exception:
             return None
-
-        stars = rating_container.locator("svg")
-        star_count = await stars.count()
-
-        if star_count == 0:
-            return None
-
-        filled = 0
-        for star_index in range(star_count):
-            star = stars.nth(star_index)
-            try:
-                color = await star.evaluate(
-                    """
-                    (element) => {
-                        const path = element.querySelector("path");
-                        if (!path) {
-                            return null;
-                        }
-                        return {
-                            elementColor:
-                                getComputedStyle(element).color,
-                            pathFill:
-                                getComputedStyle(path).fill,
-                            pathAttribute:
-                                path.getAttribute("fill"),
-                            className:
-                                element.getAttribute("class") || ""
-                        };
-                    }
-                    """
-                )
-            except Exception:
-                continue
-            if self._is_filled_star(color):
-                filled += 1
-
-        return filled if filled else None
 
     @staticmethod
     def _is_filled_star(color: dict[str, Any] | None) -> bool:

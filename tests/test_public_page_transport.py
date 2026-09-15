@@ -112,8 +112,11 @@ class _FakeCardLocator:
         return _FakeStarOrImageLocator(kind="empty", items=[])
 
     async def evaluate(self, expression: str, *args) -> Any:
-        # Pretend to evaluate the star-color JS — return a fixed
-        # color for filled stars, a different color for empty.
+        # The rating extractor runs one JS pass over the whole card
+        # and returns the count of orange stars — the fake returns
+        # the number of "stars" the fixture provides (= rating).
+        if "byGlyph" in expression:
+            return len(self._card.get("stars", [])) or None
         return self._card.get("_star_color", {
             "elementColor": "rgb(0, 0, 0)",
             "pathFill": "rgb(255, 168, 0)",  # yellow
