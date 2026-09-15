@@ -358,6 +358,42 @@ When `--proxy-list` is active, the transport automatically switches to **per-pag
 
 **Best results**: combine `--proxy-list` (residential IPs) + `--randomize-fingerprint` (new browser fingerprint per page) + `--transport public_page` (scrape the CDN page, not the API). This gives you a different IP + different browser fingerprint + least-protected URL on every page — Cloudflare has nothing consistent to block on.
 
+#### Free proxy pool (`--free-proxy`)
+
+When you don't have a residential proxy list handy, `--free-proxy` automatically fetches free public proxies via the [`free-proxy`](https://pypi.org/project/free-proxy/) PyPI package and rotates them per page:
+
+```bash
+# Auto-fetch free proxies and rotate
+python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --free-proxy
+
+# Filter by country (Russian proxies — best for Ozon)
+python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --free-proxy \
+  --free-proxy-country RU
+
+# Elite (high-anonymity) proxies only
+python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --free-proxy \
+  --free-proxy-country RU \
+  --free-proxy-elite
+```
+
+When all fetched proxies are blocked, `FreeProxyPool` automatically fetches a new batch (auto-refill). Blocked proxies from previous batches are remembered and skipped.
+
+**⚠️ WARNING**: Free public proxies are:
+- Usually **datacenter IPs** (not residential) — Cloudflare may still block them
+- **Unreliable** — high failure rate, proxies go offline frequently
+- **Slow** — high latency, limited bandwidth
+
+For production scraping, use `--proxy-list` with residential proxies. Use `--free-proxy` for development, testing, or quick prototyping.
+
 ## Architecture
 
 The project follows a clean architecture layering — domain logic has zero infrastructure imports.

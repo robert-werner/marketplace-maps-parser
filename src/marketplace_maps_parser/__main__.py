@@ -231,6 +231,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--free-proxy",
+        action="store_true",
+        help=(
+            "Automatically fetch free public proxies via the "
+            "'free-proxy' PyPI package. Proxies are rotated per "
+            "page with auto-refill when all are blocked. "
+            "WARNING: free proxies are usually datacenter IPs "
+            "(not residential) — Cloudflare may still block "
+            "them. For production, use --proxy-list with "
+            "residential proxies."
+        ),
+    )
+    parser.add_argument(
+        "--free-proxy-country",
+        default=None,
+        help=(
+            "--free-proxy only: filter proxies by country. "
+            "Comma-separated ISO country codes, e.g. 'RU' or "
+            "'RU,UA,KZ'. Default: any country."
+        ),
+    )
+    parser.add_argument(
+        "--free-proxy-elite",
+        action="store_true",
+        help=(
+            "--free-proxy only: only use elite (high-anonymity) "
+            "proxies. Default: any anonymity level."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -482,12 +512,40 @@ def _build_ozon_transport(args: argparse.Namespace):
 
 
 def _build_proxy_pool(args: argparse.Namespace):
-    """Build a ProxyPool from --proxy-list. Returns None if no
-    proxy list was provided."""
-    if not args.proxy_list:
-        return None
-    from infrastructure.transports.proxy_pool import ProxyPool
-    return ProxyPool.from_file(args.proxy_list)
+    """Build a proxy pool from --proxy-list or --free-proxy.
+
+    Returns None if neither was provided.
+
+    Priority: --proxy-list > --free-proxy (proxy-list takes
+    precedence because residential proxies from a file are more
+    reliable than free public proxies).
+    """
+    if args.proxy_list:
+        from infrastructure.transports.proxy_pool import ProxyPool
+        return ProxyPool.from_file(args.proxy_list)
+
+    if getattr(args, "free_proxy", False):
+        from infrastructure.transports.free_proxy_pool import (
+            FreeProxyPool,
+        )
+        country_id = None
+        if args.free_proxy_country:
+            country_id = [
+                c.strip() for c in args.free_proxy_country.split(",")
+                if c.strip()
+            ]
+        print(
+            "[info] --free-proxy: загружаю бесплатные публичные "
+            "proxy через free-proxy package..."
+            + (f" (country={country_id})" if country_id else "")
+            + (" (elite)" if args.free_proxy_elite else "")
+        )
+        return FreeProxyPool(
+            country_id=country_id,
+            elite=args.free_proxy_elite,
+        )
+
+    return None
 
 
 def _build_single_proxy(args: argparse.Namespace):

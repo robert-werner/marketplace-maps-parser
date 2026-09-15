@@ -10,6 +10,7 @@ authors = [
 ]
 dependencies = [
     "curl_cffi>=0.7.0",
+    "free-proxy>=1.1.0",
     "httpx>=0.28.1",
     "invisible-playwright>=0.14.0",
     "loguru>=0.7.3",
