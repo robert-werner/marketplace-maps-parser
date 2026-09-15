@@ -114,6 +114,12 @@ class PublicPageTransport:
         scroll_pause_ms: int = 800,
         randomize_fingerprint: bool = False,
         warmup: bool = True,
+        # How long to wait for review cards to attach. Measured
+        # 2026-09-15: on slow proxy sessions Ozon's reviews widget
+        # renders later than 30 s — a premature "no cards" verdict
+        # discarded pages that were perfectly fine (the full-page
+        # screenshot taken seconds later showed all 30 cards).
+        card_wait_ms: int = 90_000,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -151,6 +157,7 @@ class PublicPageTransport:
         # «Похоже, нет соединения» far more often than warmed-up
         # navigations.
         self.warmup = warmup
+        self.card_wait_ms = card_wait_ms
 
     # ------------------------------------------------------------------
     # Antibot detection & human-like navigation
@@ -424,7 +431,7 @@ class PublicPageTransport:
                     try:
                         await review_locator.first.wait_for(
                             state="attached",
-                            timeout=30_000,
+                            timeout=self.card_wait_ms,
                         )
                         cards = await self._read_review_cards(
                             review_locator,
@@ -746,7 +753,7 @@ class PublicPageTransport:
             try:
                 await review_locator.first.wait_for(
                     state="attached",
-                    timeout=30_000,
+                    timeout=self.card_wait_ms,
                 )
             except Exception as exc:
                 antibot = await self._page_is_antibot(page)
@@ -1203,7 +1210,7 @@ class PublicPageTransport:
             try:
                 await review_locator.first.wait_for(
                     state="attached",
-                    timeout=30_000,
+                    timeout=self.card_wait_ms,
                 )
             except Exception:
                 antibot = await self._page_is_antibot(page)
