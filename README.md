@@ -285,22 +285,32 @@ Notes: `sameSite` values are normalized (invalid values become `Lax` — Playwri
 
 Per-page costs after the 2026-09 optimizations: all 30 cards of a page (text + rating + images) are extracted with a **single** `page.evaluate` round-trip (the old per-attribute reader took ~1.6 s per page — 208× slower on the read alone), and the widget's content-replacement poll runs at 300 ms.
 
-`--workers N` shards the review pages across N browser tabs of one session through a frontier queue. Fair warning, measured live: tabs of a single session serialize (one Firefox + one proxy tunnel), so wall time does **not** drop with N. For a real parallel speedup today, run several **processes** with different proxy ports and merge the outputs:
+`--workers N` shards the review pages across N browser tabs of one session through a frontier queue. Fair warning, measured live: tabs of a single session serialize (one Firefox + one proxy tunnel), so wall time does **not** drop with N. It is kept as the foundation for multi-session sharding.
+
+**How to actually parallelize today** — important: several processes on the SAME product each walk from page 1 and duplicate each other's work (no wall-time win for a full run). Parallelism pays off in two cases:
+
+1. **Several products** — one process per product (different `--proxy` ports), merge the outputs afterwards.
+2. **One product, deep naked pagination** — the classic URL pagination (`--strategy pagination`) honors `--start-page` / `--max-pages`, so the page range can be split into disjoint chunks. First CHECK that with your cookies the naked `?page=N` URLs work beyond the anonymous ~5-page cap (they do not without login):
 
 ```bash
-python -m marketplace_maps_parser ... --proxy "http://…:10100" --output part1.jsonl &
-python -m marketplace_maps_parser ... --proxy "http://…:10101" --output part2.jsonl &
-wait
+# проверка: глубина 50, один процесс, одна страница
+python -m marketplace_maps_parser --marketplace ozon --url "https://www.ozon.ru/product/…"   --output probe50.jsonl --transport public_page --strategy pagination   --start-page 50 --max-pages 1 --cookies ozon_cookies.json   --proxy "http://user:pass@pool.proxys.io:10100"
+```
+
+If `probe50.jsonl` has ~30 reviews — chunk the range (e.g. 194 pages ≈ 3 chunks) and run them in parallel, one proxy port per chunk. Then merge with dedup:
+
+```bash
 python -c "
-import json
+import glob, json
 seen = set()
 with open('all.jsonl', 'w', encoding='utf-8') as out:
-    for f in ('part1.jsonl', 'part2.jsonl'):
+    for f in sorted(glob.glob('part*.jsonl')):
         for line in open(f, encoding='utf-8'):
             rid = json.loads(line)['review_id']
             if rid not in seen:
                 seen.add(rid)
                 out.write(line)
+print(len(seen), 'unique reviews merged')
 "
 ```
 
