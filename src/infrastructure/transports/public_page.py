@@ -1417,6 +1417,12 @@ class PublicPageTransport:
                         ):
                             return
 
+                        # The card uuids appear before the star SVGs
+                        # hydrate — a short settle keeps the rating
+                        # extractor from reading half-rendered cards
+                        # (measured: without it ~38% of deep-page
+                        # cards came out rating=None).
+                        await page.wait_for_timeout(1_200)
                         cards = await self._read_review_cards(locator)
                         new_cards = [
                             c for c in cards
