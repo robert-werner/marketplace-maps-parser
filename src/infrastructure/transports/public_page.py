@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,11 @@ def _import_invisible_playwright():
 def _import_retry_async():
     from shared.retry import retry_async
     return retry_async
+
+
+def _import_sleep_with_jitter():
+    from shared.retry import sleep_with_jitter
+    return sleep_with_jitter
 
 
 def _import_retryable_errors():
@@ -107,6 +113,18 @@ class PublicPageTransport:
         scroll_step: int = 1800,
         scroll_pause_ms: int = 800,
         randomize_fingerprint: bool = False,
+        warmup: bool = True,
+        # Playwright-format cookies of a logged-in Ozon session
+        # (see cookie_loader.load_cookies_file). Injected into
+        # every page — unlocks the full review list; anonymous
+        # sessions cap at ~33 widget pages (measured 2026-09-15).
+        cookies: list[dict[str, Any]] | None = None,
+        # How long to wait for review cards to attach. Measured
+        # 2026-09-15: on slow proxy sessions Ozon's reviews widget
+        # renders later than 30 s — a premature "no cards" verdict
+        # discarded pages that were perfectly fine (the full-page
+        # screenshot taken seconds later showed all 30 cards).
+        card_wait_ms: int = 90_000,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -136,6 +154,143 @@ class PublicPageTransport:
         # to Cloudflare. Slower (~2-5s browser startup per page) but
         # maximally stealthy.
         self.randomize_fingerprint = randomize_fingerprint
+        # Antibot hardening: before hitting /reviews directly, land
+        # on the product page first (like a real visitor), let Ozon
+        # set its antibot cookies, then navigate to the reviews with
+        # a referer. Measured 2026-09: direct cold hits on
+        # /reviews?page=N get "Antibot Challenge Page" /
+        # «Похоже, нет соединения» far more often than warmed-up
+        # navigations.
+        self.warmup = warmup
+        self.cookies = cookies
+        self.card_wait_ms = card_wait_ms
+
+    # ------------------------------------------------------------------
+    # Antibot detection & human-like navigation
+    # ------------------------------------------------------------------
+    # Titles of Ozon/Cloudflare challenge and error pages. Real
+    # review pages have titles like "304 отзыв на … OZON" — none of
+    # these markers appear there.
+    _ANTIBOT_TITLE_MARKERS = (
+        "antibot",           # Ozon "Antibot Challenge Page"
+        "нет соединения",    # Ozon «Похоже, нет соединения»
+        "доступ ограничен",  # Ozon geo/ISP block page
+        "cloudflare",        # Cloudflare block pages
+        "just a moment",     # Cloudflare interstitial
+        "attention required",
+    )
+    # HTML markers that NEVER appear on a real reviews page. NOTE:
+    # the plain string "antibot" is NOT here — a real reviews page
+    # contains it too (measured 2026-09: 6 occurrences in a page
+    # that rendered 30 cards), so it cannot discriminate.
+    _ANTIBOT_HTML_MARKERS = (
+        "Выключите VPN",          # Cloudflare "Выключите VPN…" block
+        "__cf_chl",               # Cloudflare challenge
+        "cf-chl",                 # Cloudflare challenge (css/js)
+        "challenge-platform",     # Cloudflare challenge script
+    )
+
+    async def _page_is_antibot(self, page) -> bool:
+        """True when the loaded page is a challenge/block/error page
+        rather than real content. Title first (cheap, reliable);
+        fall back to unambiguous Cloudflare markers in the HTML."""
+        try:
+            title = (await page.title()).lower()
+        except Exception:
+            title = ""
+        for marker in self._ANTIBOT_TITLE_MARKERS:
+            if marker in title:
+                return True
+        try:
+            html = await page.content()
+        except Exception:
+            return False
+        return any(
+            marker in html for marker in self._ANTIBOT_HTML_MARKERS
+        )
+
+    async def _warmup_goto(
+        self,
+        page,
+        *,
+        product_path: str,
+        retry_async,
+        retryable_errors,
+        label: str,
+    ) -> None:
+        """Land on the product page so Ozon/Cloudflare set their
+        cookies for this browser session, then pause like a human
+        reading the product card. No-op when ``self.warmup`` is
+        False; a failed warmup is logged and never kills the fetch."""
+        if not self.warmup:
+            return
+        warmup_url = f"https://www.ozon.ru{product_path}"
+        try:
+            await retry_async(
+                lambda: page.goto(
+                    warmup_url,
+                    wait_until="domcontentloaded",
+                    timeout=self.timeout_ms,
+                ),
+                attempts=2,
+                base_delay=2.0,
+                max_delay=10.0,
+                factor=2.0,
+                jitter=0.3,
+                retry_on=retryable_errors(),
+                label=f"{label} warmup",
+            )
+            await page.wait_for_timeout(
+                random.randint(800, 2_200),
+            )
+        except Exception as exc:
+            print(
+                f"Ozon (public): warmup не удался "
+                f"({type(exc).__name__}) — иду напрямую на отзывы"
+            )
+
+    async def _goto_reviews_like_human(
+        self,
+        page,
+        *,
+        product_path: str,
+        reviews_url: str,
+        referer_url: str | None,
+        retry_async,
+        retryable_errors,
+        label: str,
+        goto_attempts: int = 3,
+        do_warmup: bool = True,
+    ) -> None:
+        """Navigate to the reviews page the way a real visitor does:
+        optionally warm up on the product page (``do_warmup`` — skip
+        when the session was already warmed), then go to the reviews
+        URL with an HTTP referer. A cold referer-less hit on
+        /reviews is a strong bot signal."""
+        if do_warmup:
+            await self._warmup_goto(
+                page,
+                product_path=product_path,
+                retry_async=retry_async,
+                retryable_errors=retryable_errors,
+                label=label,
+            )
+
+        await retry_async(
+            lambda: page.goto(
+                reviews_url,
+                wait_until="domcontentloaded",
+                timeout=self.timeout_ms,
+                **({"referer": referer_url} if referer_url else {}),
+            ),
+            attempts=goto_attempts,
+            base_delay=3.0,
+            max_delay=30.0,
+            factor=2.0,
+            jitter=0.3,
+            retry_on=retryable_errors(),
+            label=label,
+        )
 
     # ------------------------------------------------------------------
     # Pagination iterator (mirrors BrowserJsonTransport.iter_ozon_reviews_json)
@@ -207,6 +362,7 @@ class PublicPageTransport:
 
         # Single browser for the whole run (default, faster).
         proxy_for_run = self._get_proxy_for_page()
+        sleep_with_jitter = _import_sleep_with_jitter()
         async with _import_invisible_playwright()(
             proxy=proxy_for_run,
             seed=self.seed,
@@ -214,6 +370,20 @@ class PublicPageTransport:
             humanize=self.humanize,
         ) as browser:
             page = await self._new_page_with_stealth(browser)
+
+            # Warm up once per browser session: land on the product
+            # page so Ozon sets its antibot cookies before we start
+            # paginating through the reviews.
+            await self._warmup_goto(
+                page,
+                product_path=product_path,
+                retry_async=retry_async,
+                retryable_errors=retryable_errors,
+                label="Ozon public",
+            )
+
+            prev_reviews_url: str | None = None
+            product_url = f"https://www.ozon.ru{product_path}"
 
             while True:
                 if (
@@ -234,34 +404,83 @@ class PublicPageTransport:
                     f"{product_path}/reviews?page={current_page_num}"
                 )
 
-                # Navigate to the public review page. Cloudflare
-                # almost never challenges plain HTML navigations.
-                await retry_async(
-                    lambda url=reviews_url: page.goto(
-                        url,
-                        wait_until="domcontentloaded",
-                        timeout=self.timeout_ms,
-                    ),
-                    attempts=retry_attempts,
-                    base_delay=3.0,
-                    max_delay=30.0,
-                    factor=2.0,
-                    jitter=0.3,
-                    retry_on=retryable_errors(),
+                # Navigate like a real visitor: page 1 comes from
+                # the product card, page N+1 from page N.
+                await self._goto_reviews_like_human(
+                    page,
+                    product_path=product_path,
+                    reviews_url=reviews_url,
+                    referer_url=prev_reviews_url or product_url,
+                    retry_async=retry_async,
+                    retryable_errors=retryable_errors,
                     label=f"Ozon public page {current_page_num}",
+                    goto_attempts=retry_attempts,
+                    do_warmup=False,
                 )
+                prev_reviews_url = reviews_url
 
-                if self.settle_ms > 0:
-                    await page.wait_for_timeout(self.settle_ms)
+                # A page fetch can land on an antibot challenge
+                # even after a warmed-up navigation (measured
+                # 2026-09: the outcome is random per request). When
+                # that happens, cool down and re-fetch the SAME page
+                # in this (cookie-warm) browser instead of skipping
+                # to the next page number.
+                cards: list[dict[str, Any]] | None = None
+                antibot_attempts = max(1, retry_attempts)
+                for attempt in range(1, antibot_attempts + 1):
+                    if self.settle_ms > 0:
+                        await page.wait_for_timeout(self.settle_ms)
 
-                # Wait for review cards to attach.
-                review_locator = page.locator("[data-review-uuid]")
-                try:
-                    await review_locator.first.wait_for(
-                        state="attached",
-                        timeout=30_000,
+                    review_locator = page.locator(
+                        "[data-review-uuid]"
                     )
-                except Exception:
+                    try:
+                        await review_locator.first.wait_for(
+                            state="attached",
+                            timeout=self.card_wait_ms,
+                        )
+                        cards = await self._read_review_cards(
+                            review_locator,
+                        )
+                        break
+                    except Exception:
+                        antibot = await self._page_is_antibot(page)
+                        if not antibot:
+                            break
+                        await self._save_debug_page(
+                            page=page,
+                            page_number=current_page_num,
+                        )
+                        if attempt >= antibot_attempts:
+                            print(
+                                f"Ozon (public): page "
+                                f"{current_page_num} — antibot/"
+                                "challenge на всех попытках"
+                            )
+                            break
+                        cooldown = min(5.0 * attempt, 30.0)
+                        print(
+                            f"Ozon (public): page "
+                            f"{current_page_num} — antibot/"
+                            f"challenge, пауза {cooldown:.0f}s и "
+                            f"повтор ({attempt}/{antibot_attempts})"
+                        )
+                        await sleep_with_jitter(cooldown)
+                        await self._goto_reviews_like_human(
+                            page,
+                            product_path=product_path,
+                            reviews_url=reviews_url,
+                            referer_url=prev_reviews_url,
+                            retry_async=retry_async,
+                            retryable_errors=retryable_errors,
+                            label=(
+                                f"Ozon public page {current_page_num}"
+                            ),
+                            goto_attempts=retry_attempts,
+                            do_warmup=True,
+                        )
+
+                if cards is None:
                     # No review cards on this page — either the
                     # page has no more reviews or Cloudflare served
                     # a challenge/interstitial. Treat as idle.
@@ -276,9 +495,6 @@ class PublicPageTransport:
                     idle_pages += 1
                     current_page_num += 1
                     continue
-
-                # Read all visible cards.
-                cards = await self._read_review_cards(review_locator)
 
                 # Filter out already-seen UUIDs.
                 new_cards = []
@@ -396,118 +612,96 @@ class PublicPageTransport:
                 f"{product_path}/reviews?page={current_page_num}"
             )
 
-            # Open a fresh browser for this page. seed=None →
-            # secrets.randbits(31) → new random fingerprint every
-            # time. When a proxy_pool is active, also rotate to the
-            # next proxy for this page.
-            page_proxy = self._get_proxy_for_page()
-            if page_proxy is not None and self.proxy_pool is not None:
-                print(
-                    f"Ozon (public-rand): page {current_page_num} — "
-                    f"proxy: {page_proxy.get('server', 'unknown')}"
-                )
-            async with _import_invisible_playwright()(
-                proxy=page_proxy,
-                seed=None,  # randomize on every page
-                pin=self.pin,
-                humanize=self.humanize,
-            ) as browser:
-                page = await self._new_page_with_stealth(browser)
-
-                await retry_async(
-                    lambda url=reviews_url: page.goto(
-                        url,
-                        wait_until="domcontentloaded",
-                        timeout=self.timeout_ms,
-                    ),
-                    attempts=retry_attempts,
-                    base_delay=3.0,
-                    max_delay=30.0,
-                    factor=2.0,
-                    jitter=0.3,
-                    retry_on=retryable_errors(),
-                    label=f"Ozon public-rand page {current_page_num}",
-                )
-
-                if self.settle_ms > 0:
-                    await page.wait_for_timeout(self.settle_ms)
-
-                review_locator = page.locator("[data-review-uuid]")
-                try:
-                    await review_locator.first.wait_for(
-                        state="attached",
-                        timeout=30_000,
-                    )
-                except Exception:
-                    print(
-                        f"Ozon (public-rand): page "
-                        f"{current_page_num} — no "
-                        "[data-review-uuid] cards found"
-                    )
-                    await self._save_debug_page(
-                        page=page,
-                        page_number=current_page_num,
-                    )
-                    idle_pages_ref[0] += 1
-                    current_page_num += 1
-                    continue
-
-                cards = await self._read_review_cards(review_locator)
-
-                new_cards = []
-                for card in cards:
-                    uuid = card.get("uuid")
-                    if uuid and uuid in seen_uuids:
-                        continue
-                    if uuid:
-                        seen_uuids.add(uuid)
-                    new_cards.append(card)
-
-                await self._save_debug_page(
-                    page=page,
+            # One page may take several attempts: Ozon randomly
+            # serves an antibot/challenge page or its «Похоже, нет
+            # соединения» error page even for identical requests
+            # (measured 2026-09). Each retry rotates to the next
+            # proxy with a fresh random fingerprint and a cooldown.
+            sleep_with_jitter = _import_sleep_with_jitter()
+            cards: list[dict[str, Any]] | None = None
+            attempts_left = max(1, retry_attempts)
+            attempt_num = 0
+            while attempts_left > 0:
+                attempts_left -= 1
+                attempt_num += 1
+                cards, antibot = await self._fetch_page_cards(
+                    reviews_url=reviews_url,
+                    product_path=product_path,
                     page_number=current_page_num,
-                    cards=new_cards,
+                    retry_attempts=retry_attempts,
+                )
+                if cards is not None:
+                    break
+                if antibot and attempts_left > 0:
+                    cooldown = min(5.0 * attempt_num, 30.0)
+                    print(
+                        f"Ozon (public-rand): page "
+                        f"{current_page_num} — antibot/challenge; "
+                        f"пауза {cooldown:.0f}s, ротирую proxy и "
+                        "повторяю страницу"
+                    )
+                    await sleep_with_jitter(cooldown)
+                    continue
+                break
+
+            if cards is None:
+                print(
+                    f"Ozon (public-rand): page "
+                    f"{current_page_num} — no "
+                    "[data-review-uuid] cards found"
+                )
+                idle_pages_ref[0] += 1
+                current_page_num += 1
+                continue
+
+            new_cards = []
+            for card in cards:
+                uuid = card.get("uuid")
+                if uuid and uuid in seen_uuids:
+                    continue
+                if uuid:
+                    seen_uuids.add(uuid)
+                new_cards.append(card)
+
+            if not new_cards:
+                idle_pages_ref[0] += 1
+                print(
+                    f"Ozon (public-rand): page "
+                    f"{current_page_num} — 0 новых отзывов "
+                    f"(idle={idle_pages_ref[0]})"
+                )
+            else:
+                idle_pages_ref[0] = 0
+                print(
+                    f"Ozon (public-rand): page "
+                    f"{current_page_num} — "
+                    f"{len(new_cards)} новых отзывов"
                 )
 
-                if not new_cards:
-                    idle_pages_ref[0] += 1
-                    print(
-                        f"Ozon (public-rand): page "
-                        f"{current_page_num} — 0 новых отзывов "
-                        f"(idle={idle_pages_ref[0]})"
-                    )
-                else:
-                    idle_pages_ref[0] = 0
-                    print(
-                        f"Ozon (public-rand): page "
-                        f"{current_page_num} — "
-                        f"{len(new_cards)} новых отзывов"
-                    )
+            processed_pages_ref[0] += 1
 
-                processed_pages_ref[0] += 1
+            payload = {
+                "reviews": [
+                    {
+                        "reviewId": card.get("uuid"),
+                        "rating": card.get("rating"),
+                        "text": card.get("text"),
+                        "author": card.get("author"),
+                        "published_at": card.get("published_at"),
+                        "nextPage": (
+                            f"{product_path}/reviews?"
+                            f"page={current_page_num + 1}"
+                        ),
+                    }
+                    for card in new_cards
+                ],
+                "nextPage": (
+                    f"{product_path}/reviews?"
+                    f"page={current_page_num + 1}"
+                ),
+            }
 
-                payload = {
-                    "reviews": [
-                        {
-                            "reviewId": card.get("uuid"),
-                            "rating": card.get("rating"),
-                            "text": card.get("text"),
-                            "author": card.get("author"),
-                            "published_at": card.get("published_at"),
-                            "nextPage": (
-                                f"{product_path}/reviews?"
-                                f"page={current_page_num + 1}"
-                            ),
-                        }
-                        for card in new_cards
-                    ],
-                    "nextPage": (
-                        f"{product_path}/reviews?"
-                        f"page={current_page_num + 1}"
-                    ),
-                }
-
-                yield current_page_num, payload
+            yield current_page_num, payload
 
             current_page_num += 1
 
@@ -526,8 +720,14 @@ class PublicPageTransport:
         scrolling. Stops after ``scroll_max_idle_rounds``
         consecutive scrolls with no new cards.
         """
+        scroll_proxy = self._get_proxy_for_page()
+        if scroll_proxy is not None and self.proxy_pool is not None:
+            print(
+                "Ozon (public scroll): proxy: "
+                f"{scroll_proxy.get('server', 'unknown')}"
+            )
         async with _import_invisible_playwright()(
-            proxy=self.proxy,
+            proxy=scroll_proxy,
             seed=self.seed,
             pin=self.pin,
             humanize=self.humanize,
@@ -538,10 +738,18 @@ class PublicPageTransport:
                 f"https://www.ozon.ru{product_path}/reviews?page=1"
             )
 
-            await page.goto(
-                reviews_url,
-                wait_until="domcontentloaded",
-                timeout=self.timeout_ms,
+            # Same human-like navigation as pagination: warm up on
+            # the product page, then open the reviews with referer.
+            await self._goto_reviews_like_human(
+                page,
+                product_path=product_path,
+                reviews_url=reviews_url,
+                referer_url=(
+                    f"https://www.ozon.ru{product_path}"
+                ),
+                retry_async=_import_retry_async(),
+                retryable_errors=_import_retryable_errors(),
+                label="Ozon public scroll",
             )
 
             if self.settle_ms > 0:
@@ -551,12 +759,17 @@ class PublicPageTransport:
             try:
                 await review_locator.first.wait_for(
                     state="attached",
-                    timeout=30_000,
+                    timeout=self.card_wait_ms,
                 )
             except Exception as exc:
+                antibot = await self._page_is_antibot(page)
+                if antibot:
+                    self._mark_proxy_blocked(scroll_proxy)
                 raise RuntimeError(
                     "Ozon (public scroll): no [data-review-uuid] "
-                    f"cards found on {reviews_url}: {exc}"
+                    f"cards found on {reviews_url}"
+                    + (" (antibot/challenge page)" if antibot else "")
+                    + f": {exc}"
                 ) from exc
 
             seen_uuids: set[str] = set()
@@ -621,54 +834,27 @@ class PublicPageTransport:
         scroll_pause_seconds: float = 1.0,
         retry_attempts: int = 3,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        """Run pagination first, then scroll as a supplement.
+        """Run the widget flow (deep pagination via the reviews
+        widget), then URL pagination + scroll as fallback phases.
 
         Yields ``(strategy, node)`` tuples. ``strategy`` is
-        ``"pagination"`` or ``"scroll"``.
+        ``"widget"``, ``"pagination"`` or ``"scroll"``.
         """
         from shared.retry import sleep_with_jitter
 
         seen_ids: set[str] = set()
 
-        # --- pagination ---
+        # --- widget flow (primary) ---
+        # Deep pagination through the widget's own «Дальше» control;
+        # when it works it covers everything the URL-pagination and
+        # scroll phases could reach, and much more beyond (see
+        # ``iter_ozon_reviews_by_widget``). The legacy phases only
+        # run when the widget flow produced nothing.
         try:
-            async for page_num, payload in self.iter_ozon_reviews_json(
+            async for batch in self.iter_ozon_reviews_by_widget(
                 product_path=product_path,
-                start_page=pagination_start_page,
-                max_pages=pagination_max_pages,
+                max_reviews=max_reviews,
                 retry_attempts=retry_attempts,
-            ):
-                for node in payload.get("reviews", []):
-                    rid = node.get("reviewId") or node.get("uuid")
-                    if rid and rid in seen_ids:
-                        continue
-                    if rid:
-                        seen_ids.add(rid)
-
-                    yield "pagination", node
-
-                    if (
-                        max_reviews is not None
-                        and len(seen_ids) >= max_reviews
-                    ):
-                        return
-
-                if page_delay_seconds > 0:
-                    await sleep_with_jitter(page_delay_seconds)
-        except Exception as exc:
-            print(
-                "Ozon (public auto): pagination phase failed: "
-                f"{exc} — пробую scroll"
-            )
-
-        if max_reviews is not None and len(seen_ids) >= max_reviews:
-            return
-
-        # --- scroll supplement ---
-        try:
-            async for batch in self.iter_ozon_reviews_by_scroll(
-                product_path=product_path,
-                max_reviews=None,
             ):
                 for card in batch:
                     rid = card.get("uuid")
@@ -676,32 +862,128 @@ class PublicPageTransport:
                         continue
                     if rid:
                         seen_ids.add(rid)
-
-                    # Wrap the DOM card in a shape that the adapter's
-                    # map_ozon_review_node / parse_ozon_dom_card can
-                    # consume.
-                    node = {
-                        "reviewId": card.get("uuid"),
-                        "rating": card.get("rating"),
-                        "text": card.get("text"),
-                        "author": card.get("author"),
-                        "published_at": card.get("published_at"),
-                    }
-                    yield "scroll", node
-
+                    yield "widget", card
                     if (
                         max_reviews is not None
                         and len(seen_ids) >= max_reviews
                     ):
                         return
-
-                if scroll_pause_seconds > 0:
-                    await sleep_with_jitter(scroll_pause_seconds)
         except Exception as exc:
             print(
-                "Ozon (public auto): scroll phase failed: "
-                f"{exc}"
+                "Ozon (public auto): widget phase failed: "
+                f"{exc} — пробую классическую пагинацию"
             )
+
+        if seen_ids:
+            # The widget flow already covered the first pages; URL
+            # pagination and scroll can only re-deliver the same
+            # ~150 anonymous-capped reviews.
+            return
+
+        if max_reviews is not None and len(seen_ids) >= max_reviews:
+            return
+
+        # --- pagination (fallback) ---
+        # The browser launch includes an egress-IP check through the
+        # proxy; paid rotating pools (e.g. proxys.io) intermittently
+        # answer 503 to CONNECT. Retry the phase — the pool rotates to
+        # another exit IP on each attempt.
+        pagination_attempts = max(3, retry_attempts)
+        for attempt in range(1, pagination_attempts + 1):
+            try:
+                async for page_num, payload in self.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=pagination_start_page,
+                    max_pages=pagination_max_pages,
+                    retry_attempts=retry_attempts,
+                ):
+                    for node in payload.get("reviews", []):
+                        rid = node.get("reviewId") or node.get("uuid")
+                        if rid and rid in seen_ids:
+                            continue
+                        if rid:
+                            seen_ids.add(rid)
+
+                        yield "pagination", node
+
+                        if (
+                            max_reviews is not None
+                            and len(seen_ids) >= max_reviews
+                        ):
+                            return
+
+                    if page_delay_seconds > 0:
+                        await sleep_with_jitter(page_delay_seconds)
+                break
+            except Exception as exc:
+                if attempt >= pagination_attempts:
+                    print(
+                        "Ozon (public auto): pagination phase failed "
+                        f"after {attempt} attempts: {exc}"
+                    )
+                else:
+                    print(
+                        "Ozon (public auto): pagination attempt "
+                        f"{attempt}/{pagination_attempts} failed: "
+                        f"{exc} — retry with next proxy"
+                    )
+                    await sleep_with_jitter(5.0)
+
+        if max_reviews is not None and len(seen_ids) >= max_reviews:
+            return
+
+        # --- scroll supplement ---
+        # The scroll phase opens its own browser and pulls the next
+        # proxy from the pool, so retrying it after an antibot
+        # challenge automatically rotates to a different exit IP.
+        scroll_attempts = max(2, min(retry_attempts, 5))
+        for attempt in range(1, scroll_attempts + 1):
+            try:
+                async for batch in self.iter_ozon_reviews_by_scroll(
+                    product_path=product_path,
+                    max_reviews=None,
+                ):
+                    for card in batch:
+                        rid = card.get("uuid")
+                        if rid and rid in seen_ids:
+                            continue
+                        if rid:
+                            seen_ids.add(rid)
+
+                        # Wrap the DOM card in a shape that the
+                        # adapter's map_ozon_review_node /
+                        # parse_ozon_dom_card can consume.
+                        node = {
+                            "reviewId": card.get("uuid"),
+                            "rating": card.get("rating"),
+                            "text": card.get("text"),
+                            "author": card.get("author"),
+                            "published_at": card.get("published_at"),
+                        }
+                        yield "scroll", node
+
+                        if (
+                            max_reviews is not None
+                            and len(seen_ids) >= max_reviews
+                        ):
+                            return
+
+                    if scroll_pause_seconds > 0:
+                        await sleep_with_jitter(scroll_pause_seconds)
+                break
+            except Exception as exc:
+                if attempt >= scroll_attempts:
+                    print(
+                        "Ozon (public auto): scroll phase failed "
+                        f"after {attempt} attempts: {exc}"
+                    )
+                else:
+                    print(
+                        "Ozon (public auto): scroll attempt "
+                        f"{attempt}/{scroll_attempts} failed: "
+                        f"{exc} — retry with next proxy"
+                    )
+                    await sleep_with_jitter(5.0)
 
     # ------------------------------------------------------------------
     # Single-page fetch (mirrors the Protocol's
@@ -770,51 +1052,51 @@ class PublicPageTransport:
 
         return result
 
+    # Star-rating extractor. Ozon rotates the obfuscated CSS class
+    # names of the star container (rpProducta9c → a5d5_5_1-a → …),
+    # so any class-based selector dies within weeks. What does NOT
+    # rotate: the star glyph path data (one ``d`` attribute shared
+    # by all 5 star slots of a row, filled = currentColor with the
+    # computed orange rgb(255, 168, 0)) — measured 2026-09-15.
+    _RATING_JS = """
+    (card) => {
+        const byGlyph = new Map();
+        card.querySelectorAll('svg path').forEach(p => {
+            const d = p.getAttribute('d');
+            if (!d) return;
+            if (!byGlyph.has(d)) byGlyph.set(d, []);
+            byGlyph.get(d).push(getComputedStyle(p).fill);
+        });
+        // The star row is the glyph that appears 3-6 times; other
+        // svg icons in a card appear once or twice.
+        let starFills = null;
+        for (const fills of byGlyph.values()) {
+            if (fills.length >= 3 && fills.length <= 6) {
+                if (!starFills || fills.length > starFills.length) {
+                    starFills = fills;
+                }
+            }
+        }
+        if (!starFills) return null;
+        let orange = 0;
+        for (const f of starFills) {
+            const m = f.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+            if (!m) continue;
+            const r = +m[1], g = +m[2], b = +m[3];
+            if (r >= 200 && g >= 120 && g <= 220 && b <= 100) orange++;
+        }
+        return orange > 0 ? orange : null;
+    }
+    """
+
     async def _read_review_rating(self, card) -> int | None:
-        """Read the per-review star rating by counting filled SVG
-        stars. Mirrors ``BrowserDomTransport._read_review_rating``.
+        """Read the per-review star rating by counting orange-filled
+        star SVGs (see ``_RATING_JS`` for why this is glyph-based).
         """
-        rating_container = card.locator('[class*="rpProducta9c"]')
-
-        if await rating_container.count() == 0:
+        try:
+            return await card.evaluate(self._RATING_JS)
+        except Exception:
             return None
-
-        stars = rating_container.locator("svg")
-        star_count = await stars.count()
-
-        if star_count == 0:
-            return None
-
-        filled = 0
-        for star_index in range(star_count):
-            star = stars.nth(star_index)
-            try:
-                color = await star.evaluate(
-                    """
-                    (element) => {
-                        const path = element.querySelector("path");
-                        if (!path) {
-                            return null;
-                        }
-                        return {
-                            elementColor:
-                                getComputedStyle(element).color,
-                            pathFill:
-                                getComputedStyle(path).fill,
-                            pathAttribute:
-                                path.getAttribute("fill"),
-                            className:
-                                element.getAttribute("class") || ""
-                        };
-                    }
-                    """
-                )
-            except Exception:
-                continue
-            if self._is_filled_star(color):
-                filled += 1
-
-        return filled if filled else None
 
     @staticmethod
     def _is_filled_star(color: dict[str, Any] | None) -> bool:
@@ -850,21 +1132,385 @@ class PublicPageTransport:
     # Page lifecycle / stealth
     # ------------------------------------------------------------------
     async def _new_page_with_stealth(self, browser):
-        """Create a new page and apply stealth init script if
-        enabled."""
+        """Create a new page.
+
+        NOTE: no JS stealth init script is applied here, and that
+        is deliberate. Measured 2026-09-15 on this exact product
+        page: WITH the playwright-stealth-style script Ozon serves
+        its «Похоже, нет соединения» error page (0 cards); WITHOUT
+        it the same proxy/fingerprint gets HTTP 200 and 30 review
+        cards — on both the invisible-playwright (Firefox) and the
+        plain Chromium engines. invisible-playwright already
+        provides the real stealth (patched engine, fingerprint,
+        humanized input); layering the JS patch on top only breaks
+        the page's own JS (fake ``navigator.plugins`` lacks the
+        PluginArray methods Ozon's code expects, and a fake
+        ``window.chrome`` contradicts a Firefox engine).
+
+        The ``stealth`` constructor flag is kept for CLI
+        compatibility but no longer injects anything."""
         page = await browser.new_page()
-        if self.stealth:
+        if self.cookies:
+            # Logged-in session cookies — must land in the context
+            # BEFORE the first navigation. page.context works for
+            # both a BrowserContext-backed and a browser.new_page()
+            # page.
             try:
-                from infrastructure.transports.browser_json import (
-                    _STEALTH_INIT_SCRIPT,
-                )
-                await page.add_init_script(_STEALTH_INIT_SCRIPT)
+                await page.context.add_cookies(self.cookies)
             except Exception as exc:
                 print(
-                    "Ozon (public): warning — не удалось применить "
-                    f"stealth init script: {exc}"
+                    "Ozon (public): WARNING — не удалось подставить "
+                    f"cookies ({type(exc).__name__}: {exc})"
                 )
         return page
+
+    async def _fetch_page_cards(
+        self,
+        *,
+        reviews_url: str,
+        product_path: str,
+        page_number: int,
+        retry_attempts: int,
+    ) -> tuple[list[dict[str, Any]] | None, bool]:
+        """Load one reviews page in a fresh randomized browser.
+
+        Returns ``(cards, antibot)``:
+
+        - ``cards`` — parsed card dicts (possibly empty when the
+          page genuinely has no reviews), or ``None`` when the
+          review cards never appeared.
+        - ``antibot`` — True when the no-cards state looks like an
+          antibot/challenge page; the caller should cool down,
+          rotate the proxy and retry the page instead of treating
+          it as empty.
+        """
+        retry_async = _import_retry_async()
+        retryable_errors = _import_retryable_errors()
+
+        # Fresh browser per fetch: new random fingerprint (seed
+        # defaults to None → secrets.randbits(31)) and, when a
+        # proxy_pool is active, the next proxy in the rotation.
+        page_proxy = self._get_proxy_for_page()
+        if page_proxy is not None and self.proxy_pool is not None:
+            print(
+                f"Ozon (public-rand): page {page_number} — "
+                f"proxy: {page_proxy.get('server', 'unknown')}"
+            )
+
+        # The whole browser session is one attempt: a rotating
+        # proxy gateway can fail it at ANY point — refused CONNECT
+        # at launch ("could not discover the egress IP"), or the
+        # exit IP drifting mid-session (invisible-playwright's
+        # ProxyEgressDrifted, measured on proxys.io: the gateway
+        # re-rolls the exit every few minutes). None of these say
+        # anything about the PAGE — so any session-level failure is
+        # converted to "rotate the proxy and retry the page".
+        try:
+            return await self._fetch_page_cards_in_session(
+                reviews_url=reviews_url,
+                product_path=product_path,
+                page_number=page_number,
+                page_proxy=page_proxy,
+                retry_async=retry_async,
+                retryable_errors=retryable_errors,
+                retry_attempts=retry_attempts,
+            )
+        except Exception as exc:
+            print(
+                f"Ozon (public-rand): page {page_number} — сессия "
+                f"не удалась ({type(exc).__name__}: "
+                f"{str(exc)[:120]}) — ротирую proxy"
+            )
+            self._mark_proxy_blocked(page_proxy)
+            return None, True
+
+    async def _fetch_page_cards_in_session(
+        self,
+        *,
+        reviews_url: str,
+        product_path: str,
+        page_number: int,
+        page_proxy: dict[str, str] | None,
+        retry_async,
+        retryable_errors,
+        retry_attempts: int,
+    ) -> tuple[list[dict[str, Any]] | None, bool]:
+        """One page fetch inside a single fresh browser session.
+
+        Returns ``(cards, antibot)`` — see ``_fetch_page_cards``.
+        Raises on session-level failures (launch, egress drift);
+        the caller converts those into a proxy rotation."""
+        async with _import_invisible_playwright()(
+            proxy=page_proxy,
+            seed=None,  # randomize on every fetch
+            pin=self.pin,
+            humanize=self.humanize,
+        ) as browser:
+            page = await self._new_page_with_stealth(browser)
+
+            await self._goto_reviews_like_human(
+                page,
+                product_path=product_path,
+                reviews_url=reviews_url,
+                referer_url=(
+                    f"https://www.ozon.ru{product_path}"
+                ),
+                retry_async=retry_async,
+                retryable_errors=retryable_errors,
+                label=f"Ozon public-rand page {page_number}",
+                goto_attempts=retry_attempts,
+                do_warmup=True,
+            )
+
+            if self.settle_ms > 0:
+                await page.wait_for_timeout(self.settle_ms)
+
+            review_locator = page.locator("[data-review-uuid]")
+            try:
+                await review_locator.first.wait_for(
+                    state="attached",
+                    timeout=self.card_wait_ms,
+                )
+            except Exception:
+                antibot = await self._page_is_antibot(page)
+                await self._save_debug_page(
+                    page=page,
+                    page_number=page_number,
+                )
+                if antibot:
+                    # The proxy's exit IP just got flagged — take it
+                    # out of the rotation so the next attempt uses a
+                    # different IP.
+                    self._mark_proxy_blocked(page_proxy)
+                return None, antibot
+
+            cards = await self._read_review_cards(review_locator)
+            await self._save_debug_page(
+                page=page,
+                page_number=page_number,
+                cards=cards,
+            )
+            return cards, False
+
+    # ------------------------------------------------------------------
+    # Widget flow — combined pagination + infinite scroll
+    # ------------------------------------------------------------------
+    _NEXT_BUTTON_SELECTOR = (
+        'button:has-text("Дальше"), a:has-text("Дальше")'
+    )
+
+    async def _locator_uuids(self, locator) -> list[str]:
+        """UUIDs of all cards the locator currently matches."""
+        n = await locator.count()
+        out = []
+        for i in range(n):
+            uuid = await locator.nth(i).get_attribute(
+                "data-review-uuid"
+            )
+            if uuid:
+                out.append(uuid)
+        return out
+
+    async def _wait_for_card_replacement(
+        self,
+        page,
+        locator,
+        prev_uuids: set[str],
+    ) -> set[str] | None:
+        """Wait until the widget replaces the card set.
+
+        The reviews widget paginates by REPLACING the 30 rendered
+        cards, so — unlike a lazy-load scroll — the card count does
+        not grow. Poll the UUID set until it changes, nudging the
+        page with a small scroll half-way through the wait.
+        """
+        import time as _time
+
+        deadline = _time.monotonic() + self.card_wait_ms / 1000
+        nudged = False
+        while _time.monotonic() < deadline:
+            try:
+                current = set(await self._locator_uuids(locator))
+            except Exception:
+                current = None
+            if current and current != prev_uuids:
+                return current
+            if not nudged and _time.monotonic() > deadline - 15:
+                try:
+                    await page.mouse.wheel(0, 900)
+                except Exception:
+                    pass
+                nudged = True
+            await asyncio.sleep(1)
+        return None
+
+    async def iter_ozon_reviews_by_widget(
+        self,
+        product_path: str,
+        *,
+        max_reviews: int | None = None,
+        retry_attempts: int = 3,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Deep review collection via the reviews widget's own
+        «Дальше» control — pagination and scroll combined.
+
+        Why this exists (measured 2026-09-15 on a 5814-review
+        product): naked ``/reviews?page=N`` URLs serve anonymous
+        sessions ~150 unique reviews and then repeat themselves,
+        while the widget's own next-page URLs carry a ``page_key``
+        token whose pagination goes deep — 930 unique reviews by
+        page 31 in one session, with the token rotating every few
+        pages and the numbering continuing.
+
+        Flow per session: warm up on the product page, open the
+        reviews (resuming from the last widget URL when restarting
+        after a session failure), read the cards, then click
+        «Дальше» and wait for the card set to be replaced — the
+        "infinite scroll" built from the widget's pagination. Any
+        session-level failure rotates the proxy and resumes from
+        the last good widget URL. Stops when the button disappears,
+        the content stops changing, ``max_reviews`` is reached, or
+        the restart budget is exhausted.
+        """
+        retry_async = _import_retry_async()
+        retryable_errors = _import_retryable_errors()
+        sleep_with_jitter = _import_sleep_with_jitter()
+
+        product_url = f"https://www.ozon.ru{product_path}"
+        resume_url = f"{product_url}/reviews?page=1"
+        seen_uuids: set[str] = set()
+        restarts_left = max(3, min(retry_attempts, 10))
+
+        while True:
+            if (
+                max_reviews is not None
+                and len(seen_uuids) >= max_reviews
+            ):
+                return
+
+            page_proxy = self._get_proxy_for_page()
+            if page_proxy is not None and self.proxy_pool is not None:
+                print(
+                    "Ozon (public-widget): proxy: "
+                    f"{page_proxy.get('server', 'unknown')}"
+                )
+            try:
+                async with _import_invisible_playwright()(
+                    proxy=page_proxy,
+                    seed=None,
+                    pin=self.pin,
+                    humanize=self.humanize,
+                ) as browser:
+                    page = await self._new_page_with_stealth(browser)
+
+                    await self._goto_reviews_like_human(
+                        page,
+                        product_path=product_path,
+                        reviews_url=resume_url,
+                        referer_url=product_url,
+                        retry_async=retry_async,
+                        retryable_errors=retryable_errors,
+                        label="Ozon public-widget",
+                        goto_attempts=retry_attempts,
+                        do_warmup=True,
+                    )
+
+                    locator = page.locator("[data-review-uuid]")
+                    if not await self._wait_for_card_replacement(
+                        page, locator, set(),
+                    ):
+                        if await self._page_is_antibot(page):
+                            self._mark_proxy_blocked(page_proxy)
+                            raise RuntimeError("antibot/challenge")
+                        print(
+                            "Ozon (public-widget): карточки не "
+                            "появились — виджет недоступен"
+                        )
+                        return
+
+                    idle_pages = 0
+                    while True:
+                        if (
+                            max_reviews is not None
+                            and len(seen_uuids) >= max_reviews
+                        ):
+                            return
+
+                        # The card uuids appear before the star SVGs
+                        # hydrate — a short settle keeps the rating
+                        # extractor from reading half-rendered cards
+                        # (measured: without it ~38% of deep-page
+                        # cards came out rating=None).
+                        await page.wait_for_timeout(1_200)
+                        cards = await self._read_review_cards(locator)
+                        new_cards = [
+                            c for c in cards
+                            if c.get("uuid")
+                            and c["uuid"] not in seen_uuids
+                        ]
+                        for c in new_cards:
+                            seen_uuids.add(c["uuid"])
+                        if new_cards:
+                            idle_pages = 0
+                            print(
+                                "Ozon (public-widget): страница "
+                                f"{page.url.split('page=')[-1][:4]}"
+                                f" — {len(new_cards)} новых отзывов "
+                                f"(всего {len(seen_uuids)})"
+                            )
+                            yield new_cards
+                        else:
+                            idle_pages += 1
+
+                        resume_url = page.url
+
+                        next_btn = page.locator(
+                            self._NEXT_BUTTON_SELECTOR
+                        )
+                        if await next_btn.count() == 0:
+                            print(
+                                "Ozon (public-widget): кнопка "
+                                "«Дальше» исчезла — отзывов больше нет"
+                            )
+                            return
+                        if idle_pages >= 2:
+                            print(
+                                "Ozon (public-widget): контент не "
+                                "меняется — конец списка"
+                            )
+                            return
+
+                        prev_uuids = set(
+                            await self._locator_uuids(locator)
+                        )
+                        await next_btn.first.click()
+                        replaced = await (
+                            self._wait_for_card_replacement(
+                                page, locator, prev_uuids,
+                            )
+                        )
+                        if replaced is None:
+                            if await self._page_is_antibot(page):
+                                self._mark_proxy_blocked(page_proxy)
+                                raise RuntimeError("antibot/challenge")
+                            continue  # idle_pages increments next round
+
+            except Exception as exc:
+                if restarts_left <= 0:
+                    print(
+                        "Ozon (public-widget): сессии исчерпаны "
+                        f"({type(exc).__name__}: {str(exc)[:90]}) — "
+                        f"собрано {len(seen_uuids)}"
+                    )
+                    return
+                restarts_left -= 1
+                self._mark_proxy_blocked(page_proxy)
+                print(
+                    "Ozon (public-widget): сессия не удалась "
+                    f"({type(exc).__name__}: {str(exc)[:90]}) — "
+                    "ротирую proxy, продолжаю с последней страницы"
+                )
+                await sleep_with_jitter(5.0)
 
     def _get_proxy_for_page(self) -> dict[str, str] | None:
         """Return the proxy to use for the next page fetch.
