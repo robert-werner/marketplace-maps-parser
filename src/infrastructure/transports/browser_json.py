@@ -172,6 +172,37 @@ try {
 } catch (e) {
     // Some builds don't allow delete on the prototype.
 }
+
+// Override the document title to hide the JUGGLER session
+// identifier that invisible-playwright's patched Firefox sets as
+// the initial window/tab title ("JUGGLER <uuid>"). The JUGGLER
+// title is a local UI element (not sent to servers), but it looks
+// suspicious on screenshots and to anyone watching the browser.
+// We set a neutral title immediately, before any page content
+// loads.
+try {
+    Object.defineProperty(document, 'title', {
+        get: () => document.querySelector('title')?.textContent || '',
+        set: (value) => {
+            let titleEl = document.querySelector('title');
+            if (!titleEl) {
+                titleEl = document.createElement('title');
+                document.head
+                    ? document.head.appendChild(titleEl)
+                    : null;
+            }
+            titleEl.textContent = value;
+        },
+        configurable: true,
+    });
+    // Set a neutral initial title for the blank page
+    if (!document.title || document.title.startsWith('JUGGLER')) {
+        document.title = '';
+    }
+} catch (e) {
+    // If we can't override, just blank it out
+    try { document.title = ''; } catch (e2) {}
+}
 """
 
 
