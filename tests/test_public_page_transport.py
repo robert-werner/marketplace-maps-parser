@@ -31,6 +31,34 @@ async def _noop_sleep(*args, **kwargs):
 # ---------------------------------------------------------------------------
 
 
+class _FakeNextButtonLocator:
+    """Stand-in for the reviews widget's «Дальше» control.
+
+    Visible while the NEXT page number in ``cards_by_page`` has
+    cards; clicking advances the fake page's number (the widget
+    replaces its content rather than appending)."""
+
+    def __init__(self, *, page: "_FakePage") -> None:
+        self._page = page
+
+    def _next_has_cards(self) -> bool:
+        nxt = self._page.cards_by_page.get(
+            self._page.current_page_num + 1, [],
+        )
+        return bool(nxt) and not self._page._in_challenge
+
+    async def count(self) -> int:
+        return 1 if self._next_has_cards() else 0
+
+    @property
+    def first(self) -> "_FakeNextButtonLocator":
+        return self
+
+    async def click(self, **kwargs) -> None:
+        if self._next_has_cards():
+            self._page.current_page_num += 1
+
+
 class _FakeLocator:
     """Stand-in for a Playwright Locator with a fixed set of
     matching elements (cards).
@@ -236,7 +264,14 @@ class _FakePage:
     async def wait_for(self, *args, **kwargs) -> None:
         return None
 
-    def locator(self, selector: str) -> _FakeLocator:
+    @property
+    def url(self) -> str:
+        return (
+            "https://www.ozon.ru/product/foo-123/reviews"
+            f"?page={max(self.current_page_num, 1)}&page_key=fake"
+        )
+
+    def locator(self, selector: str):
         if selector == "[data-review-uuid]":
             # Return a locator that re-evaluates on every count()
             # call — mirrors how real Playwright works (each
@@ -250,6 +285,8 @@ class _FakePage:
                 )
 
             return _FakeLocator(_cards)
+        if "Дальше" in selector:
+            return _FakeNextButtonLocator(page=self)
         return _FakeLocator(lambda: [])
 
     async def screenshot(self, *args, **kwargs) -> None:
@@ -668,18 +705,19 @@ async def test_stealth_not_applied_when_disabled(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# iter_all_ozon_reviews — pagination + scroll supplement
+# iter_all_ozon_reviews — widget flow primary, legacy fallback
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_iter_all_ozon_reviews_yields_pagination_strategy(monkeypatch):
-    """The unified iterator should yield ``("pagination", node)``
-    tuples from the pagination phase.
-    """
+async def test_iter_all_ozon_reviews_widget_primary(monkeypatch):
+    """The unified iterator's first phase is the widget flow; when
+    it collects anything, the legacy pagination/scroll phases are
+    skipped (they can only re-deliver the same anonymous-capped
+    reviews)."""
     cards_by_page = {
         1: [_make_card("r1"), _make_card("r2")],
-        2: [],  # stop
+        2: [],  # «Дальше» hidden (next page empty) → widget stops
     }
     _patch_browser(monkeypatch, cards_by_page)
 
@@ -695,12 +733,40 @@ async def test_iter_all_ozon_reviews_yields_pagination_strategy(monkeypatch):
         page_delay_seconds=0,
         scroll_pause_seconds=0,
     ):
-        yielded.append((strategy, node.get("reviewId")))
+        yielded.append((strategy, node.get("uuid")))
 
-    # All yields should be "pagination"
-    assert all(s == "pagination" for s, _ in yielded)
+    assert all(s == "widget" for s, _ in yielded)
     ids = [rid for _, rid in yielded]
     assert ids == ["r1", "r2"]
+
+
+@pytest.mark.asyncio
+async def test_widget_flow_follows_next_button(monkeypatch):
+    """The widget flow clicks «Дальше» and waits for the card set
+    to be REPLACED (pagination-as-infinite-scroll), yielding each
+    batch until the button disappears."""
+    cards_by_page = {
+        1: [_make_card("r1"), _make_card("r2")],
+        2: [_make_card("r3")],
+        3: [],  # no 3rd page → button hidden after page 2
+    }
+    fake_browser = _patch_browser(monkeypatch, cards_by_page)
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    batches = []
+    async for batch in transport.iter_ozon_reviews_by_widget(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        batches.append([c["uuid"] for c in batch])
+
+    assert batches == [["r1", "r2"], ["r3"]]
+    # both pages were rendered in ONE session (no restarts)
+    assert len(fake_browser.pages_created) == 1
 
 
 @pytest.mark.asyncio
@@ -727,7 +793,7 @@ async def test_iter_all_ozon_reviews_max_reviews_cap(monkeypatch):
         page_delay_seconds=0,
         scroll_pause_seconds=0,
     ):
-        yielded.append(node.get("reviewId"))
+        yielded.append(node.get("uuid"))
 
     assert len(yielded) == 3
     assert yielded == ["r0", "r1", "r2"]
