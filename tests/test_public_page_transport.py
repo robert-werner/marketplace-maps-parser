@@ -48,6 +48,8 @@ class _FakeNextButtonLocator:
         return bool(nxt) and not self._page._in_challenge
 
     async def count(self) -> int:
+        if self._page.hide_next_button:
+            return 0
         return 1 if self._next_has_cards() else 0
 
     @property
@@ -228,6 +230,9 @@ class _FakePage:
     ) -> None:
         self.cards_by_page = cards_by_page
         self._browser = browser
+        # Simulates the anonymous AB-variant with no pagination
+        # controls (measured 2026-09-15: ?__rr=1&abt_att=1).
+        self.hide_next_button = False
         self.current_page_num = 0
         self.goto_calls: list[str] = []
         self.add_init_script_calls: list[str] = []
@@ -347,9 +352,11 @@ class _FakeBrowser:
         *,
         cards_by_page: dict[int, list[dict[str, Any]]],
         challenge_until_goto: int = 0,
+        no_next_button: bool = False,
     ) -> None:
         self.cards_by_page = cards_by_page
         self.challenge_until_goto = challenge_until_goto
+        self.no_next_button = no_next_button
         self.total_gotos = 0
         self.pages_created: list[_FakePage] = []
 
@@ -364,6 +371,7 @@ class _FakeBrowser:
             cards_by_page=self.cards_by_page,
             browser=self,
         )
+        page.hide_next_button = self.no_next_button
         self.pages_created.append(page)
         return page
 
@@ -372,12 +380,14 @@ def _patch_browser(
     monkeypatch,
     cards_by_page,
     challenge_until_goto: int = 0,
+    no_next_button: bool = False,
 ):
     """Patch ``_import_invisible_playwright`` to return a fake
     browser factory."""
     fake_browser = _FakeBrowser(
         cards_by_page=cards_by_page,
         challenge_until_goto=challenge_until_goto,
+        no_next_button=no_next_button,
     )
 
     def fake_import():
@@ -1426,3 +1436,49 @@ async def test_session_cookies_injected_into_every_page(monkeypatch):
         first_goto_index = 0
         assert page.add_init_script_calls == []  # no stealth script
         assert len(page.goto_calls) > first_goto_index
+
+
+@pytest.mark.asyncio
+async def test_iter_all_falls_back_when_widget_has_no_button(monkeypatch):
+    """Anonymous AB-variant without pagination controls: the widget
+    phase stops on page 1, and the legacy URL pagination MUST run
+    and deliver the deeper pages (previously it was skipped and the
+    run ended with just the first page's cards)."""
+    cards_by_page = {
+        1: [_make_card("r1"), _make_card("r2")],
+        2: [_make_card("r3")],
+        3: [],  # idle stop for the legacy pagination
+    }
+    _patch_browser(
+        monkeypatch, cards_by_page, no_next_button=True,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    yielded = []
+    async for strategy, node in transport.iter_all_ozon_reviews(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+        page_delay_seconds=0,
+        scroll_pause_seconds=0,
+    ):
+        # widget yields raw cards (uuid); the legacy pagination
+        # phase wraps cards into API-shaped nodes (reviewId).
+        rid = (
+            node.get("uuid")
+            if strategy == "widget"
+            else node.get("reviewId")
+        )
+        yielded.append((strategy, rid))
+
+    strategies = {s for s, _ in yielded}
+    ids = [rid for _, rid in yielded]
+    # widget delivered page 1…
+    assert ("widget", "r1") in yielded
+    # …and the legacy pagination delivered page 2's card
+    assert ("pagination", "r3") in yielded
+    assert strategies == {"widget", "pagination"}
+    assert ids == ["r1", "r2", "r3"]

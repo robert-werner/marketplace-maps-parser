@@ -849,13 +849,20 @@ class PublicPageTransport:
         # when it works it covers everything the URL-pagination and
         # scroll phases could reach, and much more beyond (see
         # ``iter_ozon_reviews_by_widget``). The legacy phases only
-        # run when the widget flow produced nothing.
+        # run when the widget flow produced nothing OR stopped on
+        # the first page: anonymous sessions are AB-bucketed, and
+        # the no-pagination variant (measured 2026-09-15:
+        # ``?__rr=1&abt_att=1`` renders no «Дальше» button at all)
+        # leaves the widget stuck on page 1 — while the legacy
+        # naked-URL pagination still reaches its ~5 pages there.
+        widget_batches = 0
         try:
             async for batch in self.iter_ozon_reviews_by_widget(
                 product_path=product_path,
                 max_reviews=max_reviews,
                 retry_attempts=retry_attempts,
             ):
+                widget_batches += 1
                 for card in batch:
                     rid = card.get("uuid")
                     if rid and rid in seen_ids:
@@ -874,10 +881,9 @@ class PublicPageTransport:
                 f"{exc} — пробую классическую пагинацию"
             )
 
-        if seen_ids:
-            # The widget flow already covered the first pages; URL
-            # pagination and scroll can only re-deliver the same
-            # ~150 anonymous-capped reviews.
+        if seen_ids and widget_batches > 1:
+            # The widget flow got past the first page — it covered
+            # everything the legacy phases could re-deliver.
             return
 
         if max_reviews is not None and len(seen_ids) >= max_reviews:
