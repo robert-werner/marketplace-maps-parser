@@ -259,6 +259,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help=(
+            "public_page only: parallel widget-flow workers — "
+            "browser tabs of one session sharding the review pages "
+            "(default: 1 = sequential). NOTE (measured 2026-09-15): "
+            "tabs of one browser session serialize on Ozon's side / "
+            "the single proxy tunnel, so wall time stays roughly "
+            "the same; kept as the foundation for multi-session "
+            "sharding. For a real speedup today run several "
+            "processes with different --proxy ports."
+        ),
+    )
+    parser.add_argument(
         "--free-proxy-country",
         default=None,
         help=(
@@ -465,6 +480,7 @@ def _build_ozon_transport(args: argparse.Namespace):
             stealth=not args.no_stealth,
             randomize_fingerprint=args.randomize_fingerprint,
             cookies=cookies,
+            workers=args.workers,
         )
 
     if args.transport == "curl_cffi":

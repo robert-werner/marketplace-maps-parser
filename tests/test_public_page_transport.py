@@ -320,6 +320,30 @@ class _FakePage:
             return "<html>antibot challenge __cf_chl script</html>"
         return f"<html>page {self.current_page_num}</html>"
 
+    async def evaluate(self, expression: str, *args) -> Any:
+        # Fast batch readers of the widget flow (one round-trip per
+        # page instead of ~240 attribute reads).
+        if "querySelectorAll('[data-review-uuid]')" not in expression:
+            return None
+        cards = (
+            []
+            if self._in_challenge
+            else self.cards_by_page.get(self.current_page_num, [])
+        )
+        if ".map(e => e.getAttribute('data-review-uuid'))" in expression:
+            return [c.get("uuid") for c in cards]
+        return [
+            {
+                "uuid": c.get("uuid"),
+                "published_at": c.get("published_at"),
+                "status_id": c.get("status_id"),
+                "text": c.get("text"),
+                "rating": c.get("rating"),
+                "images": c.get("images", []),
+            }
+            for c in cards
+        ]
+
     async def close(self) -> None:
         pass
 
@@ -1426,3 +1450,69 @@ async def test_session_cookies_injected_into_every_page(monkeypatch):
         first_goto_index = 0
         assert page.add_init_script_calls == []  # no stealth script
         assert len(page.goto_calls) > first_goto_index
+
+
+@pytest.mark.asyncio
+async def test_widget_parallel_workers_cover_all_pages(monkeypatch):
+    """workers=2: two tabs of one session shard the page space via
+    the frontier queue — every page's cards arrive exactly once,
+    both tabs participate, and the flow ends when the button
+    disappears."""
+    cards_by_page = {
+        p: [_make_card(f"r{p}")] for p in range(1, 8)  # 7 страниц
+    }
+    fake_browser = _patch_browser(monkeypatch, cards_by_page)
+
+    # A REAL yield (not a plain no-op): the frontier handoff relies
+    # on sleep(0) passing control to a worker already blocked on
+    # the queue.
+    async def _yield_sleep(*a, **kw):
+        await _REAL_SLEEP(0)
+    monkeypatch.setattr(asyncio, "sleep", _yield_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0, max_idle_pages=1, workers=2,
+    )
+    all_ids: list[str] = []
+    async for batch in transport.iter_ozon_reviews_by_widget(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        all_ids.extend(c["uuid"] for c in batch)
+
+    assert sorted(all_ids) == [f"r{p}" for p in range(1, 8)]
+    # обе вкладки работали (каждая ходила по своим страницам)
+    walked_pages = [
+        p for p in fake_browser.pages_created if p.goto_calls
+    ]
+    assert len(walked_pages) == 2, (
+        "одна из вкладок не получила ни одной страницы — "
+        "раздача фронтира сломана"
+    )
+
+
+@pytest.mark.asyncio
+async def test_widget_parallel_stops_at_max_reviews(monkeypatch):
+    """max_reviews stops all workers: the drain loop closes the
+    generator, workers get cancelled via the done event."""
+    cards_by_page = {
+        p: [_make_card(f"r{p}")] for p in range(1, 20)
+    }
+    _patch_browser(monkeypatch, cards_by_page)
+
+    async def _yield_sleep(*a, **kw):
+        await _REAL_SLEEP(0)
+    monkeypatch.setattr(asyncio, "sleep", _yield_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0, max_idle_pages=1, workers=2,
+    )
+    count = 0
+    async for batch in transport.iter_ozon_reviews_by_widget(
+        product_path="/product/foo-123",
+        max_reviews=5,
+        retry_attempts=1,
+    ):
+        count += len(batch)
+
+    assert count >= 5

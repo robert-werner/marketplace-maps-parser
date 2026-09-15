@@ -40,6 +40,8 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -125,6 +127,11 @@ class PublicPageTransport:
         # discarded pages that were perfectly fine (the full-page
         # screenshot taken seconds later showed all 30 cards).
         card_wait_ms: int = 90_000,
+        # Parallel widget-flow workers: browser TABS in the SAME
+        # session, each walking its own segment of review pages
+        # (the widget's page_key URLs are directly addressable).
+        # 1 = current sequential behavior.
+        workers: int = 1,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -164,6 +171,7 @@ class PublicPageTransport:
         self.warmup = warmup
         self.cookies = cookies
         self.card_wait_ms = card_wait_ms
+        self.workers = max(1, workers)
 
     # ------------------------------------------------------------------
     # Antibot detection & human-like navigation
@@ -1098,6 +1106,75 @@ class PublicPageTransport:
         except Exception:
             return None
 
+    # Batch readers for the widget flow: one evaluate per PAGE
+    # instead of ~240 sequential per-card attribute round-trips
+    # (3 attributes + inner_text + rating + images per card × 30
+    # cards) — the dominant per-page cost after navigation itself.
+    _UUIDS_JS = (
+        "() => [...document.querySelectorAll("
+        "'[data-review-uuid]')]"
+        ".map(e => e.getAttribute('data-review-uuid'))"
+    )
+
+    _READ_CARDS_JS = """
+    () => {
+        const ratingOf = (card) => {
+            const byGlyph = new Map();
+            card.querySelectorAll('svg path').forEach(p => {
+                const d = p.getAttribute('d');
+                if (!d) return;
+                if (!byGlyph.has(d)) byGlyph.set(d, []);
+                byGlyph.get(d).push(getComputedStyle(p).fill);
+            });
+            let starFills = null;
+            for (const fills of byGlyph.values()) {
+                if (fills.length >= 3 && fills.length <= 6) {
+                    if (!starFills || fills.length > starFills.length)
+                        starFills = fills;
+                }
+            }
+            if (!starFills) return null;
+            let orange = 0;
+            for (const f of starFills) {
+                const m = f.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+                if (!m) continue;
+                const r = +m[1], g = +m[2], b = +m[3];
+                if (r >= 200 && g >= 120 && g <= 220 && b <= 100) orange++;
+            }
+            return orange > 0 ? orange : null;
+        };
+        return [...document.querySelectorAll('[data-review-uuid]')]
+            .map(card => ({
+                uuid: card.getAttribute('data-review-uuid'),
+                published_at: card.getAttribute('publishedat'),
+                status_id: card.getAttribute('statusid'),
+                text: card.innerText || '',
+                rating: ratingOf(card),
+                images: [...card.querySelectorAll('img')]
+                    .map(i => i.getAttribute('src')).filter(Boolean),
+            }));
+    }
+    """
+
+    async def _page_uuids_fast(self, page) -> list[str]:
+        """UUIDs of the currently rendered cards (one round-trip)."""
+        try:
+            out = await page.evaluate(self._UUIDS_JS)
+            return [u for u in (out or []) if u]
+        except Exception:
+            return await self._locator_uuids(
+                page.locator("[data-review-uuid]")
+            )
+
+    async def _read_cards_fast(self, page) -> list[dict[str, Any]]:
+        """All rendered cards with rating, in one round-trip."""
+        try:
+            return await page.evaluate(self._READ_CARDS_JS) or []
+        except Exception:
+            return await self._read_review_cards(
+                page.locator("[data-review-uuid]")
+            )
+
     @staticmethod
     def _is_filled_star(color: dict[str, Any] | None) -> bool:
         """Heuristic for deciding whether a star SVG is filled."""
@@ -1321,27 +1398,26 @@ class PublicPageTransport:
 
         The reviews widget paginates by REPLACING the 30 rendered
         cards, so — unlike a lazy-load scroll — the card count does
-        not grow. Poll the UUID set until it changes, nudging the
-        page with a small scroll half-way through the wait.
+        not grow. Poll the UUID set (one round-trip per poll) until
+        it changes, nudging the page with a small scroll near the
+        end of the wait.
         """
-        import time as _time
-
-        deadline = _time.monotonic() + self.card_wait_ms / 1000
+        deadline = time.monotonic() + self.card_wait_ms / 1000
         nudged = False
-        while _time.monotonic() < deadline:
+        while time.monotonic() < deadline:
             try:
-                current = set(await self._locator_uuids(locator))
+                current = set(await self._page_uuids_fast(page))
             except Exception:
                 current = None
             if current and current != prev_uuids:
                 return current
-            if not nudged and _time.monotonic() > deadline - 15:
+            if not nudged and time.monotonic() > deadline - 15:
                 try:
                     await page.mouse.wheel(0, 900)
                 except Exception:
                     pass
                 nudged = True
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.3)
         return None
 
     async def iter_ozon_reviews_by_widget(
@@ -1370,8 +1446,23 @@ class PublicPageTransport:
         session-level failure rotates the proxy and resumes from
         the last good widget URL. Stops when the button disappears,
         the content stops changing, ``max_reviews`` is reached, or
-        the restart budget is exhausted.
+                        the restart budget is exhausted.
+
+        With ``workers > 1`` the flow runs in parallel: several
+        browser TABS in the SAME session walk disjoint page
+        segments (the widget's page_key URLs are directly
+        addressable), coordinated through a frontier queue — see
+        ``_iter_widget_parallel``.
         """
+        if self.workers > 1:
+            async for batch in self._iter_widget_parallel(
+                product_path,
+                max_reviews=max_reviews,
+                retry_attempts=retry_attempts,
+            ):
+                yield batch
+            return
+
         retry_async = _import_retry_async()
         retryable_errors = _import_retryable_errors()
         sleep_with_jitter = _import_sleep_with_jitter()
@@ -1442,7 +1533,7 @@ class PublicPageTransport:
                         # (measured: without it ~38% of deep-page
                         # cards came out rating=None).
                         await page.wait_for_timeout(1_200)
-                        cards = await self._read_review_cards(locator)
+                        cards = await self._read_cards_fast(page)
                         new_cards = [
                             c for c in cards
                             if c.get("uuid")
@@ -1511,6 +1602,279 @@ class PublicPageTransport:
                     "ротирую proxy, продолжаю с последней страницы"
                 )
                 await sleep_with_jitter(5.0)
+
+    # Pages one worker walks before handing the frontier to the
+    # pool — small enough to balance workers, large enough to keep
+    # the frontier queue overhead negligible.
+    _WIDGET_STRIDE = 3
+
+    @staticmethod
+    def _widget_page_no(url: str) -> int:
+        m = re.search(r"page=(\d+)", url)
+        return int(m.group(1)) if m else 0
+
+    async def _iter_widget_parallel(
+        self,
+        product_path: str,
+        *,
+        max_reviews: int | None = None,
+        retry_attempts: int = 3,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Multi-tab widget flow: N pages of ONE session walk
+        disjoint page segments in parallel.
+
+        The widget's page_key URLs are directly addressable, so the
+        page space is sharded through a frontier queue: a worker
+        takes the next unread URL, walks ``_WIDGET_STRIDE`` pages
+        (read → click «Дальше» → wait for replacement), then hands
+        the URL it landed on back to the queue. Whoever meets the
+        end (button gone / content stuck / ``max_reviews``) sets a
+        done flag and no URL is pushed, so the remaining workers
+        wind down within one segment. Session-level failures rotate
+        the proxy and restart from the deepest page reached.
+        """
+        retry_async = _import_retry_async()
+        retryable_errors = _import_retryable_errors()
+        sleep_with_jitter = _import_sleep_with_jitter()
+
+        product_url = f"https://www.ozon.ru{product_path}"
+        resume_url = f"{product_url}/reviews?page=1"
+        seen: set[str] = set()
+        restarts_left = max(3, min(retry_attempts, 10))
+
+        while True:
+            if (
+                max_reviews is not None
+                and len(seen) >= max_reviews
+            ):
+                return
+
+            page_proxy = self._get_proxy_for_page()
+            if page_proxy is not None and self.proxy_pool is not None:
+                print(
+                    "Ozon (public-widget): proxy: "
+                    f"{page_proxy.get('server', 'unknown')} "
+                    f"({self.workers} воркера)"
+                )
+
+            ctx: dict[str, Any] = {
+                "frontier": asyncio.Queue(),
+                "out": asyncio.Queue(),
+                "done": asyncio.Event(),
+                "error": None,
+                "seen": seen,
+                "active": 0,
+                "max_reviews": max_reviews,
+                "product_url": product_url,
+                "page_proxy": page_proxy,
+                "deepest": {"n": 0, "url": None},
+            }
+            tasks: list[asyncio.Task] = []
+            try:
+                async with _import_invisible_playwright()(
+                    proxy=page_proxy,
+                    seed=None,
+                    pin=self.pin,
+                    humanize=self.humanize,
+                ) as browser:
+                    pages = [
+                        await self._new_page_with_stealth(browser)
+                        for _ in range(self.workers)
+                    ]
+                    # One warmup for the whole session; the tabs
+                    # share the browser context (and cookies).
+                    await self._warmup_goto(
+                        pages[0],
+                        product_path=product_path,
+                        retry_async=retry_async,
+                        retryable_errors=retryable_errors,
+                        label="Ozon public-widget",
+                    )
+                    ctx["frontier"].put_nowait(resume_url)
+                    for i, tab in enumerate(pages):
+                        tasks.append(asyncio.create_task(
+                            self._widget_worker(tab, i, ctx)
+                        ))
+
+                    finished = 0
+                    try:
+                        while finished < len(tasks):
+                            batch = await ctx["out"].get()
+                            if batch is None:
+                                finished += 1
+                                continue
+                            yield batch
+                        await asyncio.gather(
+                            *tasks, return_exceptions=True,
+                        )
+                    finally:
+                        ctx["done"].set()
+                        for t in tasks:
+                            t.cancel()
+                        await asyncio.gather(
+                            *tasks, return_exceptions=True,
+                        )
+
+                if ctx["error"] is not None:
+                    raise ctx["error"]
+                return  # end of list / max_reviews — done
+            except Exception as exc:
+                if restarts_left <= 0:
+                    print(
+                        "Ozon (public-widget): сессии исчерпаны "
+                        f"({type(exc).__name__}: {str(exc)[:90]}) — "
+                        f"собрано {len(seen)}"
+                    )
+                    return
+                restarts_left -= 1
+                self._mark_proxy_blocked(page_proxy)
+                if ctx["deepest"]["url"]:
+                    resume_url = ctx["deepest"]["url"]
+                print(
+                    "Ozon (public-widget): сессия не удалась "
+                    f"({type(exc).__name__}: {str(exc)[:90]}) — "
+                    "ротирую proxy, продолжаю с глубже пройденной "
+                    "страницы"
+                )
+                await sleep_with_jitter(5.0)
+
+    async def _widget_worker(self, page, index: int, ctx) -> None:
+        """One widget-flow tab: repeatedly take a frontier URL,
+        walk a segment of pages, hand back the next unread URL.
+
+        Frontier handoff discipline: after pushing the next URL the
+        worker yields once (``sleep(0)``) so a worker ALREADY
+        blocked on ``frontier.get()`` receives it — without this,
+        the pushing worker re-takes its own URL in the same event
+        loop step and starves the others (measured live: 3 workers,
+        w0 walked all 34 pages). Shutdown travels as a ``None``
+        sentinel through the queue: every exiting worker puts one,
+        and every receiver re-puts it, so all blocked waiters wake.
+        """
+        label = f"w{index}"
+        try:
+            while not ctx["done"].is_set():
+                url = await ctx["frontier"].get()
+                if url is None:
+                    # pass the shutdown sentinel on, then exit
+                    ctx["frontier"].put_nowait(None)
+                    break
+
+                ctx["active"] += 1
+                try:
+                    await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=self.timeout_ms,
+                        referer=ctx["product_url"],
+                    )
+                    locator = page.locator("[data-review-uuid]")
+                    if not await self._wait_for_card_replacement(
+                        page, locator, set(),
+                    ):
+                        if await self._page_is_antibot(page):
+                            self._mark_proxy_blocked(
+                                ctx["page_proxy"]
+                            )
+                            raise RuntimeError("antibot/challenge")
+                        print(
+                            f"Ozon (public-widget[{label}]): "
+                            "карточки не появились — конец списка"
+                        )
+                        ctx["done"].set()
+                        break
+
+                    walked = 0
+                    idle = 0
+                    while (
+                        walked < self._WIDGET_STRIDE
+                        and not ctx["done"].is_set()
+                    ):
+                        if (
+                            ctx["max_reviews"] is not None
+                            and len(ctx["seen"])
+                            >= ctx["max_reviews"]
+                        ):
+                            ctx["done"].set()
+                            break
+                        await page.wait_for_timeout(1_200)
+                        cards = await self._read_cards_fast(page)
+                        new_cards = [
+                            c for c in cards
+                            if c.get("uuid")
+                            and c["uuid"] not in ctx["seen"]
+                        ]
+                        for c in new_cards:
+                            ctx["seen"].add(c["uuid"])
+                        if new_cards:
+                            idle = 0
+                            n = self._widget_page_no(page.url)
+                            if n > ctx["deepest"]["n"]:
+                                ctx["deepest"]["n"] = n
+                                ctx["deepest"]["url"] = page.url
+                            print(
+                                f"Ozon (public-widget[{label}]): "
+                                f"страница "
+                                f"{page.url.split('page=')[-1][:4]}"
+                                f" — {len(new_cards)} новых отзывов "
+                                f"(всего {len(ctx['seen'])})"
+                            )
+                            await ctx["out"].put(new_cards)
+                        else:
+                            idle += 1
+
+                        if ctx["done"].is_set():
+                            break
+                        next_btn = page.locator(
+                            self._NEXT_BUTTON_SELECTOR
+                        )
+                        if await next_btn.count() == 0:
+                            print(
+                                f"Ozon (public-widget[{label}]): "
+                                "кнопка «Дальше» исчезла — конец "
+                                "списка"
+                            )
+                            ctx["done"].set()
+                            break
+                        if idle >= 2:
+                            ctx["done"].set()
+                            break
+
+                        prev = set(await self._page_uuids_fast(page))
+                        await next_btn.first.click()
+                        replaced = await (
+                            self._wait_for_card_replacement(
+                                page, locator, prev,
+                            )
+                        )
+                        if replaced is None:
+                            if await self._page_is_antibot(page):
+                                self._mark_proxy_blocked(
+                                    ctx["page_proxy"]
+                                )
+                                raise RuntimeError(
+                                    "antibot/challenge"
+                                )
+                            continue
+                        walked += 1
+
+                    # Hand the next unread page to the pool — the
+                    # last click landed on it and it was not read
+                    # yet. The sleep(0) lets a waiting worker take
+                    # it before this one can re-take it.
+                    if not ctx["done"].is_set():
+                        ctx["frontier"].put_nowait(page.url)
+                        await asyncio.sleep(0)
+                finally:
+                    ctx["active"] -= 1
+        except Exception as exc:
+            if ctx["error"] is None:
+                ctx["error"] = exc
+            ctx["done"].set()
+        finally:
+            # wake one blocked peer; the None chain unblocks the rest
+            ctx["frontier"].put_nowait(None)
+            await ctx["out"].put(None)
 
     def _get_proxy_for_page(self) -> dict[str, str] | None:
         """Return the proxy to use for the next page fetch.

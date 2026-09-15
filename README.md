@@ -281,6 +281,29 @@ Accepted formats (auto-detected):
 
 Notes: `sameSite` values are normalized (invalid values become `Lax` — Playwright rejects anything else); entries without `name`/`value`/`domain` are skipped; a file with no valid cookies raises a clear error. Cookies expire — if the run suddenly caps at ~990 again, re-export a fresh file.
 
+### Collection speed
+
+Per-page costs after the 2026-09 optimizations: all 30 cards of a page (text + rating + images) are extracted with a **single** `page.evaluate` round-trip (the old per-attribute reader took ~1.6 s per page — 208× slower on the read alone), and the widget's content-replacement poll runs at 300 ms.
+
+`--workers N` shards the review pages across N browser tabs of one session through a frontier queue. Fair warning, measured live: tabs of a single session serialize (one Firefox + one proxy tunnel), so wall time does **not** drop with N. For a real parallel speedup today, run several **processes** with different proxy ports and merge the outputs:
+
+```bash
+python -m marketplace_maps_parser ... --proxy "http://…:10100" --output part1.jsonl &
+python -m marketplace_maps_parser ... --proxy "http://…:10101" --output part2.jsonl &
+wait
+python -c "
+import json
+seen = set()
+with open('all.jsonl', 'w', encoding='utf-8') as out:
+    for f in ('part1.jsonl', 'part2.jsonl'):
+        for line in open(f, encoding='utf-8'):
+            rid = json.loads(line)['review_id']
+            if rid not in seen:
+                seen.add(rid)
+                out.write(line)
+"
+```
+
 The script is applied via `page.add_init_script` so it runs before any page JS executes (only on the `playwright`/`hybrid` transports that hit the internal API — see the note above for why `public_page` skips it).
 
 If stealth causes issues with a particular Ozon layout, disable it temporarily with `--no-stealth` for debugging.
