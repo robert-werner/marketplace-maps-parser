@@ -209,6 +209,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--proxy",
+        default=None,
+        help=(
+            "Single proxy URL for all requests. Format: "
+            "'http://host:port' or 'http://user:pass@host:port' "
+            "or 'socks5://host:port'. Use a residential proxy to "
+            "avoid Cloudflare IP-based blocking."
+        ),
+    )
+    parser.add_argument(
+        "--proxy-list",
+        default=None,
+        help=(
+            "Path to a file with proxy URLs (one per line, '#'"
+            "comments allowed). Proxies are rotated per page — "
+            "each page uses the next proxy in the list. When a "
+            "proxy receives a Cloudflare block, it's marked "
+            "blocked and skipped on the next rotation. Use "
+            "residential proxies for best results."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -369,6 +391,10 @@ def _build_ozon_transport(args: argparse.Namespace):
     Protocol (iter_ozon_reviews_json, iter_ozon_reviews_by_scroll,
     iter_all_ozon_reviews, get_ozon_reviews_json).
     """
+    # Build proxy pool / single proxy from CLI args.
+    proxy_pool = _build_proxy_pool(args)
+    single_proxy = _build_single_proxy(args) if proxy_pool is None else None
+
     if args.transport == "public_page":
         from infrastructure.transports.public_page import (
             PublicPageTransport,
@@ -377,6 +403,8 @@ def _build_ozon_transport(args: argparse.Namespace):
             timeout_ms=args.timeout_ms,
             settle_ms=args.settle_ms,
             debug_dir=args.debug_dir,
+            proxy=single_proxy,
+            proxy_pool=proxy_pool,
             humanize=not args.no_humanize,
             stealth=not args.no_stealth,
             randomize_fingerprint=args.randomize_fingerprint,
@@ -386,22 +414,51 @@ def _build_ozon_transport(args: argparse.Namespace):
         from infrastructure.transports.curl_cffi import (
             CurlCffiTransport,
         )
+        # curl_cffi takes a proxy URL string, not a dict.
+        proxy_url = None
+        if single_proxy is not None:
+            proxy_url = single_proxy.get("server")
+            if single_proxy.get("username"):
+                # curl_cffi expects 'http://user:pass@host:port'
+                from urllib.parse import urlparse
+                p = urlparse(proxy_url)
+                proxy_url = (
+                    f"{p.scheme}://{single_proxy['username']}:"
+                    f"{single_proxy.get('password', '')}@"
+                    f"{p.hostname}:{p.port}"
+                )
         return CurlCffiTransport(
             timeout=args.timeout_ms / 1000.0,
             debug_dir=args.debug_dir,
             impersonate=args.impersonate,
+            proxy=proxy_url,
         )
 
     if args.transport == "hybrid":
         from infrastructure.transports.hybrid import HybridTransport
+        # Hybrid takes playwright proxy dict + curl_cffi proxy URL.
+        pw_proxy = single_proxy
+        curl_proxy_url = None
+        if single_proxy is not None:
+            curl_proxy_url = single_proxy.get("server")
+            if single_proxy.get("username"):
+                from urllib.parse import urlparse
+                p = urlparse(curl_proxy_url)
+                curl_proxy_url = (
+                    f"{p.scheme}://{single_proxy['username']}:"
+                    f"{single_proxy.get('password', '')}@"
+                    f"{p.hostname}:{p.port}"
+                )
         return HybridTransport(
             curl_cffi_kwargs={
                 "timeout": args.timeout_ms / 1000.0,
                 "impersonate": args.impersonate,
+                "proxy": curl_proxy_url,
             },
             playwright_kwargs={
                 "timeout_ms": args.timeout_ms,
                 "settle_ms": args.settle_ms,
+                "proxy": pw_proxy,
                 "humanize": not args.no_humanize,
                 "fetch_strategy": args.fetch_strategy,
                 "stealth": not args.no_stealth,
@@ -417,10 +474,36 @@ def _build_ozon_transport(args: argparse.Namespace):
         timeout_ms=args.timeout_ms,
         settle_ms=args.settle_ms,
         debug_dir=args.debug_dir,
+        proxy=single_proxy,
         humanize=not args.no_humanize,
         fetch_strategy=args.fetch_strategy,
         stealth=not args.no_stealth,
     )
+
+
+def _build_proxy_pool(args: argparse.Namespace):
+    """Build a ProxyPool from --proxy-list. Returns None if no
+    proxy list was provided."""
+    if not args.proxy_list:
+        return None
+    from infrastructure.transports.proxy_pool import ProxyPool
+    return ProxyPool.from_file(args.proxy_list)
+
+
+def _build_single_proxy(args: argparse.Namespace):
+    """Build a single proxy dict from --proxy. Returns None if no
+    single proxy was provided."""
+    if not args.proxy:
+        return None
+    from infrastructure.transports.proxy_pool import parse_proxy_line
+    proxy = parse_proxy_line(args.proxy)
+    if proxy is None:
+        raise SystemExit(
+            f"Invalid --proxy format: {args.proxy!r}. "
+            "Expected: 'http://host:port' or "
+            "'http://user:pass@host:port' or 'socks5://host:port'"
+        )
+    return proxy
 
 
 async def _collect_wildberries(args: argparse.Namespace) -> int:

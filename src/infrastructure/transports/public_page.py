@@ -97,6 +97,7 @@ class PublicPageTransport:
         settle_ms: int = 3_000,
         debug_dir: str = "debug_ozon_public",
         proxy: dict[str, str] | None = None,
+        proxy_pool: Any | None = None,
         seed: int | None = None,
         pin: dict[str, Any] | None = None,
         humanize: bool = True,
@@ -110,7 +111,12 @@ class PublicPageTransport:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
         self.debug_dir = Path(debug_dir)
-        self.proxy = proxy
+        # Proxy pool takes precedence over single proxy. When a
+        # proxy_pool is provided, each page fetch rotates to the
+        # next available proxy — this is the primary defense against
+        # Cloudflare IP-based blocking ("Выключите VPN" pages).
+        self.proxy_pool = proxy_pool
+        self.proxy = proxy if proxy_pool is None else None
         self.seed = seed
         self.pin = pin
         self.humanize = humanize
@@ -179,9 +185,30 @@ class PublicPageTransport:
                 yield page_num, payload
             return
 
+        # When a proxy_pool is provided, we MUST use per-page browser
+        # creation (like randomize_fingerprint) so each page can use
+        # a different proxy. Override randomize_fingerprint if needed.
+        if self.proxy_pool is not None and not self.randomize_fingerprint:
+            print(
+                "Ozon (public): proxy_pool активен — переключаю в "
+                "режим per-page browser для ротации proxy"
+            )
+            async for page_num, payload in self._iter_pages_randomized(
+                product_path=product_path,
+                start_page=start_page,
+                max_pages=max_pages,
+                retry_attempts=retry_attempts,
+                seen_uuids=seen_uuids,
+                idle_pages_ref=[idle_pages],
+                processed_pages_ref=[processed_pages],
+            ):
+                yield page_num, payload
+            return
+
         # Single browser for the whole run (default, faster).
+        proxy_for_run = self._get_proxy_for_page()
         async with _import_invisible_playwright()(
-            proxy=self.proxy,
+            proxy=proxy_for_run,
             seed=self.seed,
             pin=self.pin,
             humanize=self.humanize,
@@ -371,9 +398,16 @@ class PublicPageTransport:
 
             # Open a fresh browser for this page. seed=None →
             # secrets.randbits(31) → new random fingerprint every
-            # time.
+            # time. When a proxy_pool is active, also rotate to the
+            # next proxy for this page.
+            page_proxy = self._get_proxy_for_page()
+            if page_proxy is not None and self.proxy_pool is not None:
+                print(
+                    f"Ozon (public-rand): page {current_page_num} — "
+                    f"proxy: {page_proxy.get('server', 'unknown')}"
+                )
             async with _import_invisible_playwright()(
-                proxy=self.proxy,
+                proxy=page_proxy,
                 seed=None,  # randomize on every page
                 pin=self.pin,
                 humanize=self.humanize,
@@ -831,6 +865,42 @@ class PublicPageTransport:
                     f"stealth init script: {exc}"
                 )
         return page
+
+    def _get_proxy_for_page(self) -> dict[str, str] | None:
+        """Return the proxy to use for the next page fetch.
+
+        When a ``proxy_pool`` is configured, returns the next proxy
+        in the rotation. When ``proxy`` is configured (single
+        proxy), returns that. When neither is configured, returns
+        ``None`` (direct connection).
+        """
+        if self.proxy_pool is not None:
+            proxy = self.proxy_pool.next()
+            if proxy is None:
+                print(
+                    "Ozon (public): WARNING — все proxy в пуле "
+                    "заблокированы! Использую прямое подключение."
+                )
+                return None
+            return proxy
+        return self.proxy
+
+    def _mark_proxy_blocked(self, proxy: dict[str, str] | None) -> None:
+        """Mark a proxy as blocked in the pool (if a pool is active).
+
+        Called when a page fetch returns a Cloudflare "Выключите VPN"
+        block page — the proxy's IP is on Cloudflare's blocklist and
+        should not be reused.
+        """
+        if proxy is None or self.proxy_pool is None:
+            return
+        self.proxy_pool.mark_blocked(proxy)
+        stats = self.proxy_pool.get_stats()
+        print(
+            f"Ozon (public): proxy заблокирован "
+            f"({proxy.get('server', 'unknown')}). "
+            f"Доступно proxy: {stats['available']}/{stats['total']}"
+        )
 
     # ------------------------------------------------------------------
     # Debug

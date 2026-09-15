@@ -133,6 +133,20 @@ uv run python -m marketplace_maps_parser \
   --transport public_page \
   --randomize-fingerprint
 
+# Use a single residential proxy (avoids Cloudflare "Выключите VPN" blocks)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --proxy "http://user:pass@residential.proxy.com:8080"
+
+# Use a proxy list with per-page rotation (best anti-blocking)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --proxy-list proxies.txt \
+  --transport public_page \
+  --randomize-fingerprint
+
 # Use legacy in-page fetch (faster but more Cloudflare 403s)
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
@@ -309,6 +323,40 @@ This makes every page look like a different browser to Cloudflare — even if on
 **Trade-off**: slower (~2-5s browser startup per page vs. one-time startup for the whole run). Use this only when Cloudflare is actively fingerprinting your sessions and the default (one browser per run) is getting blocked.
 
 Without `--randomize-fingerprint` (default), one `InvisiblePlaywright` browser is reused for all pages in a single pagination run — faster, but all pages share the same fingerprint.
+
+#### Proxy pool with rotation (`--proxy` / `--proxy-list`)
+
+When Cloudflare returns the "Выключите VPN, перезагрузите роутер или подключитесь к другой сети" block page (with an incident ID like `fab_chlg_...`), it means Cloudflare has identified your IP as a VPN/proxy/datacenter and is blocking at the **network level** — no fingerprint or stealth trick can help.
+
+The only reliable solution is to use **residential proxies** (IPs from real ISPs) and to **rotate** them so a single blocked IP doesn't kill the whole run.
+
+**`--proxy URL`** — use a single proxy for all requests:
+```bash
+python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --proxy "http://user:pass@residential.proxy.com:8080"
+```
+
+**`--proxy-list FILE`** — rotate through a list of proxies (one per line, `#` comments allowed):
+```
+# proxies.txt
+http://user1:pass1@residential1.proxy.com:8080
+http://user2:pass2@residential2.proxy.com:8080
+socks5://user3:pass3@residential3.proxy.com:1080
+```
+```bash
+python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --proxy-list proxies.txt \
+  --transport public_page \
+  --randomize-fingerprint
+```
+
+When `--proxy-list` is active, the transport automatically switches to **per-page browser** mode (each page gets a fresh browser with the next proxy in the rotation). Blocked proxies are marked and skipped on the next rotation. When all proxies are blocked, the transport falls back to direct connection with a warning.
+
+**Best results**: combine `--proxy-list` (residential IPs) + `--randomize-fingerprint` (new browser fingerprint per page) + `--transport public_page` (scrape the CDN page, not the API). This gives you a different IP + different browser fingerprint + least-protected URL on every page — Cloudflare has nothing consistent to block on.
 
 ## Architecture
 
