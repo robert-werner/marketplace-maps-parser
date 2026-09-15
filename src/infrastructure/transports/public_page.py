@@ -105,6 +105,7 @@ class PublicPageTransport:
         scroll_max_idle_rounds: int = 5,
         scroll_step: int = 1800,
         scroll_pause_ms: int = 800,
+        randomize_fingerprint: bool = False,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -122,6 +123,13 @@ class PublicPageTransport:
         self.scroll_max_idle_rounds = scroll_max_idle_rounds
         self.scroll_step = scroll_step
         self.scroll_pause_ms = scroll_pause_ms
+        # When True, create a fresh InvisiblePlaywright browser for
+        # each page instead of reusing one for the whole pagination
+        # run. Each new browser gets a new random fingerprint (when
+        # seed=None), so every page looks like a different browser
+        # to Cloudflare. Slower (~2-5s browser startup per page) but
+        # maximally stealthy.
+        self.randomize_fingerprint = randomize_fingerprint
 
     # ------------------------------------------------------------------
     # Pagination iterator (mirrors BrowserJsonTransport.iter_ozon_reviews_json)
@@ -140,11 +148,38 @@ class PublicPageTransport:
         a dict shaped like the API response (with a ``reviews`` key
         and a ``nextPage`` key) so the existing adapter code can
         consume it unchanged.
+
+        When ``randomize_fingerprint=True``, a fresh
+        ``InvisiblePlaywright`` browser is created for each page
+        (each with a new random fingerprint). When False (default),
+        one browser is reused for the whole pagination run.
         """
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         retry_async = _import_retry_async()
         retryable_errors = _import_retryable_errors()
 
+        current_page_num = start_page
+        processed_pages = 0
+        seen_uuids: set[str] = set()
+        idle_pages = 0
+
+        if self.randomize_fingerprint:
+            # Per-page browser: each page gets a fresh
+            # InvisiblePlaywright instance with a new random
+            # fingerprint (seed=None → secrets.randbits(31)).
+            async for page_num, payload in self._iter_pages_randomized(
+                product_path=product_path,
+                start_page=start_page,
+                max_pages=max_pages,
+                retry_attempts=retry_attempts,
+                seen_uuids=seen_uuids,
+                idle_pages_ref=[idle_pages],
+                processed_pages_ref=[processed_pages],
+            ):
+                yield page_num, payload
+            return
+
+        # Single browser for the whole run (default, faster).
         async with _import_invisible_playwright()(
             proxy=self.proxy,
             seed=self.seed,
@@ -152,11 +187,6 @@ class PublicPageTransport:
             humanize=self.humanize,
         ) as browser:
             page = await self._new_page_with_stealth(browser)
-
-            current_page_num = start_page
-            processed_pages = 0
-            seen_uuids: set[str] = set()
-            idle_pages = 0
 
             while True:
                 if (
@@ -295,6 +325,157 @@ class PublicPageTransport:
                 yield current_page_num, payload
 
                 current_page_num += 1
+
+    async def _iter_pages_randomized(
+        self,
+        *,
+        product_path: str,
+        start_page: int,
+        max_pages: int | None,
+        retry_attempts: int,
+        seen_uuids: set[str],
+        idle_pages_ref: list[int],
+        processed_pages_ref: list[int],
+    ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
+        """Per-page browser iteration with random fingerprint.
+
+        Opens a fresh ``InvisiblePlaywright`` instance for each
+        page, so each page gets a new random fingerprint (when
+        ``seed=None``). Slower (~2-5s browser startup per page) but
+        maximally stealthy — every page looks like a different
+        browser to Cloudflare.
+        """
+        retry_async = _import_retry_async()
+        retryable_errors = _import_retryable_errors()
+
+        current_page_num = start_page
+
+        while True:
+            if (
+                max_pages is not None
+                and processed_pages_ref[0] >= max_pages
+            ):
+                return
+
+            if idle_pages_ref[0] >= self.max_idle_pages:
+                print(
+                    f"Ozon (public-rand): {idle_pages_ref[0]} подряд "
+                    "пустых страниц; сбор завершён"
+                )
+                return
+
+            reviews_url = (
+                f"https://www.ozon.ru"
+                f"{product_path}/reviews?page={current_page_num}"
+            )
+
+            # Open a fresh browser for this page. seed=None →
+            # secrets.randbits(31) → new random fingerprint every
+            # time.
+            async with _import_invisible_playwright()(
+                proxy=self.proxy,
+                seed=None,  # randomize on every page
+                pin=self.pin,
+                humanize=self.humanize,
+            ) as browser:
+                page = await self._new_page_with_stealth(browser)
+
+                await retry_async(
+                    lambda url=reviews_url: page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=self.timeout_ms,
+                    ),
+                    attempts=retry_attempts,
+                    base_delay=3.0,
+                    max_delay=30.0,
+                    factor=2.0,
+                    jitter=0.3,
+                    retry_on=retryable_errors(),
+                    label=f"Ozon public-rand page {current_page_num}",
+                )
+
+                if self.settle_ms > 0:
+                    await page.wait_for_timeout(self.settle_ms)
+
+                review_locator = page.locator("[data-review-uuid]")
+                try:
+                    await review_locator.first.wait_for(
+                        state="attached",
+                        timeout=30_000,
+                    )
+                except Exception:
+                    print(
+                        f"Ozon (public-rand): page "
+                        f"{current_page_num} — no "
+                        "[data-review-uuid] cards found"
+                    )
+                    await self._save_debug_page(
+                        page=page,
+                        page_number=current_page_num,
+                    )
+                    idle_pages_ref[0] += 1
+                    current_page_num += 1
+                    continue
+
+                cards = await self._read_review_cards(review_locator)
+
+                new_cards = []
+                for card in cards:
+                    uuid = card.get("uuid")
+                    if uuid and uuid in seen_uuids:
+                        continue
+                    if uuid:
+                        seen_uuids.add(uuid)
+                    new_cards.append(card)
+
+                await self._save_debug_page(
+                    page=page,
+                    page_number=current_page_num,
+                    cards=new_cards,
+                )
+
+                if not new_cards:
+                    idle_pages_ref[0] += 1
+                    print(
+                        f"Ozon (public-rand): page "
+                        f"{current_page_num} — 0 новых отзывов "
+                        f"(idle={idle_pages_ref[0]})"
+                    )
+                else:
+                    idle_pages_ref[0] = 0
+                    print(
+                        f"Ozon (public-rand): page "
+                        f"{current_page_num} — "
+                        f"{len(new_cards)} новых отзывов"
+                    )
+
+                processed_pages_ref[0] += 1
+
+                payload = {
+                    "reviews": [
+                        {
+                            "reviewId": card.get("uuid"),
+                            "rating": card.get("rating"),
+                            "text": card.get("text"),
+                            "author": card.get("author"),
+                            "published_at": card.get("published_at"),
+                            "nextPage": (
+                                f"{product_path}/reviews?"
+                                f"page={current_page_num + 1}"
+                            ),
+                        }
+                        for card in new_cards
+                    ],
+                    "nextPage": (
+                        f"{product_path}/reviews?"
+                        f"page={current_page_num + 1}"
+                    ),
+                }
+
+                yield current_page_num, payload
+
+            current_page_num += 1
 
     # ------------------------------------------------------------------
     # Scroll iterator

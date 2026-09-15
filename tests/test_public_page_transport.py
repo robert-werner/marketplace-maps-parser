@@ -775,3 +775,191 @@ async def test_close_is_noop():
     """
     transport = PublicPageTransport()
     await transport.close()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# randomize_fingerprint — fresh browser per page
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_randomize_fingerprint_creates_new_browser_per_page(monkeypatch):
+    """When randomize_fingerprint=True, a new InvisiblePlaywright
+    browser should be created for each page (each with a new random
+    fingerprint via seed=None).
+    """
+    cards_by_page = {
+        1: [_make_card("r1"), _make_card("r2")],
+        2: [_make_card("r3"), _make_card("r4")],
+        3: [],  # stop after this
+    }
+
+    # Track how many browser instances are created
+    browser_create_count = {"n": 0}
+    browsers_created: list[_FakeBrowser] = []
+
+    def fake_import():
+        def factory(**kwargs):
+            browser_create_count["n"] += 1
+            # Each call creates a NEW fake browser instance
+            b = _FakeBrowser(cards_by_page=cards_by_page)
+            browsers_created.append(b)
+            return b
+        return factory
+
+    monkeypatch.setattr(
+        pp_module, "_import_invisible_playwright", fake_import,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0,
+        max_idle_pages=1,
+        randomize_fingerprint=True,
+    )
+    pages = []
+    async for page_num, payload in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        pages.append(page_num)
+
+    # 2 pages yielded (page 3 is empty → stop)
+    assert pages == [1, 2]
+    # With randomize_fingerprint=True, a new browser should be
+    # created for each fetched page (including the empty page 3
+    # which triggers the idle-pages stop) → 3 browser instances.
+    assert browser_create_count["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_randomize_fingerprint_passes_seed_none(monkeypatch):
+    """Each browser created in randomize_fingerprint mode should
+    be passed seed=None (so invisible-playwright generates a random
+    fingerprint via secrets.randbits(31)).
+    """
+    cards_by_page = {
+        1: [_make_card("r1")],
+        2: [],  # stop
+    }
+
+    received_seeds: list = []
+
+    def fake_import():
+        def factory(**kwargs):
+            received_seeds.append(kwargs.get("seed"))
+            return _FakeBrowser(cards_by_page=cards_by_page)
+        return factory
+
+    monkeypatch.setattr(
+        pp_module, "_import_invisible_playwright", fake_import,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0,
+        max_idle_pages=1,
+        randomize_fingerprint=True,
+    )
+    async for _ in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        pass
+
+    # At least one browser created, all with seed=None
+    assert len(received_seeds) >= 1
+    assert all(s is None for s in received_seeds)
+
+
+@pytest.mark.asyncio
+async def test_no_randomize_fingerprint_uses_single_browser(monkeypatch):
+    """When randomize_fingerprint=False (default), only ONE
+    InvisiblePlaywright browser should be created for the whole
+    pagination run.
+    """
+    cards_by_page = {
+        1: [_make_card("r1"), _make_card("r2")],
+        2: [_make_card("r3")],
+        3: [],  # stop
+    }
+
+    browser_create_count = {"n": 0}
+
+    def fake_import():
+        def factory(**kwargs):
+            browser_create_count["n"] += 1
+            return _FakeBrowser(cards_by_page=cards_by_page)
+        return factory
+
+    monkeypatch.setattr(
+        pp_module, "_import_invisible_playwright", fake_import,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0,
+        max_idle_pages=1,
+        randomize_fingerprint=False,  # default
+    )
+    pages = []
+    async for page_num, payload in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        pages.append(page_num)
+
+    assert pages == [1, 2]
+    # Only ONE browser for the whole run
+    assert browser_create_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_randomize_fingerprint_dedup_across_pages(monkeypatch):
+    """Even with randomize_fingerprint=True (new browser per page),
+    UUID dedup should still work — the seen_uuids set is shared
+    across the whole pagination run.
+    """
+    cards_by_page = {
+        1: [_make_card("r1"), _make_card("r2")],
+        2: [_make_card("r1"), _make_card("r3")],  # r1 is a dup
+        3: [],  # stop
+    }
+
+    def fake_import():
+        def factory(**kwargs):
+            return _FakeBrowser(cards_by_page=cards_by_page)
+        return factory
+
+    monkeypatch.setattr(
+        pp_module, "_import_invisible_playwright", fake_import,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0,
+        max_idle_pages=1,
+        randomize_fingerprint=True,
+    )
+    all_reviews = []
+    async for page_num, payload in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        all_reviews.extend(payload.get("reviews", []))
+
+    # 3 unique reviews: r1, r2, r3
+    ids = [r["reviewId"] for r in all_reviews]
+    assert ids == ["r1", "r2", "r3"]

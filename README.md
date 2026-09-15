@@ -126,6 +126,13 @@ uv run python -m marketplace_maps_parser \
   --url "https://www.ozon.ru/product/..." \
   --transport public_page
 
+# Use public_page with per-page fingerprint randomization (maximal stealth)
+uv run python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --url "https://www.ozon.ru/product/..." \
+  --transport public_page \
+  --randomize-fingerprint
+
 # Use legacy in-page fetch (faster but more Cloudflare 403s)
 uv run python -m marketplace_maps_parser \
   --marketplace ozon \
@@ -284,6 +291,24 @@ If the warmup page itself returns a Cloudflare challenge (curl_cffi cannot solve
 #### Why public_page is the default
 
 The internal API endpoint (`/api/entrypoint-api.bx/page/json/v2`) is heavily protected by Cloudflare — even with TLS-fingerprint impersonation, stealth init scripts, and JS-challenge auto-resolution, a significant fraction of requests get 403 challenges. The public review page (`/product/<id>/reviews?page=N`), by contrast, is served by Ozon's CDN to all visitors (including non-logged-in browsers) and is rarely challenged. The `public_page` transport scrapes this page's DOM directly, getting the same review data with much less Cloudflare friction.
+
+#### Per-page fingerprint randomization (`--randomize-fingerprint`)
+
+When `--randomize-fingerprint` is passed (public_page transport only), a fresh `InvisiblePlaywright` browser instance is created for **each page** instead of reusing one for the whole pagination run. Each new browser gets a new random fingerprint via `seed=None` (→ `secrets.randbits(31)`), which randomizes:
+
+- GPU vendor and renderer (NVIDIA / Intel / AMD)
+- Screen resolution (1920×1080, 2560×1440, etc.)
+- Hardware concurrency (CPU cores), storage quota
+- Audio sample rate, codec support
+- WebGL MSAA samples, extensions
+- Font manifest, ClearType settings
+- Dark theme on/off
+
+This makes every page look like a different browser to Cloudflare — even if one fingerprint gets flagged, the next page uses a completely new one.
+
+**Trade-off**: slower (~2-5s browser startup per page vs. one-time startup for the whole run). Use this only when Cloudflare is actively fingerprinting your sessions and the default (one browser per run) is getting blocked.
+
+Without `--randomize-fingerprint` (default), one `InvisiblePlaywright` browser is reused for all pages in a single pagination run — faster, but all pages share the same fingerprint.
 
 ## Architecture
 

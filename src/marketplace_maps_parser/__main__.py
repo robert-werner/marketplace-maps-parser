@@ -196,6 +196,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--randomize-fingerprint",
+        action="store_true",
+        help=(
+            "public_page only: create a fresh "
+            "InvisiblePlaywright browser for each page instead of "
+            "reusing one. Each new browser gets a new random "
+            "fingerprint (seed=None → secrets.randbits(31)), so "
+            "every page looks like a different browser to "
+            "Cloudflare. Slower (~2-5s browser startup per page) "
+            "but maximally stealthy."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -366,6 +379,7 @@ def _build_ozon_transport(args: argparse.Namespace):
             debug_dir=args.debug_dir,
             humanize=not args.no_humanize,
             stealth=not args.no_stealth,
+            randomize_fingerprint=args.randomize_fingerprint,
         )
 
     if args.transport == "curl_cffi":
