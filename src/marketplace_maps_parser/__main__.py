@@ -274,6 +274,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-widget-scroll",
+        action="store_true",
+        help=(
+            "Disable the scroll-mix phase of the widget flow (the "
+            "default scrolls each review page like a reader, waits "
+            "up to 1.5s for lazily appended cards, then moves to "
+            "the next page)."
+        ),
+    )
+    parser.add_argument(
         "--free-proxy-country",
         default=None,
         help=(
@@ -481,6 +491,7 @@ def _build_ozon_transport(args: argparse.Namespace):
             randomize_fingerprint=args.randomize_fingerprint,
             cookies=cookies,
             workers=args.workers,
+            widget_scroll=not args.no_widget_scroll,
         )
 
     if args.transport == "curl_cffi":
