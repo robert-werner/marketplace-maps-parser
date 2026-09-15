@@ -526,8 +526,14 @@ class PublicPageTransport:
         scrolling. Stops after ``scroll_max_idle_rounds``
         consecutive scrolls with no new cards.
         """
+        scroll_proxy = self._get_proxy_for_page()
+        if scroll_proxy is not None and self.proxy_pool is not None:
+            print(
+                "Ozon (public scroll): proxy: "
+                f"{scroll_proxy.get('server', 'unknown')}"
+            )
         async with _import_invisible_playwright()(
-            proxy=self.proxy,
+            proxy=scroll_proxy,
             seed=self.seed,
             pin=self.pin,
             humanize=self.humanize,
@@ -631,35 +637,50 @@ class PublicPageTransport:
         seen_ids: set[str] = set()
 
         # --- pagination ---
-        try:
-            async for page_num, payload in self.iter_ozon_reviews_json(
-                product_path=product_path,
-                start_page=pagination_start_page,
-                max_pages=pagination_max_pages,
-                retry_attempts=retry_attempts,
-            ):
-                for node in payload.get("reviews", []):
-                    rid = node.get("reviewId") or node.get("uuid")
-                    if rid and rid in seen_ids:
-                        continue
-                    if rid:
-                        seen_ids.add(rid)
+        # The browser launch includes an egress-IP check through the
+        # proxy; paid rotating pools (e.g. proxys.io) intermittently
+        # answer 503 to CONNECT. Retry the phase — the pool rotates to
+        # another exit IP on each attempt.
+        pagination_attempts = max(3, retry_attempts)
+        for attempt in range(1, pagination_attempts + 1):
+            try:
+                async for page_num, payload in self.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=pagination_start_page,
+                    max_pages=pagination_max_pages,
+                    retry_attempts=retry_attempts,
+                ):
+                    for node in payload.get("reviews", []):
+                        rid = node.get("reviewId") or node.get("uuid")
+                        if rid and rid in seen_ids:
+                            continue
+                        if rid:
+                            seen_ids.add(rid)
 
-                    yield "pagination", node
+                        yield "pagination", node
 
-                    if (
-                        max_reviews is not None
-                        and len(seen_ids) >= max_reviews
-                    ):
-                        return
+                        if (
+                            max_reviews is not None
+                            and len(seen_ids) >= max_reviews
+                        ):
+                            return
 
-                if page_delay_seconds > 0:
-                    await sleep_with_jitter(page_delay_seconds)
-        except Exception as exc:
-            print(
-                "Ozon (public auto): pagination phase failed: "
-                f"{exc} — пробую scroll"
-            )
+                    if page_delay_seconds > 0:
+                        await sleep_with_jitter(page_delay_seconds)
+                break
+            except Exception as exc:
+                if attempt >= pagination_attempts:
+                    print(
+                        "Ozon (public auto): pagination phase failed "
+                        f"after {attempt} attempts: {exc}"
+                    )
+                else:
+                    print(
+                        "Ozon (public auto): pagination attempt "
+                        f"{attempt}/{pagination_attempts} failed: "
+                        f"{exc} — retry with next proxy"
+                    )
+                    await sleep_with_jitter(5.0)
 
         if max_reviews is not None and len(seen_ids) >= max_reviews:
             return
