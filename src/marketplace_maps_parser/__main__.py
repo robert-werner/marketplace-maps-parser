@@ -274,6 +274,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--parallel-sessions",
+        type=int,
+        default=1,
+        help=(
+            "Run N collection PROCESSES with disjoint --start-page/"
+            "--max-pages chunks (one proxy from --proxy-list per "
+            "process), then merge with review_id dedup. Requires "
+            "--max-pages; deep pages need --cookies. This is the "
+            "real speedup — tabs of one session serialize "
+            "(measured 2026-09-15)."
+        ),
+    )
+    parser.add_argument(
+        "--no-block-assets",
+        action="store_true",
+        help=(
+            "Do not abort image/font/media requests on scraper "
+            "pages (blocking them is the default: review photos "
+            "dominate the ~880KB page and we only need their src "
+            "urls)."
+        ),
+    )
+    parser.add_argument(
+        "--no-widget-scroll",
+        action="store_true",
+        help=(
+            "Disable the scroll-mix phase of the widget flow (the "
+            "default scrolls each review page like a reader, waits "
+            "up to 1.5s for lazily appended cards, then moves to "
+            "the next page)."
+        ),
+    )
+    parser.add_argument(
         "--free-proxy-country",
         default=None,
         help=(
@@ -481,6 +514,8 @@ def _build_ozon_transport(args: argparse.Namespace):
             randomize_fingerprint=args.randomize_fingerprint,
             cookies=cookies,
             workers=args.workers,
+            widget_scroll=not args.no_widget_scroll,
+            block_assets=not args.no_block_assets,
         )
 
     if args.transport == "curl_cffi":
@@ -650,6 +685,14 @@ async def _run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if getattr(args, "parallel_sessions", 1) > 1:
+            from marketplace_maps_parser.parallel_sessions import (
+                run_parallel_sessions,
+            )
+            count = asyncio.run(run_parallel_sessions(args))
+            print(f"Собрано отзывов: {count}")
+            return 0
+
         count = asyncio.run(_run(args))
     except KeyboardInterrupt:
         print("\nПрервано пользователем.", file=sys.stderr)

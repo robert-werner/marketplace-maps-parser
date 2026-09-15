@@ -21,7 +21,7 @@ from infrastructure.repositories.jsonl_repository import (
 from infrastructure.transports.browser_dom import (
     BrowserDomTransport,
 )
-
+from fp.fp import FreeProxy
 
 async def collect_all_ozon_reviews(
     adapter: OzonAdapter,

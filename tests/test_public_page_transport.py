@@ -493,7 +493,7 @@ async def test_iter_ozon_reviews_json_paginates_through_pages(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     pages_yielded = []
     async for page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -527,7 +527,7 @@ async def test_iter_ozon_reviews_json_dedupes_across_pages(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     all_reviews = []
     async for page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -557,7 +557,7 @@ async def test_iter_ozon_reviews_json_stops_on_empty_page(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=2)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=2)
     pages = []
     async for page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -585,7 +585,7 @@ async def test_iter_ozon_reviews_json_respects_max_pages(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=10)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=10)
     pages = []
     async for page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -614,7 +614,7 @@ async def test_iter_ozon_reviews_json_payload_shape(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     async for page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
@@ -671,7 +671,7 @@ async def test_iter_ozon_reviews_by_scroll_yields_cards(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0,
+        settle_ms=0, lazy_wait_ms=0,
         scroll_max_idle_rounds=3,
         scroll_pause_ms=1,
     )
@@ -710,7 +710,7 @@ async def test_no_stealth_init_script_even_when_enabled(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, stealth=True, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, stealth=True, max_idle_pages=1)
     async for _ in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
@@ -732,7 +732,7 @@ async def test_stealth_not_applied_when_disabled(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, stealth=False, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, stealth=False, max_idle_pages=1)
     async for _ in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
@@ -764,7 +764,7 @@ async def test_iter_all_ozon_reviews_widget_primary(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     yielded = []
     async for strategy, node in transport.iter_all_ozon_reviews(
         product_path="/product/foo-123",
@@ -795,7 +795,7 @@ async def test_widget_flow_follows_next_button(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     batches = []
     async for batch in transport.iter_ozon_reviews_by_widget(
         product_path="/product/foo-123",
@@ -823,7 +823,7 @@ async def test_iter_all_ozon_reviews_max_reviews_cap(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     yielded = []
     async for strategy, node in transport.iter_all_ozon_reviews(
         product_path="/product/foo-123",
@@ -857,7 +857,7 @@ async def test_get_ozon_reviews_json_returns_first_page(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     payload = await transport.get_ozon_reviews_json(
         product_path="/product/foo-123",
         page_number=1,
@@ -979,7 +979,7 @@ async def test_randomize_fingerprint_creates_new_browser_per_page(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0,
+        settle_ms=0, lazy_wait_ms=0,
         max_idle_pages=1,
         randomize_fingerprint=True,
     )
@@ -1026,7 +1026,7 @@ async def test_randomize_fingerprint_passes_seed_none(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0,
+        settle_ms=0, lazy_wait_ms=0,
         max_idle_pages=1,
         randomize_fingerprint=True,
     )
@@ -1070,7 +1070,7 @@ async def test_no_randomize_fingerprint_uses_single_browser(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0,
+        settle_ms=0, lazy_wait_ms=0,
         max_idle_pages=1,
         randomize_fingerprint=False,  # default
     )
@@ -1112,7 +1112,7 @@ async def test_randomize_fingerprint_dedup_across_pages(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0,
+        settle_ms=0, lazy_wait_ms=0,
         max_idle_pages=1,
         randomize_fingerprint=True,
     )
@@ -1202,7 +1202,7 @@ async def test_single_browser_retries_antibot_challenge(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     pages = []
     async for page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -1229,7 +1229,7 @@ async def test_single_browser_antibot_exhaustion_counts_idle(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
     pages = []
     async for page_num, _ in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -1305,7 +1305,7 @@ async def test_randomized_rotates_proxy_on_antibot(monkeypatch):
         {"server": "http://proxy-2:10000"},
     ])
     transport = PublicPageTransport(
-        settle_ms=0,
+        settle_ms=0, lazy_wait_ms=0,
         max_idle_pages=1,
         proxy_pool=pool,
     )
@@ -1339,7 +1339,7 @@ async def test_warmup_disabled_skips_product_page(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0, max_idle_pages=1, warmup=False,
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1, warmup=False,
     )
     pages = []
     async for page_num, _ in transport.iter_ozon_reviews_json(
@@ -1392,7 +1392,7 @@ async def test_randomized_rotates_proxy_when_session_fails(monkeypatch):
         {"server": "http://proxy-2:10000"},
     ])
     transport = PublicPageTransport(
-        settle_ms=0, max_idle_pages=1, proxy_pool=pool,
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1, proxy_pool=pool,
     )
     reviews: list[str] = []
     async for _, payload in transport.iter_ozon_reviews_json(
@@ -1434,7 +1434,7 @@ async def test_session_cookies_injected_into_every_page(monkeypatch):
         "path": "/",
     }]
     transport = PublicPageTransport(
-        settle_ms=0, max_idle_pages=1, cookies=session_cookies,
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1, cookies=session_cookies,
     )
     pages_seen = []
     async for _ in transport.iter_ozon_reviews_json(
@@ -1471,7 +1471,7 @@ async def test_widget_parallel_workers_cover_all_pages(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _yield_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0, max_idle_pages=1, workers=2,
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1, workers=2,
     )
     all_ids: list[str] = []
     async for batch in transport.iter_ozon_reviews_by_widget(
@@ -1505,7 +1505,7 @@ async def test_widget_parallel_stops_at_max_reviews(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _yield_sleep)
 
     transport = PublicPageTransport(
-        settle_ms=0, max_idle_pages=1, workers=2,
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1, workers=2,
     )
     count = 0
     async for batch in transport.iter_ozon_reviews_by_widget(
@@ -1516,3 +1516,76 @@ async def test_widget_parallel_stops_at_max_reviews(monkeypatch):
         count += len(batch)
 
     assert count >= 5
+
+
+@pytest.mark.asyncio
+async def test_widget_scroll_mix_collects_lazy_appended_cards(monkeypatch):
+    """Scroll-mix: прокрутил страницу — виджет догрузил карточку по
+    ходу прокрутки — она подобрана в ту же партию; затем переход на
+    следующую страницу (здесь кнопки нет — поток завершается)."""
+    cards_by_page = {1: [_make_card("r1")], 2: []}
+    fake_browser = _FakeBrowser(cards_by_page=cards_by_page)
+
+    async def new_page():
+        page = _FakePage(
+            cards_by_page=cards_by_page, browser=fake_browser,
+        )
+        fake_browser.pages_created.append(page)
+
+        def on_wheel():
+            page.cards_by_page[1] = [
+                _make_card("r1"), _make_card("r2_lazy"),
+            ]
+
+        page.mouse.on_wheel_callback = on_wheel
+        return page
+
+    fake_browser.new_page = new_page
+    monkeypatch.setattr(
+        pp_module, "_import_invisible_playwright",
+        lambda: lambda **kw: fake_browser,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    # lazy_wait_ms по умолчанию: рост определяется по опросам,
+    # стабильность из двух одинаковых наборов закрывает ожидание
+    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    batches = []
+    async for batch in transport.iter_ozon_reviews_by_widget(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        batches.append([c["uuid"] for c in batch])
+
+    assert batches == [["r1", "r2_lazy"]]
+    page = fake_browser.pages_created[0]
+    # прокрутка действительно выполнялась
+    assert page.mouse_wheel_calls, "scroll-mix не прокручивал страницу"
+
+
+@pytest.mark.asyncio
+async def test_widget_scroll_disabled_skips_wheel(monkeypatch):
+    """--no-widget-scroll: прокрутки нет, карточки читаются как
+    раньше."""
+    cards_by_page = {1: [_make_card("r1")], 2: []}
+    fake_browser = _patch_browser(monkeypatch, cards_by_page)
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0, max_idle_pages=1, widget_scroll=False,
+    )
+    batches = []
+    async for batch in transport.iter_ozon_reviews_by_widget(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        batches.append([c["uuid"] for c in batch])
+
+    assert batches == [["r1"]]
+    assert fake_browser.pages_created[0].mouse_wheel_calls == []

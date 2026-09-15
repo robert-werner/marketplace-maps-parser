@@ -132,6 +132,19 @@ class PublicPageTransport:
         # (the widget's page_key URLs are directly addressable).
         # 1 = current sequential behavior.
         workers: int = 1,
+        # Scroll-mix in the widget flow: after reading a page,
+        # scroll it like a reader and pick up any cards the widget
+        # lazy-appends, THEN go to the next page (whether or not
+        # anything was appended). Disable with --no-widget-scroll.
+        widget_scroll: bool = True,
+        # How long to wait for lazy-appended cards after scrolling
+        # (0 = scroll but don't wait).
+        lazy_wait_ms: int = 1_500,
+        # Abort image/font/media requests on scraper pages: the
+        # reviews page is ~880KB and most of it is review photos we
+        # never look at (the src urls stay in the DOM). Disable
+        # with --no-block-assets.
+        block_assets: bool = True,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -172,6 +185,9 @@ class PublicPageTransport:
         self.cookies = cookies
         self.card_wait_ms = card_wait_ms
         self.workers = max(1, workers)
+        self.widget_scroll = widget_scroll
+        self.lazy_wait_ms = lazy_wait_ms
+        self.block_assets = block_assets
 
     # ------------------------------------------------------------------
     # Antibot detection & human-like navigation
@@ -1227,6 +1243,7 @@ class PublicPageTransport:
         The ``stealth`` constructor flag is kept for CLI
         compatibility but no longer injects anything."""
         page = await browser.new_page()
+        self._install_resource_blocker(page)
         if self.cookies:
             # Logged-in session cookies — must land in the context
             # BEFORE the first navigation. page.context works for
@@ -1388,6 +1405,115 @@ class PublicPageTransport:
                 out.append(uuid)
         return out
 
+    # Images/fonts/media are the bulk of the reviews page's bytes
+    # (~880KB); review photos are never rendered by us — their src
+    # urls stay in the DOM untouched. resource_type-based routing
+    # keeps document/script/xhr/stylesheet untouched.
+    _BLOCKED_RESOURCE_TYPES = frozenset(
+        {"image", "font", "media"}
+    )
+
+    def _install_resource_blocker(self, page) -> None:
+        if not self.block_assets:
+            return
+
+        async def _route(route):
+            try:
+                if (
+                    route.request.resource_type
+                    in self._BLOCKED_RESOURCE_TYPES
+                ):
+                    await route.abort()
+                else:
+                    await route.continue_()
+            except Exception:
+                pass
+
+        try:
+            page.route("**/*", _route)
+        except Exception:
+            pass
+
+    # Wait until the cards' rating SVGs have hydrated instead of a
+    # fixed 1.2s sleep: the star glyphs are the last thing to
+    # render, and reading before them yields rating=None (measured
+    # ~38% nulls without any wait). Returns as soon as the first
+    # svg path appears; readers that cannot evaluate (fakes) fall
+    # through immediately.
+    _HYDRATION_PROBE_JS = (
+        "() => document.querySelectorAll("
+        "'[data-review-uuid] svg path').length"
+    )
+
+    async def _wait_for_cards_hydrated(
+        self, page, timeout_s: float = 3.0,
+    ) -> None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                n = await page.evaluate(self._HYDRATION_PROBE_JS)
+            except Exception:
+                return
+            if n is None:
+                # reader without evaluate support — nothing to wait
+                return
+            if isinstance(n, int) and n > 0:
+                return
+            await asyncio.sleep(0.15)
+
+    async def _scroll_and_collect_lazy_cards(
+        self,
+        page,
+        known_uuids: set[str],
+    ) -> list[dict[str, Any]]:
+        """Scroll the page like a reader, then pick up any cards the
+        widget lazy-appended on the way down (some AB variants
+        append on scroll instead of paginating).
+
+        Returns cards whose uuid is not in ``known_uuids`` (caller
+        passes seen ∪ the page's own cards) — possibly empty."""
+        if not self.widget_scroll:
+            return []
+        try:
+            for _ in range(3):
+                await page.mouse.wheel(0, 1_600)
+                await asyncio.sleep(0.4)
+        except Exception:
+            return []
+
+        if self.lazy_wait_ms <= 0:
+            return []
+
+        # Wait until the uuid set stops changing (two consecutive
+        # stable polls) or the lazy-wait budget runs out.
+        before = None
+        stable = 0
+        deadline = time.monotonic() + self.lazy_wait_ms / 1000
+        while time.monotonic() < deadline:
+            try:
+                current = frozenset(
+                    await self._page_uuids_fast(page)
+                )
+            except Exception:
+                break
+            if before is None:
+                before = current
+                continue
+            if current != before:
+                before = current
+                stable = 0
+            else:
+                stable += 1
+                if stable >= 2:
+                    break
+            await asyncio.sleep(0.3)
+
+        cards = await self._read_cards_fast(page)
+        return [
+            c for c in cards
+            if c.get("uuid") and c["uuid"] not in known_uuids
+        ]
+
     async def _wait_for_card_replacement(
         self,
         page,
@@ -1532,8 +1658,22 @@ class PublicPageTransport:
                         # extractor from reading half-rendered cards
                         # (measured: without it ~38% of deep-page
                         # cards came out rating=None).
-                        await page.wait_for_timeout(1_200)
+                        await self._wait_for_cards_hydrated(page)
                         cards = await self._read_cards_fast(page)
+                        # Scroll-mix: прокрутить страницу читателем и
+                        # подобрать карточки, которые виджет догрузил
+                        # по ходу; затем в любом случае — следующая
+                        # страница.
+                        known = {
+                            c.get("uuid") for c in cards
+                        } | seen_uuids
+                        lazy = await (
+                            self._scroll_and_collect_lazy_cards(
+                                page, known,
+                            )
+                        )
+                        if lazy:
+                            cards = cards + lazy
                         new_cards = [
                             c for c in cards
                             if c.get("uuid")
@@ -1797,8 +1937,18 @@ class PublicPageTransport:
                         ):
                             ctx["done"].set()
                             break
-                        await page.wait_for_timeout(1_200)
+                        await self._wait_for_cards_hydrated(page)
                         cards = await self._read_cards_fast(page)
+                        known = {
+                            c.get("uuid") for c in cards
+                        } | ctx["seen"]
+                        lazy = await (
+                            self._scroll_and_collect_lazy_cards(
+                                page, known,
+                            )
+                        )
+                        if lazy:
+                            cards = cards + lazy
                         new_cards = [
                             c for c in cards
                             if c.get("uuid")

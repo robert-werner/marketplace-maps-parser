@@ -69,3 +69,8 @@ yandex_reviews*.jsonl
 # ----- Jupyter -----
 .ipynb_checkpoints/
 *.ipynb
+
+# Session cookie files (never commit!)
+cookies.json
+*_cookies.json
+ozon_cookies*.json
