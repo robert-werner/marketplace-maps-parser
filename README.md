@@ -243,7 +243,7 @@ unhealthy and a same-page retry would not help.
 
 ### Stealth mode
 
-Stealth mode (default: **enabled**, `--no-stealth` to disable) applies an init script to every fresh browser page that patches the most common signals Cloudflare uses to detect automated browsers:
+Stealth mode (`playwright`/`hybrid` transports) applies an init script to every fresh browser page that patches the most common signals Cloudflare uses to detect automated browsers:
 
 - `navigator.webdriver` → `undefined`
 - `window.chrome.runtime` → fake object (real Chrome exposes it)
@@ -254,7 +254,18 @@ Stealth mode (default: **enabled**, `--no-stealth` to disable) applies an init s
 - `window.outerWidth` / `outerHeight` → non-zero values (headless reports `0`)
 - `navigator.permissions.query` for notifications → `'default'`
 
-The script is applied via `page.add_init_script` so it runs before any page JS executes. Combined with `invisible-playwright`'s patched Firefox build, this provides layered protection against Cloudflare's bot detection.
+**IMPORTANT — the `public_page` transport does NOT apply this script** (and `--no-stealth` has no effect on it). Measured 2026-09-15: with the script Ozon serves its «Похоже, нет соединения» error page (0 review cards); without it the same proxy/fingerprint gets HTTP 200 and 30 cards — on both Firefox (invisible-playwright) and Chromium engines. The fake `navigator.plugins` lacks the `PluginArray` methods Ozon's page JS expects, and a fake `window.chrome` contradicts a Firefox engine. invisible-playwright already provides the real stealth (patched engine, randomized fingerprint, humanized input), so on `public_page` the extra JS layer only breaks things.
+
+### Antibot hardening (public_page)
+
+Layered defenses against Ozon's antibot (all enabled by default):
+
+1. **Warmup navigation** — before hitting `/reviews?page=N`, the transport lands on the product page, waits 0.8–2.2 s (randomized), then navigates to the reviews URL with the product page as the HTTP referer. Cold referer-less hits on `/reviews` are a strong bot signal.
+2. **Challenge detection** — a fetched page is classified as an antibot/challenge page by title (`Antibot Challenge Page`, «Похоже, нет соединения», `Just a moment…`, Cloudflare blocks) and unambiguous Cloudflare HTML markers (`__cf_chl`, `challenge-platform`, «Выключите VPN»). A real reviews page that merely contains the string `antibot` in its HTML is NOT flagged (it does — measured).
+3. **Rotate and retry** — on a challenge, the proxy is marked blocked in the pool, the transport cools down (5 s → 30 s backoff) and re-fetches the SAME page through the next proxy with a fresh fingerprint.
+4. **Session-failure rotation** — any browser-session-level failure (proxy refused CONNECT, egress-IP discovery failed, `ProxyEgressDrifted` on non-sticky rotating gateways) is converted to "rotate the proxy and retry the page" instead of crashing the run.
+
+The script is applied via `page.add_init_script` so it runs before any page JS executes (only on the `playwright`/`hybrid` transports that hit the internal API — see the note above for why `public_page` skips it).
 
 If stealth causes issues with a particular Ozon layout, disable it temporarily with `--no-stealth` for debugging.
 

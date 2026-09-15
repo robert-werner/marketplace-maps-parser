@@ -165,14 +165,28 @@ class _FakeStarOrImageItemLocator:
 
 
 class _FakePage:
-    """Stand-in for a Playwright Page."""
+    """Stand-in for a Playwright Page.
+
+    ``challenge_until_goto=N`` (set on the owning browser) simulates
+    Ozon's antibot: the first N ``goto`` calls — across ALL pages of
+    that browser — land on a challenge page (antibot title, no
+    cards); the challenge clears on the next navigation. The
+    counter lives on the browser because the per-page (proxy-pool)
+    mode creates a fresh page per fetch while the challenge state
+    belongs to the exit IP / session.
+    """
+
+    _ANTIBOT_TITLE = "Antibot Challenge Page"
+    _NORMAL_TITLE = "Отзывы о товаре — OZON"
 
     def __init__(
         self,
         *,
         cards_by_page: dict[int, list[dict[str, Any]]],
+        browser: "_FakeBrowser",
     ) -> None:
         self.cards_by_page = cards_by_page
+        self._browser = browser
         self.current_page_num = 0
         self.goto_calls: list[str] = []
         self.add_init_script_calls: list[str] = []
@@ -183,11 +197,24 @@ class _FakePage:
         # persists across accesses.
         self._mouse: "_FakeMouse | None" = None
 
+    @property
+    def _in_challenge(self) -> bool:
+        return (
+            self._browser.total_gotos
+            <= self._browser.challenge_until_goto
+        )
+
+    async def title(self) -> str:
+        if self._in_challenge:
+            return self._ANTIBOT_TITLE
+        return self._NORMAL_TITLE
+
     async def add_init_script(self, script: str) -> None:
         self.add_init_script_calls.append(script)
 
     async def goto(self, url: str, **kwargs) -> None:
         self.goto_calls.append(url)
+        self._browser.total_gotos += 1
         # Extract page number from URL
         # /product/foo-123/reviews?page=N
         if "page=" in url:
@@ -210,10 +237,16 @@ class _FakePage:
         if selector == "[data-review-uuid]":
             # Return a locator that re-evaluates on every count()
             # call — mirrors how real Playwright works (each
-            # count() / nth() call hits the live DOM).
-            return _FakeLocator(
-                lambda: self.cards_by_page.get(self.current_page_num, []),
-            )
+            # count() / nth() call hits the live DOM). While the
+            # antibot challenge is active, no cards are rendered.
+            def _cards() -> list[dict[str, Any]]:
+                if self._in_challenge:
+                    return []
+                return self.cards_by_page.get(
+                    self.current_page_num, [],
+                )
+
+            return _FakeLocator(_cards)
         return _FakeLocator(lambda: [])
 
     async def screenshot(self, *args, **kwargs) -> None:
@@ -228,6 +261,8 @@ class _FakePage:
         return self._mouse
 
     async def content(self) -> str:
+        if self._in_challenge:
+            return "<html>antibot challenge __cf_chl script</html>"
         return f"<html>page {self.current_page_num}</html>"
 
     async def close(self) -> None:
@@ -252,8 +287,15 @@ class _FakeMouse:
 class _FakeBrowser:
     """Stand-in for invisible-playwright browser."""
 
-    def __init__(self, *, cards_by_page: dict[int, list[dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        *,
+        cards_by_page: dict[int, list[dict[str, Any]]],
+        challenge_until_goto: int = 0,
+    ) -> None:
         self.cards_by_page = cards_by_page
+        self.challenge_until_goto = challenge_until_goto
+        self.total_gotos = 0
         self.pages_created: list[_FakePage] = []
 
     async def __aenter__(self):
@@ -263,15 +305,25 @@ class _FakeBrowser:
         return None
 
     async def new_page(self) -> _FakePage:
-        page = _FakePage(cards_by_page=self.cards_by_page)
+        page = _FakePage(
+            cards_by_page=self.cards_by_page,
+            browser=self,
+        )
         self.pages_created.append(page)
         return page
 
 
-def _patch_browser(monkeypatch, cards_by_page):
+def _patch_browser(
+    monkeypatch,
+    cards_by_page,
+    challenge_until_goto: int = 0,
+):
     """Patch ``_import_invisible_playwright`` to return a fake
     browser factory."""
-    fake_browser = _FakeBrowser(cards_by_page=cards_by_page)
+    fake_browser = _FakeBrowser(
+        cards_by_page=cards_by_page,
+        challenge_until_goto=challenge_until_goto,
+    )
 
     def fake_import():
         def factory(**kwargs):
@@ -375,8 +427,8 @@ async def test_iter_ozon_reviews_json_paginates_through_pages(monkeypatch):
     assert len(pages_yielded) == 2  # only pages 1 and 2 yielded
     assert pages_yielded[0][0] == 1
     assert pages_yielded[1][0] == 2
-    # Confirm we navigated to pages 1, 2, 3
-    assert len(fake_browser.pages_created[0].goto_calls) == 3
+    # Confirm we navigated: 1 warmup (product page) + pages 1, 2, 3
+    assert len(fake_browser.pages_created[0].goto_calls) == 4
 
 
 @pytest.mark.asyncio
@@ -464,8 +516,8 @@ async def test_iter_ozon_reviews_json_respects_max_pages(monkeypatch):
         pages.append(page_num)
 
     assert pages == [1, 2]
-    # Confirm page 3 was NOT fetched
-    assert len(fake_browser.pages_created[0].goto_calls) == 2
+    # Confirm page 3 was NOT fetched: 1 warmup + pages 1 and 2
+    assert len(fake_browser.pages_created[0].goto_calls) == 3
 
 
 @pytest.mark.asyncio
@@ -515,7 +567,10 @@ async def test_iter_ozon_reviews_by_scroll_yields_cards(monkeypatch):
     fake_browser = _FakeBrowser(cards_by_page={1: initial_cards})
 
     async def new_page():
-        page = _FakePage(cards_by_page={1: list(initial_cards)})
+        page = _FakePage(
+            cards_by_page={1: list(initial_cards)},
+            browser=fake_browser,
+        )
         fake_browser.pages_created.append(page)
 
         # Hook: when scroll is called, grow the cards list
@@ -557,15 +612,18 @@ async def test_iter_ozon_reviews_by_scroll_yields_cards(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Stealth init script applied to new pages
+# Stealth init script NOT applied to new pages (measured harm)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_stealth_init_script_applied_to_new_page(monkeypatch):
-    """When stealth=True, ``page.add_init_script`` should be
-    called with the stealth script.
-    """
+async def test_no_stealth_init_script_even_when_enabled(monkeypatch):
+    """No JS stealth init script is applied to public pages — not
+    even with stealth=True. Measured 2026-09-15: the
+    playwright-stealth-style script makes Ozon serve its «Похоже,
+    нет соединения» error page (0 cards) on both engines, while
+    the same session without the script gets HTTP 200 + 30 cards.
+    invisible-playwright provides the real stealth itself."""
     cards_by_page = {1: [_make_card("r1")], 2: []}
     fake_browser = _patch_browser(monkeypatch, cards_by_page)
 
@@ -582,10 +640,7 @@ async def test_stealth_init_script_applied_to_new_page(monkeypatch):
 
     assert len(fake_browser.pages_created) > 0
     page = fake_browser.pages_created[0]
-    assert len(page.add_init_script_calls) == 1
-    # The applied script should be the stealth init script
-    assert "navigator" in page.add_init_script_calls[0]
-    assert "webdriver" in page.add_init_script_calls[0]
+    assert len(page.add_init_script_calls) == 0
 
 
 @pytest.mark.asyncio
@@ -963,3 +1018,285 @@ async def test_randomize_fingerprint_dedup_across_pages(monkeypatch):
     # 3 unique reviews: r1, r2, r3
     ids = [r["reviewId"] for r in all_reviews]
     assert ids == ["r1", "r2", "r3"]
+
+
+# ---------------------------------------------------------------------------
+# Antibot detection & hardening
+# ---------------------------------------------------------------------------
+
+
+class _TitleOnlyPage:
+    """Minimal page stub for ``_page_is_antibot`` unit tests."""
+
+    def __init__(self, title: str, html: str = "") -> None:
+        self._title = title
+        self._html = html
+
+    async def title(self) -> str:
+        return self._title
+
+    async def content(self) -> str:
+        return self._html
+
+
+@pytest.mark.asyncio
+async def test_page_is_antibot_matches_challenge_titles():
+    transport = PublicPageTransport()
+    for title in (
+        "Antibot Challenge Page",
+        "Похоже, нет соединения",
+        "Just a moment...",
+        "Attention Required! | Cloudflare",
+        "Доступ ограничен",
+    ):
+        page = _TitleOnlyPage(title)
+        assert await transport._page_is_antibot(page), title
+
+
+@pytest.mark.asyncio
+async def test_page_is_antibot_real_review_page_not_flagged():
+    """A real reviews page — including one that mentions the string
+    "antibot" in its HTML (measured 2026-09 on a page that rendered
+    30 cards) — must NOT be flagged."""
+    transport = PublicPageTransport()
+    page = _TitleOnlyPage(
+        "304 отзыв на IP-телефон Yealink SIP-T30 / OZON",
+        html="<html>…/antibot/… widget …</html>",
+    )
+    assert not await transport._page_is_antibot(page)
+
+
+@pytest.mark.asyncio
+async def test_page_is_antibot_matches_cloudflare_html_markers():
+    transport = PublicPageTransport()
+    for html in (
+        "<html>Выключите VPN, перезагрузите роутер</html>",
+        '<script src="/cdn-cgi/challenge-platform/h/b/or.js">',
+    ):
+        page = _TitleOnlyPage("", html=html)
+        assert await transport._page_is_antibot(page), html[:40]
+
+
+@pytest.mark.asyncio
+async def test_single_browser_retries_antibot_challenge(monkeypatch):
+    """When a warmed-up navigation still lands on the antibot
+    challenge, the single-browser path must cool down, re-warm and
+    re-fetch the SAME page instead of skipping it."""
+    cards_by_page = {1: [_make_card("r1")], 2: []}
+    # gotos #1 (warmup) and #2 (page 1) land on the challenge →
+    # no cards; the retry warm-up + goto (#3, #4) clear the
+    # challenge and the cards render.
+    fake_browser = _patch_browser(
+        monkeypatch, cards_by_page, challenge_until_goto=2,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    pages = []
+    async for page_num, payload in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=3,
+    ):
+        pages.append(page_num)
+
+    assert pages == [1]
+    page = fake_browser.pages_created[0]
+    # warmup + page1 + retry(warmup + page1) + page2 = 5 gotos
+    assert len(page.goto_calls) == 5
+
+
+@pytest.mark.asyncio
+async def test_single_browser_antibot_exhaustion_counts_idle(monkeypatch):
+    """When the challenge never clears, the page is treated as idle
+    (same as an empty page) instead of looping forever."""
+    cards_by_page = {1: [_make_card("r1")]}
+    fake_browser = _patch_browser(
+        monkeypatch, cards_by_page, challenge_until_goto=10_000,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(settle_ms=0, max_idle_pages=1)
+    pages = []
+    async for page_num, _ in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=2,
+    ):
+        pages.append(page_num)
+
+    assert pages == []
+    assert len(fake_browser.pages_created[0].screenshot_calls) >= 1
+
+
+class _FakeProxyPool:
+    """Minimal proxy pool: hands out proxies in order and records
+    which ones were marked blocked."""
+
+    def __init__(self, proxies: list[dict[str, str]]) -> None:
+        self._proxies = list(proxies)
+        self._idx = 0
+        self.blocked: list[dict[str, str]] = []
+
+    def next(self) -> dict[str, str] | None:
+        if self._idx >= len(self._proxies):
+            return None
+        proxy = self._proxies[self._idx]
+        self._idx += 1
+        return proxy
+
+    def mark_blocked(self, proxy: dict[str, str]) -> None:
+        self.blocked.append(proxy)
+
+    def get_stats(self) -> dict[str, int]:
+        return {
+            "available": len(self._proxies) - len(self.blocked),
+            "total": len(self._proxies),
+        }
+
+
+@pytest.mark.asyncio
+async def test_randomized_rotates_proxy_on_antibot(monkeypatch):
+    """In per-page (proxy-pool) mode an antibot challenge must mark
+    the proxy blocked, cool down and retry the same page through
+    the next proxy — and still yield the reviews."""
+    cards_by_page = {1: [_make_card("r1"), _make_card("r2")], 2: []}
+    # First fetch is fully challenged (both its gotos), the retry
+    # fetch gets through — models the per-attempt randomness of
+    # Ozon's antibot across proxy exit IPs.
+    browsers_created: list[_FakeBrowser] = []
+    fetch_count = {"n": 0}
+
+    def fake_import():
+        def factory(**kwargs):
+            fetch_count["n"] += 1
+            b = _FakeBrowser(
+                cards_by_page=cards_by_page,
+                challenge_until_goto=(
+                    100 if fetch_count["n"] == 1 else 0
+                ),
+            )
+            browsers_created.append(b)
+            return b
+        return factory
+
+    monkeypatch.setattr(
+        pp_module, "_import_invisible_playwright", fake_import,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    pool = _FakeProxyPool([
+        {"server": "http://proxy-1:10000"},
+        {"server": "http://proxy-2:10000"},
+    ])
+    transport = PublicPageTransport(
+        settle_ms=0,
+        max_idle_pages=1,
+        proxy_pool=pool,
+    )
+    reviews: list[str] = []
+    async for page_num, payload in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=3,
+    ):
+        reviews.extend(
+            r["reviewId"] for r in payload.get("reviews", [])
+        )
+
+    assert reviews == ["r1", "r2"]
+    # The challenged proxy was marked blocked…
+    assert [p["server"] for p in pool.blocked] == [
+        "http://proxy-1:10000",
+    ]
+    # …and the page was retried through a second browser.
+    assert len(browsers_created) >= 2
+
+
+@pytest.mark.asyncio
+async def test_warmup_disabled_skips_product_page(monkeypatch):
+    """With warmup=False the first navigation goes straight to the
+    reviews URL."""
+    cards_by_page = {1: [_make_card("r1")], 2: []}
+    fake_browser = _patch_browser(monkeypatch, cards_by_page)
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    transport = PublicPageTransport(
+        settle_ms=0, max_idle_pages=1, warmup=False,
+    )
+    pages = []
+    async for page_num, _ in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=1,
+    ):
+        pages.append(page_num)
+
+    assert pages == [1]
+    urls = fake_browser.pages_created[0].goto_calls
+    assert len(urls) == 2  # page 1 + idle page 2, no warmup
+    assert all("reviews?page=" in u for u in urls)
+
+
+@pytest.mark.asyncio
+async def test_randomized_rotates_proxy_when_session_fails(monkeypatch):
+    """A session-level failure (proxy refuses CONNECT, or the exit
+    IP drifts mid-session — invisible-playwright's
+    ProxyEgressDrifted) must rotate the proxy and retry the page,
+    not crash the run."""
+    cards_by_page = {1: [_make_card("r1")], 2: []}
+    browsers_created: list[_FakeBrowser] = []
+    fetch_count = {"n": 0}
+
+    class _DriftedBrowser(_FakeBrowser):
+        async def new_page(self):  # type: ignore[override]
+            raise RuntimeError(
+                "the proxy's egress IP changed during the session"
+            )
+
+    def fake_import():
+        def factory(**kwargs):
+            fetch_count["n"] += 1
+            cls = _DriftedBrowser if fetch_count["n"] == 1 else _FakeBrowser
+            b = cls(cards_by_page=cards_by_page)
+            browsers_created.append(b)
+            return b
+        return factory
+
+    monkeypatch.setattr(
+        pp_module, "_import_invisible_playwright", fake_import,
+    )
+
+    async def _noop_sleep(*a, **kw):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    pool = _FakeProxyPool([
+        {"server": "http://proxy-1:10000"},
+        {"server": "http://proxy-2:10000"},
+    ])
+    transport = PublicPageTransport(
+        settle_ms=0, max_idle_pages=1, proxy_pool=pool,
+    )
+    reviews: list[str] = []
+    async for _, payload in transport.iter_ozon_reviews_json(
+        product_path="/product/foo-123",
+        retry_attempts=3,
+    ):
+        reviews.extend(r["reviewId"] for r in payload.get("reviews", []))
+
+    # First (drifting) proxy marked blocked, retry through the
+    # second one delivered the cards.
+    assert reviews == ["r1"]
+    assert [p["server"] for p in pool.blocked] == [
+        "http://proxy-1:10000",
+    ]
+    assert len(browsers_created) >= 2
