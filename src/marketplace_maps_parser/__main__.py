@@ -491,20 +491,21 @@ def _build_ozon_transport(args: argparse.Namespace):
     proxy_pool = _build_proxy_pool(args)
     single_proxy = _build_single_proxy(args) if proxy_pool is None else None
 
+    cookies = None
+    if args.cookies:
+        from infrastructure.transports.cookie_loader import (
+            load_cookies_file,
+        )
+        cookies = load_cookies_file(args.cookies)
+        print(
+            f"Ozon: загружено cookies из {args.cookies}: "
+            f"{len(cookies)} шт."
+        )
+
     if args.transport == "public_page":
         from infrastructure.transports.public_page import (
             PublicPageTransport,
         )
-        cookies = None
-        if args.cookies:
-            from infrastructure.transports.cookie_loader import (
-                load_cookies_file,
-            )
-            cookies = load_cookies_file(args.cookies)
-            print(
-                f"Ozon: загружено cookies из {args.cookies}: "
-                f"{len(cookies)} шт."
-            )
         return PublicPageTransport(
             timeout_ms=args.timeout_ms,
             settle_ms=args.settle_ms,
@@ -572,6 +573,7 @@ def _build_ozon_transport(args: argparse.Namespace):
                 "humanize": not args.no_humanize,
                 "fetch_strategy": args.fetch_strategy,
                 "stealth": not args.no_stealth,
+                "cookies": cookies,
             },
             debug_dir=args.debug_dir,
         )
@@ -588,6 +590,7 @@ def _build_ozon_transport(args: argparse.Namespace):
         humanize=not args.no_humanize,
         fetch_strategy=args.fetch_strategy,
         stealth=not args.no_stealth,
+        cookies=cookies,
     )
 
 

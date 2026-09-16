@@ -691,3 +691,42 @@ async def test_nextpage_loop_guard_synthesizes_variant_b_pages(monkeypatch):
         for _, p in pages_yielded
     )
     assert total_reviews == 180
+
+
+def test_map_node_pdp_reviews_shape():
+    """pdp_reviews API nests the payload: node["content"] =
+    {comment, score, positive, negative}. The mapper must unpack it
+    (the whole-review dict must NOT leak into Review.text) and
+    flatten the author object."""
+    from domain.entities import ProductRef
+    from infrastructure.marketplaces.ozon import map_ozon_review_node
+
+    product = ProductRef(
+        marketplace="ozon", source_url="u", product_id="1",
+    )
+    node = {
+        "uuid": "u-1",
+        "publishedAt": 1784804079,
+        "author": {"firstName": "Алина И.", "lastName": ""},
+        "content": {
+            "comment": "Отличный наборчик",
+            "score": 5,
+            "positive": "работает",
+            "negative": "дорогой",
+        },
+    }
+    review = map_ozon_review_node(node=node, product=product)
+    assert review is not None
+    assert review.review_id == "u-1"
+    assert review.text == "Отличный наборчик"
+    assert review.rating == 5
+    assert review.pros == "работает"
+    assert review.cons == "дорогой"
+    assert review.author == "Алина И."
+
+    # отзыв только с оценкой (без комментария) — валиден
+    node["content"] = {"comment": None, "score": 1}
+    review = map_ozon_review_node(node=node, product=product)
+    assert review is not None
+    assert review.rating == 1
+    assert review.text is None

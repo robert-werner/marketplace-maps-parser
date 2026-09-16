@@ -265,6 +265,11 @@ class BrowserJsonTransport:
         humanize: bool = True,
         fetch_strategy: str = "navigation",
         stealth: bool = True,
+        # Playwright-format cookies of a logged-in Ozon session
+        # (see cookie_loader). Injected into every page before the
+        # first navigation — the internal API needs them to serve
+        # the full review list instead of the anonymous subset.
+        cookies: list[dict[str, Any]] | None = None,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -274,12 +279,27 @@ class BrowserJsonTransport:
         self.pin = pin
         self.humanize = humanize
         self.stealth = stealth
+        self.cookies = cookies
         if fetch_strategy not in ("navigation", "fetch"):
             raise ValueError(
                 f"Unknown fetch_strategy: {fetch_strategy!r}. "
                 "Use 'navigation' or 'fetch'."
             )
         self.fetch_strategy = fetch_strategy
+
+    async def _inject_cookies(self, page) -> None:
+        """Logged-in session cookies into the page's context BEFORE
+        the first navigation (no-op without cookies; a failure is a
+        warning, not fatal)."""
+        if not self.cookies:
+            return
+        try:
+            await page.context.add_cookies(self.cookies)
+        except Exception as exc:
+            print(
+                "Ozon (playwright): WARNING — не удалось подставить "
+                f"cookies ({type(exc).__name__}: {exc})"
+            )
 
     async def iter_ozon_reviews_json(
             self,
@@ -321,6 +341,7 @@ class BrowserJsonTransport:
                     except Exception:
                         pass
                 new_page = await browser.new_page()
+                await self._inject_cookies(new_page)
                 # Apply stealth init script to every fresh page. This
                 # patches ``navigator.webdriver``, ``chrome.runtime``,
                 # ``Notification.permission``, ``window.outerWidth`` /
@@ -683,6 +704,7 @@ class BrowserJsonTransport:
                 humanize=self.humanize,
         ) as browser:
             page = await browser.new_page()
+            await self._inject_cookies(page)
 
             reviews_url = (
                 f"https://www.ozon.ru"

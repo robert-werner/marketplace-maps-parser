@@ -583,21 +583,47 @@ def walk_json(
     )
 
 
+def _ozon_author_name(author: Any) -> str | None:
+    """The pdp_reviews API sends the author as an object; flatten
+    firstName/lastName into a display name."""
+    if isinstance(author, dict):
+        return (
+            " ".join(
+                filter(
+                    None,
+                    (author.get("firstName"), author.get("lastName")),
+                )
+            )
+            or None
+        )
+    return author
+
+
 def map_ozon_review_node(
     node: dict[str, Any],
     product: ProductRef,
 ) -> Review | None:
     review_id = extract_review_id(node)
 
+    # The pdp_reviews API nests the payload: node["content"] =
+    # {comment, score, positive, negative, photos, videos}. The
+    # legacy flat shapes stay supported; note "content" must NOT be
+    # tried as a text field — it is a dict and first_value would
+    # return it whole (measured: whole-review str() in Review.text).
+    content = node.get("content")
+    if not isinstance(content, dict):
+        content = {}
+
     text = first_value(
         node,
         "text",
         "reviewText",
         "review_text",
-        "content",
         "comment",
         "description",
     )
+    if not text:
+        text = content.get("comment")
 
     rating = first_value(
         node,
@@ -608,6 +634,8 @@ def map_ozon_review_node(
         "product_rating",
         "valuation",
     )
+    if rating is None:
+        rating = content.get("score")
 
     if not is_review_node(
         node=node,
@@ -629,6 +657,7 @@ def map_ozon_review_node(
                 "advantages",
                 "pluses",
             )
+            or content.get("positive")
         ),
         cons=normalize_text(
             first_value(
@@ -637,16 +666,19 @@ def map_ozon_review_node(
                 "disadvantages",
                 "minuses",
             )
+            or content.get("negative")
         ),
         author=normalize_text(
-            first_value(
-                node,
-                "author",
-                "authorName",
-                "author_name",
-                "userName",
-                "user_name",
-                "reviewerName",
+            _ozon_author_name(
+                first_value(
+                    node,
+                    "author",
+                    "authorName",
+                    "author_name",
+                    "userName",
+                    "user_name",
+                    "reviewerName",
+                )
             )
         ),
         created_at=parse_ozon_date(
