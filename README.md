@@ -281,6 +281,14 @@ Accepted formats (auto-detected):
 
 Notes: `sameSite` values are normalized (invalid values become `Lax` — Playwright rejects anything else); entries without `name`/`value`/`domain` are skipped; a file with no valid cookies raises a clear error. Cookies expire — if the run suddenly caps at ~990 again, re-export a fresh file.
 
+### The fast path: internal API + cookies + fetch strategy
+
+```bash
+python -m marketplace_maps_parser --marketplace ozon --url "https://www.ozon.ru/product/…"   --output reviews.jsonl --transport playwright --strategy pagination   --fetch-strategy fetch --proxy-list proxies.txt --cookies ozon_cookies.json --resume
+```
+
+Measured 2026-09-16 on a ~2k-review product with a logged-in session: **~3.5 s/page, zero Cloudflare incidents**, ratings for 100% of reviews, and it also delivers rating-only (textless) reviews the public widget never shows. Per-page comparison: widget ~8 s → API navigation ~4.9 s → API fetch ~3.5 s. The `fetch` strategy historically drew more Cloudflare 403s — with cookies it measured clean, but `navigation` (the default) remains the robust fallback if a product starts challenging.
+
 ### Collection speed
 
 Per-page costs after the 2026-09 optimizations: all 30 cards of a page (text + rating + images) are extracted with a **single** `page.evaluate` round-trip (the old per-attribute reader took ~1.6 s per page — 208× slower on the read alone); the widget's content-replacement poll runs at 300 ms; the fixed 1.2 s settle was replaced by an adaptive wait for the rating SVGs to hydrate; and image/font/media requests are aborted via **extension-pattern** routes (`--no-block-assets` to disable). Do NOT route `"**/*"` to block assets — every routed request detours through Python and the detour costs more than the blocked bytes save (measured: ~10.5 s/page with a catch-all route vs ~8 s with patterns).
