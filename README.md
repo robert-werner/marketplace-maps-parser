@@ -283,14 +283,14 @@ Notes: `sameSite` values are normalized (invalid values become `Lax` — Playwri
 
 ### Collection speed
 
-Per-page costs after the 2026-09 optimizations: all 30 cards of a page (text + rating + images) are extracted with a **single** `page.evaluate` round-trip (the old per-attribute reader took ~1.6 s per page — 208× slower on the read alone), and the widget's content-replacement poll runs at 300 ms.
+Per-page costs after the 2026-09 optimizations: all 30 cards of a page (text + rating + images) are extracted with a **single** `page.evaluate` round-trip (the old per-attribute reader took ~1.6 s per page — 208× slower on the read alone); the widget's content-replacement poll runs at 300 ms; the fixed 1.2 s settle was replaced by an adaptive wait for the rating SVGs to hydrate; and image/font/media requests are aborted via **extension-pattern** routes (`--no-block-assets` to disable). Do NOT route `"**/*"` to block assets — every routed request detours through Python and the detour costs more than the blocked bytes save (measured: ~10.5 s/page with a catch-all route vs ~8 s with patterns).
 
 `--workers N` shards the review pages across N browser tabs of one session through a frontier queue. Fair warning, measured live: tabs of a single session serialize (one Firefox + one proxy tunnel), so wall time does **not** drop with N. It is kept as the foundation for multi-session sharding.
 
-**How to actually parallelize today** — important: several processes on the SAME product each walk from page 1 and duplicate each other's work (no wall-time win for a full run). Parallelism pays off in two cases:
+**How to actually parallelize today** — important measurements (2026-09-16, logged-in session):
 
-1. **Several products** — one process per product (different `--proxy` ports), merge the outputs afterwards.
-2. **One product, deep naked pagination** — the classic URL pagination (`--strategy pagination`) honors `--start-page` / `--max-pages`, so the page range can be split into disjoint chunks. First CHECK that with your cookies the naked `?page=N` URLs work beyond the anonymous ~5-page cap (they do not without login):
+1. **Several products** — one process per product (different `--proxy` ports), merge the outputs afterwards. This is the reliable multiplier.
+2. **`--parallel-sessions N`** splits one product's page range across N CLI child processes (one proxy each) and merges with review_id dedup. NOTE: the naked `?page=N` pagination caps at ~5 productive pages per session EVEN with cookies (measured: 30 requested pages → 150 unique reviews), so for a single product this only parallelizes the first ~5 pages — the widget flow (page_key URLs) remains the only deep path and it is inherently sequential per session.
 
 ```bash
 # проверка: глубина 50, один процесс, одна страница

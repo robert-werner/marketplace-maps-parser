@@ -114,24 +114,28 @@ class _RouteRecordingPage:
         self.routes.append((pattern, handler))
 
 
-def test_resource_blocker_installed_by_default():
+@pytest.mark.asyncio
+async def test_resource_blocker_installed_by_default():
     page = _RouteRecordingPage()
-    PublicPageTransport()._install_resource_blocker(page)
-    assert len(page.routes) == 1
-    assert page.routes[0][0] == "**/*"
+    await PublicPageTransport()._install_resource_blocker(page)
+    # по одному шаблону на каждое расширение ассетов
+    assert len(page.routes) == 10
+    assert all(p != "**/*" for p, _ in page.routes)
 
 
-def test_resource_blocker_disabled():
+@pytest.mark.asyncio
+async def test_resource_blocker_disabled():
     page = _RouteRecordingPage()
-    PublicPageTransport(
+    await PublicPageTransport(
         block_assets=False,
     )._install_resource_blocker(page)
     assert page.routes == []
 
 
-def test_resource_blocker_tolerates_pages_without_route():
+@pytest.mark.asyncio
+async def test_resource_blocker_tolerates_pages_without_route():
     # фейковые страницы не имеют route() — не должно падать
-    PublicPageTransport()._install_resource_blocker(object())
+    await PublicPageTransport()._install_resource_blocker(object())
 
 
 class _HydrationPage:

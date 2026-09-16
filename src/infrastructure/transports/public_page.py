@@ -1243,7 +1243,7 @@ class PublicPageTransport:
         The ``stealth`` constructor flag is kept for CLI
         compatibility but no longer injects anything."""
         page = await browser.new_page()
-        self._install_resource_blocker(page)
+        await self._install_resource_blocker(page)
         if self.cookies:
             # Logged-in session cookies — must land in the context
             # BEFORE the first navigation. page.context works for
@@ -1413,7 +1413,7 @@ class PublicPageTransport:
         {"image", "font", "media"}
     )
 
-    def _install_resource_blocker(self, page) -> None:
+    async def _install_resource_blocker(self, page) -> None:
         if not self.block_assets:
             return
 
@@ -1429,10 +1429,22 @@ class PublicPageTransport:
             except Exception:
                 pass
 
-        try:
-            page.route("**/*", _route)
-        except Exception:
-            pass
+        # Route ONLY the asset extensions, not "**/*": every routed
+        # request detours through this Python process, and routing
+        # all ~200 requests of a page costs more than the blocked
+        # assets save (measured 2026-09-16: ~10.5s/page with
+        # route("**/*") vs ~8s with pattern routes).
+        for pattern in (
+            "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.webp",
+            "**/*.gif", "**/*.avif", "**/*.woff", "**/*.woff2",
+            "**/*.ttf", "**/*.mp4",
+        ):
+            try:
+                # invisible-playwright's Page.route is a coroutine —
+                # calling it without await silently drops the route.
+                await page.route(pattern, _route)
+            except Exception:
+                pass
 
     # Wait until the cards' rating SVGs have hydrated instead of a
     # fixed 1.2s sleep: the star glyphs are the last thing to

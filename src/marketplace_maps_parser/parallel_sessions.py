@@ -236,7 +236,7 @@ async def run_parallel_sessions(args: Any) -> int:
             asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=None,  # наследуем stderr родителя
                 env=env,
             )
         )

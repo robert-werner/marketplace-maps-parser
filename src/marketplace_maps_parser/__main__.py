@@ -281,9 +281,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Run N collection PROCESSES with disjoint --start-page/"
             "--max-pages chunks (one proxy from --proxy-list per "
             "process), then merge with review_id dedup. Requires "
-            "--max-pages; deep pages need --cookies. This is the "
-            "real speedup — tabs of one session serialize "
-            "(measured 2026-09-15)."
+            "--max-pages. NOTE (measured): naked ?page=N caps at "
+            "~5 productive pages per session even with cookies, so "
+            "for ONE product this only parallelizes the first "
+            "~5 pages — the deep widget flow stays sequential. Best "
+            "for running many products in parallel."
         ),
     )
     parser.add_argument(
