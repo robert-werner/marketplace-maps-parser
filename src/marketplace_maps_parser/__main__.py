@@ -52,8 +52,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--url",
-        required=True,
-        help="Full product URL on the target marketplace.",
+        default=None,
+        help=(
+            "Full product URL on the target marketplace "
+            "(or use --products-file to collect many products)."
+        ),
+    )
+    parser.add_argument(
+        "--products-file",
+        default=None,
+        help=(
+            "Text file with product URLs (one per line, '#'"
+            "comments allowed): collect reviews for MANY products"
+            "in parallel — one child process per product, at most"
+            "--products-sessions running at a time, one proxy from"
+            "--proxy-list per product. Ozon only. Parts merge into"
+            "--output with review_id dedup (review ids are unique"
+            "across products, so a combined file is safe)."
+            "Mutually exclusive with --url."
+        ),
+    )
+    parser.add_argument(
+        "--products-sessions",
+        type=int,
+        default=3,
+        help=(
+            "--products-file only: maximum child processes running"
+            "concurrently (default: 3). Each child uses its own"
+            "browser and its own proxy — this is the reliable"
+            "wall-time multiplier (measured: tabs of one session"
+            "serialize, independent processes scale linearly)."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -97,8 +126,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--debug-dir",
-        default="debug_ozon",
-        help="Directory for HTML/JSON debug dumps (default: debug_ozon).",
+        default=None,
+        help=(
+            "Directory for HTML/JSON debug dumps. Default: "
+            "debug_ozon (ozon), debug_yandex (yandex)."
+        ),
     )
     parser.add_argument(
         "--timeout-ms",
@@ -259,6 +291,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--save-cookies",
+        default=None,
+        help=(
+            "Yandex.Market only: persist the browser session "
+            "cookies to this file (default: yandex_cookies.json). "
+            "After a SmartCaptcha is solved — automatically or "
+            "manually — the cookies are saved and auto-loaded on "
+            "the next runs, so the challenge appears at most once "
+            "per cookie lifetime. --cookies takes priority when "
+            "both are given."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -295,7 +340,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Do not abort image/font/media requests on scraper "
             "pages (blocking them is the default: review photos "
             "dominate the ~880KB page and we only need their src "
-            "urls)."
+            "urls). Applies to public_page AND playwright "
+            "transports."
+        ),
+    )
+    parser.add_argument(
+        "--screenshots",
+        action="store_true",
+        help=(
+            "Save a full-page screenshot into the debug dir on "
+            "every debug dump (public_page/playwright transports). "
+            "OFF by default: screenshots of a logged-in session "
+            "are a PII hazard and slow every page down; HTML/JSON "
+            "dumps are written regardless."
         ),
     )
     parser.add_argument(
@@ -327,6 +384,57 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-extra-streams",
+        action="store_true",
+        help=(
+            "Disable the additional review-stream sorts. Default "
+            "(enabled): after the default stream ends (~34 pages / "
+            "~1000 reviews window, measured), the adapter walks "
+            "extra sorts (score_asc, score_desc) which expose "
+            "different windows — notably the low-star reviews "
+            "nearly absent from the default one — and merges them "
+            "by review_id. Roughly doubles the collection at the "
+            "cost of extra pages."
+        ),
+    )
+    parser.add_argument(
+        "--parallel-streams",
+        action="store_true",
+        help=(
+            "Ozon pagination only: run all review streams "
+            "(default, score_asc, score_desc) CONCURRENTLY — each "
+            "in its own browser session. Wall time ~= the slowest "
+            "stream instead of the sum (~3x faster for the "
+            "default 3-stream configuration). Slightly higher "
+            "request rate from Ozon's perspective; debug dumps go "
+            "into per-stream page_N_<sort> directories."
+        ),
+    )
+    parser.add_argument(
+        "--filter-streams",
+        action="store_true",
+        help=(
+            "Ozon pagination only: add the withPhotos / withMedia "
+            "filter streams. Each active filter is its own list "
+            "ordering and therefore its own ~7k-review window — "
+            "the only known lever for reviews that sit beyond all "
+            "three sort windows. If the param is not honored the "
+            "stream just re-walks the default window and "
+            "--dup-streak-stop bounds the waste."
+        ),
+    )
+    parser.add_argument(
+        "--dup-streak-stop",
+        type=int,
+        default=300,
+        help=(
+            "Stop a review stream after this many CONSECUTIVE "
+            "reviews already collected by other streams (default: "
+            "300, i.e. ~10 pages). Protects against streams re-"
+            "serving known ground. 0 disables the early stop."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -337,7 +445,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "times with different --strategy values to fill gaps."
         ),
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--include-rating-only",
+        action="store_true",
+        help=(
+            "Ozon only: append SYNTHETIC rows for rating-only "
+            "«оценки» (stars without any text) so the file covers "
+            "the full histogram count. Ozon never exposes these "
+            "individually — rows are generated from the "
+            "webReviewProductScore histogram with deterministic "
+            "ids '<product_id>-ro-<stars>-<n>' and raw.synthetic="
+            "true. A .summary.json file is written regardless of "
+            "this flag (when the histogram is available)."
+        ),
+    )
+    parsed = parser.parse_args(argv)
+
+    if not parsed.url and not parsed.products_file:
+        parser.error(
+            "--url is required unless --products-file is given"
+        )
+    if parsed.url and parsed.products_file:
+        parser.error("--url and --products-file are mutually exclusive")
+    if (
+        parsed.products_file
+        and parsed.marketplace != "ozon"
+    ):
+        parser.error(
+            "--products-file supports only --marketplace ozon"
+        )
+    return parsed
 
 
 def _review_to_record(review: Any) -> dict[str, Any]:
@@ -388,12 +525,161 @@ def _load_existing_reviews(
     return seen
 
 
+def _scan_output_ratings(
+    output: Path,
+    product_id: str,
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Scan the output JSONL: total rows per star and existing
+    synthetic rating-only rows per star (ids prefixed
+    ``<product_id>-ro-<star>-``).
+    """
+    per_star: dict[str, int] = {}
+    synth: dict[str, int] = {}
+    prefix = f"{product_id}-ro-"
+    try:
+        with output.open("r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rating = record.get("rating")
+                if rating is None or isinstance(rating, bool):
+                    continue
+                try:
+                    star = str(int(rating))
+                except (TypeError, ValueError):
+                    continue
+                per_star[star] = per_star.get(star, 0) + 1
+                rid = str(record.get("review_id") or "")
+                if rid.startswith(f"{prefix}{star}-"):
+                    synth[star] = synth.get(star, 0) + 1
+    except OSError:
+        pass
+    return per_star, synth
+
+
+def _finalize_rating_summary(
+    *,
+    output: Path,
+    summary: dict[str, Any],
+    include_rating_only: bool,
+    marketplace: str,
+) -> int:
+    """Write ``<output>.summary.json``; with ``include_rating_only``
+    also append synthetic rows for the rating-only remainder.
+
+    Returns the number of synthetic rows appended this run.
+    """
+    histogram = summary.get("histogram") or {}
+    product_id = str(summary.get("product_id") or "")
+    if not histogram or not product_id:
+        return 0
+
+    per_star, synth = _scan_output_ratings(output, product_id)
+
+    remainder = {
+        star: max(0, int(count) - per_star.get(star, 0))
+        for star, count in histogram.items()
+    }
+
+    added = 0
+    if include_rating_only and any(remainder.values()):
+        with output.open("a", encoding="utf-8") as file:
+            for star in sorted(remainder, reverse=True):
+                need = remainder[star]
+                if need <= 0:
+                    continue
+                start = synth.get(star, 0)
+                for n in range(start + 1, start + need + 1):
+                    record = {
+                        "review_id": (
+                            f"{product_id}-ro-{star}-{n:05d}"
+                        ),
+                        "product_id": product_id,
+                        "marketplace": marketplace,
+                        "rating": int(star),
+                        "text": None,
+                        "author": None,
+                        "created_at": None,
+                        "pros": None,
+                        "cons": None,
+                        "seller_answer": None,
+                        "raw": {
+                            "synthetic": True,
+                            "source": (
+                                "webReviewProductScore histogram"
+                            ),
+                            "note": (
+                                "Оценка без отзыва: Ozon не отдаёт "
+                                "такие записи по отдельности"
+                            ),
+                        },
+                    }
+                    file.write(
+                        json.dumps(
+                            record,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        + "\n"
+                    )
+                    added += 1
+
+    summary_record = {
+        "product_id": product_id,
+        "product_url": summary.get("product_url"),
+        "average_score": summary.get("average_score"),
+        "site_ratings_total": summary.get("reviews_count"),
+        "site_histogram": histogram,
+        "rows_per_star_in_file": per_star,
+        "rating_only_per_star": remainder,
+        "synthetic_rows_appended_this_run": added,
+        "synthetic_rows_total_in_file": sum(synth.values()) + added,
+    }
+    summary_path = Path(str(output) + ".summary.json")
+    summary_path.write_text(
+        json.dumps(
+            summary_record,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    histogram_preview = " ".join(
+        f"{star}*={count}"
+        for star, count in sorted(
+            histogram.items(),
+            reverse=True,
+        )
+    )
+    print(
+        f"Ozon: гистограмма оценок: {histogram_preview}; "
+        f"оценок без текста (нельзя собрать индивидуально): "
+        f"{sum(remainder.values())}"
+        + (
+            f"; добавлено синтетических строк: {added}"
+            if added
+            else ""
+        )
+        + f"; сводка: {summary_path.name}"
+    )
+    return added
+
+
 async def _collect_ozon(args: argparse.Namespace) -> int:
     # Lazy import: heavy transport modules are imported only when
     # the user selects them.
     from infrastructure.marketplaces.ozon import OzonAdapter
 
-    transport = _build_ozon_transport(args)
+    if not args.debug_dir:
+        args.debug_dir = "debug_ozon"
+
+    transport = await _build_ozon_transport(args)
     adapter = OzonAdapter(browser_transport=transport)
 
     output = Path(args.output)
@@ -447,6 +733,16 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
                 page_delay_seconds=args.page_delay_seconds,
                 scroll_pause_seconds=args.scroll_pause_seconds,
                 retry_attempts=args.retry_attempts,
+                extra_streams=not args.no_extra_streams,
+                parallel_streams=getattr(
+                    args, "parallel_streams", False,
+                ),
+                filter_streams=getattr(
+                    args, "filter_streams", False,
+                ),
+                dup_streak_stop=getattr(
+                    args, "dup_streak_stop", 300,
+                ),
             ):
                 review_id = review.review_id
                 if review_id and review_id in seen_ids:
@@ -477,10 +773,26 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
             except Exception:
                 pass
 
+    # Ozon: rating histogram summary. Rating-only «оценки» (stars
+    # without text) are not exposed individually by Ozon — only as
+    # histogram counts. Write a summary file and, with
+    # --include-rating-only, append synthetic rows for the remainder.
+    summary = getattr(adapter, "last_rating_summary", None)
+    if isinstance(summary, dict) and summary.get("histogram"):
+        added = _finalize_rating_summary(
+            output=output,
+            summary=summary,
+            include_rating_only=getattr(
+                args, "include_rating_only", False,
+            ),
+            marketplace=adapter.name,
+        )
+        count += added
+
     return count
 
 
-def _build_ozon_transport(args: argparse.Namespace):
+async def _build_ozon_transport(args: argparse.Namespace):
     """Construct the Ozon transport based on --transport.
 
     Returns an object that implements the OzonBrowserTransport
@@ -488,8 +800,37 @@ def _build_ozon_transport(args: argparse.Namespace):
     iter_all_ozon_reviews, get_ozon_reviews_json).
     """
     # Build proxy pool / single proxy from CLI args.
-    proxy_pool = _build_proxy_pool(args)
+    from infrastructure.transports.proxy_pool import proxy_to_url
+
+    proxy_pool = await _build_proxy_pool(args)
     single_proxy = _build_single_proxy(args) if proxy_pool is None else None
+
+    # playwright/hybrid drive ONE browser session and accept a
+    # single proxy. Without this, --proxy-list would be silently
+    # ignored for them and ALL traffic would go direct from this
+    # machine (privacy + rotation loss). Take the next proxy from
+    # the pool for the whole run.
+    if (
+        proxy_pool is not None
+        and args.transport in ("playwright", "hybrid")
+    ):
+        pool_next = getattr(proxy_pool, "next_async", None)
+        single_proxy = (
+            await pool_next()
+            if pool_next is not None
+            else proxy_pool.next()
+        )
+        if single_proxy is None:
+            print(
+                "[warning] все proxy пула заблокированы — "
+                "запуск напрямую с этого IP"
+            )
+        else:
+            print(
+                f"[info] {args.transport}-транспорт: один proxy на "
+                f"весь запуск — {single_proxy.get('server', '?')} "
+                "(построчная ротация только у public_page)"
+            )
 
     cookies = None
     if args.cookies:
@@ -519,6 +860,7 @@ def _build_ozon_transport(args: argparse.Namespace):
             workers=args.workers,
             widget_scroll=not args.no_widget_scroll,
             block_assets=not args.no_block_assets,
+            screenshots=args.screenshots,
         )
 
     if args.transport == "curl_cffi":
@@ -526,18 +868,11 @@ def _build_ozon_transport(args: argparse.Namespace):
             CurlCffiTransport,
         )
         # curl_cffi takes a proxy URL string, not a dict.
-        proxy_url = None
-        if single_proxy is not None:
-            proxy_url = single_proxy.get("server")
-            if single_proxy.get("username"):
-                # curl_cffi expects 'http://user:pass@host:port'
-                from urllib.parse import urlparse
-                p = urlparse(proxy_url)
-                proxy_url = (
-                    f"{p.scheme}://{single_proxy['username']}:"
-                    f"{single_proxy.get('password', '')}@"
-                    f"{p.hostname}:{p.port}"
-                )
+        proxy_url = (
+            proxy_to_url(single_proxy)
+            if single_proxy is not None
+            else None
+        )
         return CurlCffiTransport(
             timeout=args.timeout_ms / 1000.0,
             debug_dir=args.debug_dir,
@@ -547,19 +882,12 @@ def _build_ozon_transport(args: argparse.Namespace):
 
     if args.transport == "hybrid":
         from infrastructure.transports.hybrid import HybridTransport
-        # Hybrid takes playwright proxy dict + curl_cffi proxy URL.
-        pw_proxy = single_proxy
-        curl_proxy_url = None
-        if single_proxy is not None:
-            curl_proxy_url = single_proxy.get("server")
-            if single_proxy.get("username"):
-                from urllib.parse import urlparse
-                p = urlparse(curl_proxy_url)
-                curl_proxy_url = (
-                    f"{p.scheme}://{single_proxy['username']}:"
-                    f"{single_proxy.get('password', '')}@"
-                    f"{p.hostname}:{p.port}"
-                )
+        # Hybrid takes a playwright proxy dict + curl_cffi proxy URL.
+        curl_proxy_url = (
+            proxy_to_url(single_proxy)
+            if single_proxy is not None
+            else None
+        )
         return HybridTransport(
             curl_cffi_kwargs={
                 "timeout": args.timeout_ms / 1000.0,
@@ -569,11 +897,12 @@ def _build_ozon_transport(args: argparse.Namespace):
             playwright_kwargs={
                 "timeout_ms": args.timeout_ms,
                 "settle_ms": args.settle_ms,
-                "proxy": pw_proxy,
+                "proxy": single_proxy,
                 "humanize": not args.no_humanize,
                 "fetch_strategy": args.fetch_strategy,
                 "stealth": not args.no_stealth,
                 "cookies": cookies,
+                "block_assets": not args.no_block_assets,
             },
             debug_dir=args.debug_dir,
         )
@@ -591,10 +920,12 @@ def _build_ozon_transport(args: argparse.Namespace):
         fetch_strategy=args.fetch_strategy,
         stealth=not args.no_stealth,
         cookies=cookies,
+        screenshots=args.screenshots,
+        block_assets=not args.no_block_assets,
     )
 
 
-def _build_proxy_pool(args: argparse.Namespace):
+async def _build_proxy_pool(args: argparse.Namespace):
     """Build a proxy pool from --proxy-list or --free-proxy.
 
     Returns None if neither was provided.
@@ -607,7 +938,7 @@ def _build_proxy_pool(args: argparse.Namespace):
         from infrastructure.transports.proxy_pool import ProxyPool
         return ProxyPool.from_file(args.proxy_list)
 
-    if getattr(args, "free_proxy", False):
+    if args.free_proxy:
         from infrastructure.transports.free_proxy_pool import (
             FreeProxyPool,
         )
@@ -623,7 +954,9 @@ def _build_proxy_pool(args: argparse.Namespace):
             + (f" (country={country_id})" if country_id else "")
             + (" (elite)" if args.free_proxy_elite else "")
         )
-        return FreeProxyPool(
+        # Async factory: the free-proxy batch fetch runs in a
+        # worker thread so the event loop is never blocked.
+        return await FreeProxyPool.create_async(
             country_id=country_id,
             elite=args.free_proxy_elite,
         )
@@ -645,6 +978,120 @@ def _build_single_proxy(args: argparse.Namespace):
             "'http://user:pass@host:port' or 'socks5://host:port'"
         )
     return proxy
+
+
+async def _collect_yandex(args: argparse.Namespace) -> int:
+    """Collect Yandex.Market reviews into the output JSONL."""
+    from infrastructure.marketplaces.yandex import (
+        YandexMarketAdapter,
+    )
+    from infrastructure.transports.yandex_browser import (
+        YandexBrowserTransport,
+    )
+
+    # One proxy for the whole run (a browser session must keep a
+    # stable egress IP).
+    proxy = None
+    if args.proxy:
+        proxy = _build_single_proxy(args)
+    elif args.proxy_list:
+        pool = await _build_proxy_pool(args)
+        if pool is not None:
+            pool_next = getattr(pool, "next_async", None)
+            proxy = (
+                await pool_next()
+                if pool_next is not None
+                else pool.next()
+            )
+            if proxy is not None:
+                print(
+                    f"[info] yandex-транспорт: один proxy на весь "
+                    f"запуск — {proxy.get('server', '?')}"
+                )
+
+    cookies = None
+    if args.cookies:
+        from infrastructure.transports.cookie_loader import (
+            load_cookies_file,
+        )
+        cookies = load_cookies_file(args.cookies)
+        print(
+            f"Я.Маркет: загружено cookies из {args.cookies}: "
+            f"{len(cookies)} шт."
+        )
+
+    debug_dir = args.debug_dir or "debug_yandex"
+
+    transport = YandexBrowserTransport(
+        timeout_ms=args.timeout_ms,
+        settle_ms=args.settle_ms,
+        debug_dir=debug_dir,
+        proxy=proxy,
+        cookies=cookies,
+        humanize=not args.no_humanize,
+        cookies_path=(
+            args.save_cookies or "yandex_cookies.json"
+        ),
+    )
+    adapter = YandexMarketAdapter(browser_transport=transport)
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.resume:
+        seen_ids = _load_existing_reviews(output)
+        if seen_ids:
+            print(
+                f"Resume: {len(seen_ids)} отзывов уже в "
+                f"{output.name}, будут пропущены."
+            )
+        file_mode = "a"
+    else:
+        seen_ids = set()
+        file_mode = "w"
+
+    count = 0
+
+    with output.open(file_mode, encoding="utf-8") as file:
+        async for review in adapter.iter_reviews(args.url):
+            review_id = review.review_id
+            if review_id and review_id in seen_ids:
+                continue
+            if review_id:
+                seen_ids.add(review_id)
+
+            file.write(
+                json.dumps(
+                    _review_to_record(review),
+                    ensure_ascii=False,
+                    default=str,
+                )
+                + "\n"
+            )
+            file.flush()
+            count += 1
+
+            if count % 100 == 0:
+                print(f"Собрано отзывов: {count}")
+
+            if (
+                args.max_reviews is not None
+                and count >= args.max_reviews
+            ):
+                print(
+                    f"Достигнут лимит --max-reviews: "
+                    f"{args.max_reviews}"
+                )
+                break
+
+    total = adapter.last_total_count
+    if total is not None:
+        print(
+            f"Я.Маркет: по данным сайта всего отзывов: {total}; "
+            f"собрано: {count}"
+        )
+
+    return count
 
 
 async def _collect_wildberries(args: argparse.Namespace) -> int:
@@ -681,15 +1128,21 @@ async def _run(args: argparse.Namespace) -> int:
     if args.marketplace == "wildberries":
         return await _collect_wildberries(args)
     if args.marketplace == "yandex":
-        raise SystemExit(
-            "Yandex Market adapter is not implemented yet."
-        )
+        return await _collect_yandex(args)
     raise SystemExit(f"Unknown marketplace: {args.marketplace}")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if getattr(args, "products_file", None):
+            from marketplace_maps_parser.parallel_sessions import (
+                run_products_parallel,
+            )
+            count = asyncio.run(run_products_parallel(args))
+            print(f"Собрано отзывов: {count}")
+            return 0
+
         if getattr(args, "parallel_sessions", 1) > 1:
             from marketplace_maps_parser.parallel_sessions import (
                 run_parallel_sessions,

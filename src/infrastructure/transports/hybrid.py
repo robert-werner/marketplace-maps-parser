@@ -37,6 +37,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from infrastructure.transports.base import OzonTransportMixin
+
 
 def _import_curl_cffi_transport():
     """Lazy import to avoid coupling at module load time."""
@@ -63,7 +65,7 @@ def _import_retry_async():
     return retry_async
 
 
-class HybridTransport:
+class HybridTransport(OzonTransportMixin):
     """Hybrid curl_cffi + Playwright transport.
 
     Tries curl_cffi first (fast, low memory, real TLS fingerprint).
@@ -126,6 +128,7 @@ class HybridTransport:
         start_page: int = 1,
         max_pages: int | None = None,
         retry_attempts: int = 3,
+        extra_query: str = "",
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         """Paginated fetch with curl_cffi→Playwright fallback.
 
@@ -140,16 +143,17 @@ class HybridTransport:
         3. After a successful Playwright fetch, the next page is
            retried with curl_cffi (Cloudflare cookies are session-
            bound; the curl_cffi session is separate).
-        """
-        CloudflareChallengeError = _import_cloudflare_error()
 
+        ``extra_query`` appends stream-variant parameters (e.g.
+        ``&sort=score_asc``) to the first page URL.
+        """
         # We dispatch page-by-page. The "current transport" is the
         # one we'll try first for the next page; it can switch
         # between curl_cffi and playwright based on what works.
         current_path = self._build_initial_path(
             product_path=product_path,
             page_number=start_page,
-        )
+        ) + extra_query
 
         seen_paths: set[str] = set()
         processed_pages = 0
@@ -228,6 +232,7 @@ class HybridTransport:
             # with max_pages=1, but just in case), fall through to
             # playwright.
         except CloudflareChallengeError as exc:
+            self._notify_pacer_block()
             print(
                 f"Ozon (hybrid): {label} — curl_cffi исчерпал "
                 f"retries с Cloudflare challenge; переключаюсь "
@@ -301,100 +306,52 @@ class HybridTransport:
         of the curl_cffi fast path). All yielded tuples have
         ``strategy="pagination"``.
         """
+        from shared.pacing import AdaptivePacer
+
         seen_ids: set[str] = set()
 
-        async for page_num, payload in self.iter_ozon_reviews_json(
-            product_path=product_path,
-            start_page=pagination_start_page,
-            max_pages=pagination_max_pages,
-            retry_attempts=retry_attempts,
-        ):
-            review_nodes = self._extract_review_nodes_from_payload(
-                payload,
-            )
-
-            for node in review_nodes:
-                rid = self._review_node_id(node)
-                if rid and rid in seen_ids:
-                    continue
-                if rid:
-                    seen_ids.add(rid)
-
-                yield "pagination", node
-
-                if (
-                    max_reviews is not None
-                    and len(seen_ids) >= max_reviews
-                ):
-                    return
-
-            if page_delay_seconds > 0:
-                from shared.retry import sleep_with_jitter
-                await sleep_with_jitter(page_delay_seconds)
-
-    # ------------------------------------------------------------------
-    # Static helpers (mirror CurlCffiTransport)
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _build_initial_path(
-        *,
-        product_path: str,
-        page_number: int,
-    ) -> str:
-        return f"{product_path}/reviews?page={page_number}"
-
-    @staticmethod
-    def extract_next_path(
-        payload: dict[str, Any],
-    ) -> str | None:
-        next_page = payload.get("nextPage")
-
-        if isinstance(next_page, str):
-            return next_page or None
-
-        if isinstance(next_page, dict):
-            for key in ("url", "href", "path"):
-                value = next_page.get(key)
-                if isinstance(value, str) and value:
-                    return value
-
-        return None
-
-    @staticmethod
-    def _review_node_id(node: dict[str, Any]) -> str | None:
-        for key in (
-            "reviewId",
-            "review_id",
-            "reviewUuid",
-            "review_uuid",
-            "uuid",
-            "id",
-        ):
-            value = node.get(key)
-            if value:
-                return str(value)
-        return None
-
-    @staticmethod
-    def _extract_review_nodes_from_payload(
-        payload: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        from domain.entities import ProductRef
-        from infrastructure.marketplaces.ozon import (
-            extract_reviews_from_ozon_payload,
+        # Adaptive inter-page pacing (see shared.pacing): shrinks
+        # the delay after clean pages, backs off when curl_cffi
+        # exhausts retries on a Cloudflare challenge.
+        self._pacer: AdaptivePacer | None = (
+            AdaptivePacer(base_delay=page_delay_seconds)
+            if page_delay_seconds > 0
+            else None
         )
 
-        placeholder = ProductRef(
-            marketplace="ozon",
-            source_url="",
-            product_id="_placeholder",
-        )
-        reviews = extract_reviews_from_ozon_payload(
-            payload, placeholder,
-        )
-        return [
-            r.raw for r in reviews if isinstance(r.raw, dict)
-        ]
+        try:
+            async for page_num, payload in (
+                self.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=pagination_start_page,
+                    max_pages=pagination_max_pages,
+                    retry_attempts=retry_attempts,
+                )
+            ):
+                review_nodes = self._extract_review_nodes_from_payload(
+                    payload,
+                )
+
+                for node in review_nodes:
+                    rid = self._review_node_id(node)
+                    if rid and rid in seen_ids:
+                        continue
+                    if rid:
+                        seen_ids.add(rid)
+
+                    yield "pagination", node
+
+                    if (
+                        max_reviews is not None
+                        and len(seen_ids) >= max_reviews
+                    ):
+                        return
+
+                if self._pacer is not None:
+                    self._pacer.record_success()
+                    await self._pacer.wait()
+        finally:
+            self._pacer = None
 
     # ------------------------------------------------------------------
     # Lifecycle

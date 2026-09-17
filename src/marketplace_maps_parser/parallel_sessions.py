@@ -3,6 +3,12 @@
 into disjoint chunks, run one CLI child per chunk (each with its own
 proxy), then merge the parts with review_id dedup.
 
+Multi-PRODUCT collection (``--products-file``): one CLI child per
+product, bounded concurrency (``--products-sessions``), one proxy
+per product from ``--proxy-list`` — the reliable wall-time
+multiplier (measured 2026-09-16: tabs of one session serialize;
+independent processes scale linearly).
+
 Why processes and not tabs: measured 2026-09-15, tabs of a single
 browser session serialize (one Firefox + one proxy tunnel), while
 independent processes scale linearly. The chunks use the classic
@@ -12,8 +18,8 @@ require a logged-in session (``--cookies``), anonymous access caps
 at ~5 pages.
 
 Public helpers ``split_page_range`` and ``merge_jsonl_dedup`` are
-pure and unit-tested; ``run_parallel_sessions`` orchestrates the
-child processes.
+pure and unit-tested; ``run_parallel_sessions`` /
+``run_products_parallel`` orchestrate the child processes.
 """
 from __future__ import annotations
 
@@ -100,11 +106,10 @@ def _proxy_urls_for_sessions(
     Prefers distinct entries from --proxy-list (the pool exists for
     exactly this); falls back to the single --proxy for everyone;
     returns Nones (direct) when neither is set."""
-    from urllib.parse import urlparse
-
     if args.proxy_list:
         from infrastructure.transports.proxy_pool import (
             parse_proxy_file,
+            proxy_to_url,
         )
 
         proxies = parse_proxy_file(args.proxy_list)
@@ -112,15 +117,7 @@ def _proxy_urls_for_sessions(
         for i in range(sessions):
             if proxies:
                 p = proxies[i % len(proxies)]
-                url = p["server"]
-                if p.get("username"):
-                    parsed = urlparse(url)
-                    url = (
-                        f"{parsed.scheme}://{p['username']}:"
-                        f"{p.get('password', '')}@{parsed.hostname}"
-                        f":{parsed.port}"
-                    )
-                urls.append(url)
+                urls.append(proxy_to_url(p))
             else:
                 urls.append(None)
         return urls
@@ -225,12 +222,15 @@ async def run_parallel_sessions(args: Any) -> int:
         cmd = _child_command(
             args, part_path, start, size, proxy_url
         )
-        debug_dir = Path(args.debug_dir or "debug_ozon")
         part_path.parent.mkdir(parents=True, exist_ok=True)
+        from infrastructure.transports.proxy_pool import (
+            mask_proxy_url,
+        )
+
         print(
             f"  часть {part_path.name}: страницы {start}.."
             f"{start + size - 1}, proxy: "
-            f"{proxy_url or 'напрямую'}"
+            f"{mask_proxy_url(proxy_url) if proxy_url else 'напрямую'}"
         )
         tasks.append(
             asyncio.create_subprocess_exec(
@@ -261,3 +261,177 @@ async def run_parallel_sessions(args: Any) -> int:
         except OSError:
             pass
     return count
+
+
+# ---------------------------------------------------------------------------
+# Multi-PRODUCT collection (--products-file)
+# ---------------------------------------------------------------------------
+
+
+def read_products_file(path: str | Path) -> list[str]:
+    """Read product URLs from a file (one per line, ``#`` comments
+    and blank lines allowed).
+
+    Raises ``FileNotFoundError`` for a missing file and
+    ``ValueError`` for a file with no URLs.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Products file not found: {p}")
+
+    urls: list[str] = []
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            urls.append(line)
+
+    if not urls:
+        raise ValueError(f"Products file {p} contains no URLs")
+    return urls
+
+
+def _product_child_command(
+    args: Any,
+    url: str,
+    part_path: Path,
+    proxy_url: str | None,
+) -> list[str]:
+    """One CLI child per product, honoring the caller's flags."""
+    cmd = [
+        sys.executable, "-m", "marketplace_maps_parser",
+        "--marketplace", "ozon",
+        "--url", url,
+        "--output", str(part_path),
+        "--transport", args.transport,
+        "--strategy", args.strategy,
+        "--retry-attempts", str(min(args.retry_attempts, 20)),
+    ]
+    if proxy_url:
+        cmd += ["--proxy", proxy_url]
+    if args.max_reviews is not None:
+        cmd += ["--max-reviews", str(args.max_reviews)]
+    if args.cookies:
+        cmd += ["--cookies", args.cookies]
+    if args.timeout_ms:
+        cmd += ["--timeout-ms", str(args.timeout_ms)]
+    if args.settle_ms:
+        cmd += ["--settle-ms", str(args.settle_ms)]
+    if args.debug_dir:
+        cmd += ["--debug-dir", str(args.debug_dir)]
+    if getattr(args, "workers", 1) != 1:
+        cmd += ["--workers", str(args.workers)]
+    if args.no_stealth:
+        cmd += ["--no-stealth"]
+    if args.no_humanize:
+        cmd += ["--no-humanize"]
+    if args.no_widget_scroll:
+        cmd += ["--no-widget-scroll"]
+    if getattr(args, "randomize_fingerprint", False):
+        cmd += ["--randomize-fingerprint"]
+    return cmd
+
+
+def _count_jsonl_lines(path: Path) -> int:
+    """Non-empty line count of a JSONL part (0 if missing)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+
+
+async def run_products_parallel(args: Any) -> int:
+    """Collect reviews for MANY products in parallel.
+
+    One CLI child process per product URL from ``--products-file``,
+    at most ``--products-sessions`` children running at a time, each
+    with its own proxy from ``--proxy-list`` (round-robin; falls
+    back to the single ``--proxy`` / direct). Review ids are
+    globally unique, so all parts merge safely into ``--output``
+    with review_id dedup. Failed children still contribute whatever
+    they collected before failing. Returns the total unique review
+    count.
+    """
+    if args.marketplace != "ozon":
+        raise SystemExit(
+            "--products-file поддерживает только --marketplace ozon"
+        )
+    urls = read_products_file(args.products_file)
+    sessions = max(1, getattr(args, "products_sessions", 3) or 1)
+
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    part_paths = [
+        out_path.with_name(f"{out_path.name}.p{i:03d}.jsonl")
+        for i in range(len(urls))
+    ]
+    proxies = _proxy_urls_for_sessions(args, len(urls))
+
+    env = dict(os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+
+    from infrastructure.transports.proxy_pool import (
+        mask_proxy_url,
+    )
+
+    print(
+        f"products: {len(urls)} товаров, "
+        f"параллельно до {sessions} процессов"
+    )
+
+    sem = asyncio.Semaphore(sessions)
+    exit_codes: list[int | None] = [None] * len(urls)
+
+    async def _run_one(i: int) -> None:
+        async with sem:
+            cmd = _product_child_command(
+                args, urls[i], part_paths[i], proxies[i],
+            )
+            print(
+                f"  [{i + 1}/{len(urls)}] {urls[i]} — proxy: "
+                + (
+                    mask_proxy_url(proxies[i])
+                    if proxies[i] else "напрямую"
+                )
+            )
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=None,  # наследуем stderr родителя
+                    env=env,
+                )
+            except OSError as exc:
+                print(
+                    f"  [{i + 1}/{len(urls)}] запуск не удался: "
+                    f"{exc}"
+                )
+                exit_codes[i] = -1
+                return
+            exit_codes[i] = await proc.wait()
+
+    await asyncio.gather(
+        *(_run_one(i) for i in range(len(urls)))
+    )
+
+    for i, (url, part, code) in enumerate(
+        zip(urls, part_paths, exit_codes, strict=True)
+    ):
+        status = "OK" if code == 0 else f"код {code}"
+        print(
+            f"  [{i + 1}/{len(urls)}] {url}: "
+            f"{_count_jsonl_lines(part)} отзывов ({status})"
+        )
+
+    total = merge_jsonl_dedup(part_paths, out_path)
+    for part_path in part_paths:
+        try:
+            part_path.unlink()
+        except OSError:
+            pass
+    print(
+        f"products: слито в {out_path} — {total} уникальных отзывов"
+    )
+    return total

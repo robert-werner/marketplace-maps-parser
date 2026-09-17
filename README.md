@@ -9,7 +9,8 @@ Asynchronous scraper for product reviews from Russian e-commerce marketplaces (O
 - **Two Ozon strategies** — pagination via internal `entrypoint-api.bx/page/json/v2` endpoint, or DOM-scrape via `[data-review-uuid]` cards.
 - **Schema-tolerant parsing** — `walk_json()` recursively walks the entire Ozon payload and identifies review nodes by a fuzzy marker set, so minor API changes don't break extraction.
 - **Per-page deduplication** — composite key fallback (`product_id|page|position|author|date|rating|text`) when `review_id` is missing.
-- **Debug-first** — every page run dumps HTML, screenshot, response log, and captured JSON to `debug_ozon/` for postmortem analysis.
+- **Debug-first** — every page run dumps HTML, response log, and captured JSON to `debug_ozon/` for postmortem analysis (full-page screenshots are opt-in via `--screenshots`: they leak PII of a logged-in session and cost a share of the per-page wall time).
+- **Multi-product supervisor** — `--products-file urls.txt` runs one child process per product (bounded by `--products-sessions`, one proxy per product) and merges everything into a single deduplicated JSONL.
 
 ## Requirements
 
@@ -295,9 +296,61 @@ Per-page costs after the 2026-09 optimizations: all 30 cards of a page (text + r
 
 `--workers N` shards the review pages across N browser tabs of one session through a frontier queue. Fair warning, measured live: tabs of a single session serialize (one Firefox + one proxy tunnel), so wall time does **not** drop with N. It is kept as the foundation for multi-session sharding.
 
+### Speed optimizations (2026-09-16)
+
+- **Adaptive inter-page pacing** (`shared/pacing.py`) — the fixed `--page-delay-seconds` delay now shrinks geometrically after clean pages (down to ~0.4 s) and resets with a penalty whenever the transport detects an antibot/challenge event. Long clean runs get faster without raising the block rate when Ozon starts noticing.
+- **Push-based card-replacement wait** — the widget flow's 300 ms Python-side poll loop is replaced by an in-page `MutationObserver` that resolves the moment the rendered card set changes (debounced 250 ms so a mid-render partial set isn't mistaken for the final one). Removes one round-trip per poll and up to 300 ms of latency per page. Falls back to the old polling when `page.evaluate` is unavailable.
+- **Shorter repeat warmups** — the first warmup of a run pauses 0.8–2.2 s like a human reading the product card; every subsequent one (per-page-browser modes pay one per page) pauses only 0.4–1.0 s. Saves ~1 s per rotated page.
+- **Non-blocking free-proxy pool** — `FreeProxyPool` refills (network fetches of new proxy batches) run in a worker thread via `asyncio.to_thread`, so the event loop is never frozen mid-run.
+- **Screenshots off by default** — see the Features note above.
+
+### Many products at once (`--products-file`)
+
+The reliable wall-time multiplier (measured): one child process per product, each with its own browser and its own proxy. The supervisor bounds concurrency, forwards your flags, prints a per-product summary, and merges all parts into `--output` with review_id dedup (review ids are unique across products, so a combined file is safe):
+
+```bash
+python -m marketplace_maps_parser \
+  --marketplace ozon \
+  --products-file products.txt \
+  --output all_reviews.jsonl \
+  --transport public_page \
+  --proxy-list proxies.txt \
+  --cookies ozon_cookies.json \
+  --products-sessions 3
+```
+
+`products.txt` is one product URL per line (`#` comments allowed). `--products-sessions` (default 3) caps how many children run at once. `--max-reviews` applies per product.
+
+### Endpoint probes (`scripts/probe_ozon_endpoints.py`)
+
+Two hypotheses that decide the next big speedups, testable with your proxy/cookies:
+
+```bash
+python scripts/probe_ozon_endpoints.py \
+  --url "https://www.ozon.ru/product/..." \
+  --proxy "http://user:pass@residential.proxy:8080" \
+  --cookies ozon_cookies.json
+```
+
+The probe has two fetch engines: `curl_cffi` (fast, but Cloudflare can 403-challenge it — observed on cold proxied sessions) and `playwright` (a real browser via the Cloudflare-friendly navigation strategy). `--engine auto` (the default) tries curl_cffi and falls back to playwright automatically when challenged; the SSR verdict is then computed from the raw in-page-fetch response body (before client JS mutates the DOM), so it stays a true SSR test.
+
+1. **SSR probe** — does the public reviews page HTML contain `data-review-uuid` cards without JS? If yes, the browser can be dropped for pagination (10–50× per page).
+2. **page_size probe** — does the internal API honor a bigger page size (`page_size`, `itemsPerPage`, … variants)? If any variant returns more nodes than the `?page=1` control, request count drops proportionally.
+3. **cookie handoff probe** — can curl_cffi take over once a real browser has bootstrapped the Cloudflare cookies (cookies exported from the live browser context, tried against several impersonation targets)?
+
+**Measured 2026-09-16** (residential proxy, logged-in cookies):
+
+| Hypothesis | Verdict | Detail |
+|---|---|---|
+| SSR of the public reviews page | **YES** | Raw fetch response: HTTP 200, ~860 KB, `data-review-uuid` × 30 — identical to the post-render DOM (30 → 30). The page is fully server-rendered. |
+| Internal API `page_size` | **NO** | All 16 parameter spellings at sizes 60/100 returned exactly 30 nodes — the 30-cards-per-page limit is server-side. |
+| Browser cookies → curl_cffi handoff | **NO** | Live browser cookies (incl. Cloudflare ones) get HTTP 403 on curl_cffi with `chrome120`, `firefox135` and `firefox133` — the clearance is bound to the real browser's fingerprint. A browserless transport is **not possible**; the in-page `fetch()` from a live browser session is the single-product speed ceiling (~3.5 s/page, see the fast path below). |
+
+Consequences: the per-request optimizations that remain are pacing (adaptive delay), push-based waits and warmup cost — all implemented; the only real wall-time multiplier is running many products in parallel (`--products-file`).
+
 **How to actually parallelize today** — important measurements (2026-09-16, logged-in session):
 
-1. **Several products** — one process per product (different `--proxy` ports), merge the outputs afterwards. This is the reliable multiplier.
+1. **Several products** — `--products-file` (see above): one process per product with its own proxy, merged automatically. This is the reliable multiplier.
 2. **`--parallel-sessions N`** splits one product's page range across N CLI child processes (one proxy each) and merges with review_id dedup. NOTE: the naked `?page=N` pagination caps at ~5 productive pages per session EVEN with cookies (measured: 30 requested pages → 150 unique reviews), so for a single product this only parallelizes the first ~5 pages — the widget flow (page_key URLs) remains the only deep path and it is inherently sequential per session.
 
 ```bash
@@ -473,25 +526,21 @@ The project follows a clean architecture layering — domain logic has zero infr
 ```
 src/
 ├── domain/                # Pure business layer (no I/O)
-│   ├── entities.py        # ProductRef, Review, ReviewPage dataclasses
-│   └── ports.py           # Transport ABCs
-├── application/           # Use-case orchestration
-│   └── review_service.py  # Thin dispatcher over marketplace registry
+│   └── entities.py        # ProductRef, Review, ReviewPage dataclasses
 ├── infrastructure/        # Adapters
 │   ├── marketplaces/
 │   │   ├── base.py        # MarketplaceAdapter ABC
 │   │   ├── registry.py    # Factory registry
 │   │   ├── ozon.py        # Ozon adapter (pagination + scroll)
-│   │   ├── wildberries.py # WB adapter (public API)
-│   │   └── yandex_market.py  # TODO: stub
+│   │   └── wildberries.py # WB adapter (public API)
 │   ├── transports/
+│   │   ├── base.py        # Shared Ozon transport helpers (URLs, payloads, challenge detection)
 │   │   ├── http.py           # httpx-based JSON transport (WB)
 │   │   ├── browser.py        # Legacy XHR-capture transport
 │   │   ├── browser_json.py   # In-page fetch + pagination (current)
 │   │   └── browser_dom.py    # DOM-based extraction (scroll mode)
 │   └── repositories/
 │       └── jsonl_repository.py  # Append-only JSONL writer
-├── app/                   # DI container (stub)
 └── shared/
     └── url_parsers.py     # URL → product_id extractors
 ```
@@ -517,9 +566,11 @@ URL → UrlParser → ProductRef → MarketplaceAdapter.iter_reviews()
 - [x] Async retry + jittered backoff helpers (`shared/retry.py`)
 - [x] Resume from existing JSONL (`--resume`)
 - [x] Per-page retry of transient Playwright errors inside transport
+- [x] Adaptive inter-page pacing (`shared/pacing.py`)
+- [x] Multi-product parallel supervisor (`--products-file`)
+- [x] Endpoint hypothesis probes (SSR / page_size / cookie handoff — `scripts/probe_ozon_endpoints.py`, verdicts measured 2026-09-16)
 - [ ] Yandex Market adapter
 - [ ] `asyncpg` repository for direct DB writes
-- [ ] Proper `pydantic-settings` config loader
 - [ ] CI workflow (ruff + mypy + pytest)
 
 ## License

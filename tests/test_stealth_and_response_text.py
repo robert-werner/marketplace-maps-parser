@@ -215,14 +215,18 @@ async def test_stealth_init_script_applied_to_every_new_page(monkeypatch):
         BrowserJsonTransport, "_save_debug", fake_save_debug,
     )
 
-    # Drive the iterator — it should create the initial page and
-    # then fail on the first fetch.
-    with pytest.raises(RuntimeError, match="stop early"):
-        async for _ in transport.iter_ozon_reviews_json(
+    # Drive the iterator — it creates the initial page, the fetch
+    # fails, the page is recreated for the single retry, the retry
+    # also fails, and the iterator stops the stream silently
+    # (no exception propagates; yielding nothing).
+    collected = [
+        payload
+        async for _, payload in transport.iter_ozon_reviews_json(
             product_path="/product/foo-123",
             retry_attempts=1,
-        ):
-            pass  # pragma: no cover
+        )
+    ]
+    assert collected == []
 
     # At least one page should have been created
     assert fake_browser.pages_created >= 1
@@ -263,12 +267,14 @@ async def test_stealth_not_applied_when_disabled(monkeypatch):
         BrowserJsonTransport, "_save_debug", fake_save_debug,
     )
 
-    with pytest.raises(RuntimeError, match="stop early"):
-        async for _ in transport.iter_ozon_reviews_json(
+    collected = [
+        payload
+        async for _, payload in transport.iter_ozon_reviews_json(
             product_path="/product/foo-123",
             retry_attempts=1,
-        ):
-            pass
+        )
+    ]
+    assert collected == []
 
     assert fake_browser.pages_created >= 1
     # No init scripts should have been applied

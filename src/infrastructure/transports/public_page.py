@@ -46,12 +46,20 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from infrastructure.transports.base import (
+    OZON_BASE_URL,
+    OzonTransportMixin,
+)
+
 
 def _import_invisible_playwright():
     """Lazy import of invisible-playwright (same pattern as
-    browser_json.py)."""
+    browser_json.py). Wrapped with GPU-safe software-rendering
+    prefs (see transports/gpu_safety.py)."""
     from invisible_playwright.async_api import InvisiblePlaywright
-    return InvisiblePlaywright
+
+    from infrastructure.transports.gpu_safety import make_gpu_safe
+    return make_gpu_safe(InvisiblePlaywright)
 
 
 def _import_retry_async():
@@ -78,7 +86,7 @@ def _import_retryable_errors():
 # already sets a real browser UA.
 
 
-class PublicPageTransport:
+class PublicPageTransport(OzonTransportMixin):
     """Ozon reviews transport that scrapes the public review page
     DOM instead of the internal API.
 
@@ -145,6 +153,11 @@ class PublicPageTransport:
         # never look at (the src urls stay in the DOM). Disable
         # with --no-block-assets.
         block_assets: bool = True,
+        # Save a page screenshot into the debug dir on every debug
+        # dump. OFF by default: full-page screenshots of a logged-in
+        # session are a PII hazard and cost a noticeable share of
+        # the ~8s/page wall time. HTML/cards dumps stay on.
+        screenshots: bool = False,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -188,6 +201,7 @@ class PublicPageTransport:
         self.widget_scroll = widget_scroll
         self.lazy_wait_ms = lazy_wait_ms
         self.block_assets = block_assets
+        self.screenshots = screenshots
 
     # ------------------------------------------------------------------
     # Antibot detection & human-like navigation
@@ -245,10 +259,17 @@ class PublicPageTransport:
         """Land on the product page so Ozon/Cloudflare set their
         cookies for this browser session, then pause like a human
         reading the product card. No-op when ``self.warmup`` is
-        False; a failed warmup is logged and never kills the fetch."""
+        False; a failed warmup is logged and never kills the fetch.
+
+        The pause is full-length (0.8-2.2 s) for the FIRST warmup
+        of a run and shorter (0.4-1.0 s) for every subsequent one —
+        a repeat visitor spends less time on the product card each
+        time, and in per-page-browser modes the warmup is paid once
+        per page, so the saving adds up (~1 s per rotated page).
+        """
         if not self.warmup:
             return
-        warmup_url = f"https://www.ozon.ru{product_path}"
+        warmup_url = self._absolute_url(product_path)
         try:
             await retry_async(
                 lambda: page.goto(
@@ -264,9 +285,13 @@ class PublicPageTransport:
                 retry_on=retryable_errors(),
                 label=f"{label} warmup",
             )
-            await page.wait_for_timeout(
-                random.randint(800, 2_200),
-            )
+            warmups_done = getattr(self, "_warmup_count", 0)
+            self._warmup_count = warmups_done + 1
+            if warmups_done == 0:
+                pause_ms = random.randint(800, 2_200)
+            else:
+                pause_ms = random.randint(400, 1_000)
+            await page.wait_for_timeout(pause_ms)
         except Exception as exc:
             print(
                 f"Ozon (public): warmup не удался "
@@ -326,6 +351,7 @@ class PublicPageTransport:
         start_page: int = 1,
         max_pages: int | None = None,
         retry_attempts: int = 3,
+        extra_query: str = "",
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         """Paginate the public review page via ``?page=N``.
 
@@ -338,6 +364,9 @@ class PublicPageTransport:
         ``InvisiblePlaywright`` browser is created for each page
         (each with a new random fingerprint). When False (default),
         one browser is reused for the whole pagination run.
+
+        ``extra_query`` appends stream-variant parameters (e.g.
+        ``&sort=score_asc``) to every page URL.
         """
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         retry_async = _import_retry_async()
@@ -360,6 +389,7 @@ class PublicPageTransport:
                 seen_uuids=seen_uuids,
                 idle_pages_ref=[idle_pages],
                 processed_pages_ref=[processed_pages],
+                extra_query=extra_query,
             ):
                 yield page_num, payload
             return
@@ -380,12 +410,13 @@ class PublicPageTransport:
                 seen_uuids=seen_uuids,
                 idle_pages_ref=[idle_pages],
                 processed_pages_ref=[processed_pages],
+                extra_query=extra_query,
             ):
                 yield page_num, payload
             return
 
         # Single browser for the whole run (default, faster).
-        proxy_for_run = self._get_proxy_for_page()
+        proxy_for_run = await self._get_proxy_for_page()
         sleep_with_jitter = _import_sleep_with_jitter()
         async with _import_invisible_playwright()(
             proxy=proxy_for_run,
@@ -407,7 +438,7 @@ class PublicPageTransport:
             )
 
             prev_reviews_url: str | None = None
-            product_url = f"https://www.ozon.ru{product_path}"
+            product_url = self._absolute_url(product_path)
 
             while True:
                 if (
@@ -424,8 +455,9 @@ class PublicPageTransport:
                     return
 
                 reviews_url = (
-                    f"https://www.ozon.ru"
-                    f"{product_path}/reviews?page={current_page_num}"
+                    f"{OZON_BASE_URL}"
+                    f"{product_path}/reviews"
+                    f"?page={current_page_num}{extra_query}"
                 )
 
                 # Navigate like a real visitor: page 1 comes from
@@ -471,6 +503,7 @@ class PublicPageTransport:
                         antibot = await self._page_is_antibot(page)
                         if not antibot:
                             break
+                        self._notify_pacer_block()
                         await self._save_debug_page(
                             page=page,
                             page_number=current_page_num,
@@ -603,6 +636,7 @@ class PublicPageTransport:
         seen_uuids: set[str],
         idle_pages_ref: list[int],
         processed_pages_ref: list[int],
+        extra_query: str = "",
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         """Per-page browser iteration with random fingerprint.
 
@@ -612,9 +646,6 @@ class PublicPageTransport:
         maximally stealthy — every page looks like a different
         browser to Cloudflare.
         """
-        retry_async = _import_retry_async()
-        retryable_errors = _import_retryable_errors()
-
         current_page_num = start_page
 
         while True:
@@ -632,8 +663,9 @@ class PublicPageTransport:
                 return
 
             reviews_url = (
-                f"https://www.ozon.ru"
-                f"{product_path}/reviews?page={current_page_num}"
+                f"{OZON_BASE_URL}"
+                f"{product_path}/reviews"
+                f"?page={current_page_num}{extra_query}"
             )
 
             # One page may take several attempts: Ozon randomly
@@ -657,6 +689,7 @@ class PublicPageTransport:
                 if cards is not None:
                     break
                 if antibot and attempts_left > 0:
+                    self._notify_pacer_block()
                     cooldown = min(5.0 * attempt_num, 30.0)
                     print(
                         f"Ozon (public-rand): page "
@@ -744,7 +777,7 @@ class PublicPageTransport:
         scrolling. Stops after ``scroll_max_idle_rounds``
         consecutive scrolls with no new cards.
         """
-        scroll_proxy = self._get_proxy_for_page()
+        scroll_proxy = await self._get_proxy_for_page()
         if scroll_proxy is not None and self.proxy_pool is not None:
             print(
                 "Ozon (public scroll): proxy: "
@@ -759,7 +792,7 @@ class PublicPageTransport:
             page = await self._new_page_with_stealth(browser)
 
             reviews_url = (
-                f"https://www.ozon.ru{product_path}/reviews?page=1"
+                f"{OZON_BASE_URL}{product_path}/reviews?page=1"
             )
 
             # Same human-like navigation as pagination: warm up on
@@ -768,9 +801,7 @@ class PublicPageTransport:
                 page,
                 product_path=product_path,
                 reviews_url=reviews_url,
-                referer_url=(
-                    f"https://www.ozon.ru{product_path}"
-                ),
+                referer_url=self._absolute_url(product_path),
                 retry_async=_import_retry_async(),
                 retryable_errors=_import_retryable_errors(),
                 label="Ozon public scroll",
@@ -864,6 +895,7 @@ class PublicPageTransport:
         Yields ``(strategy, node)`` tuples. ``strategy`` is
         ``"widget"``, ``"pagination"`` or ``"scroll"``.
         """
+        from shared.pacing import AdaptivePacer
         from shared.retry import sleep_with_jitter
 
         seen_ids: set[str] = set()
@@ -912,46 +944,63 @@ class PublicPageTransport:
         # proxy; paid rotating pools (e.g. proxys.io) intermittently
         # answer 503 to CONNECT. Retry the phase — the pool rotates to
         # another exit IP on each attempt.
+        # Adaptive inter-page pacing: starts at page_delay_seconds,
+        # shrinks after clean pages, backs off on antibot events
+        # (see _notify_pacer_block). None when pacing is disabled.
+        self._pacer: AdaptivePacer | None = (
+            AdaptivePacer(base_delay=page_delay_seconds)
+            if page_delay_seconds > 0
+            else None
+        )
+
         pagination_attempts = max(3, retry_attempts)
-        for attempt in range(1, pagination_attempts + 1):
-            try:
-                async for page_num, payload in self.iter_ozon_reviews_json(
-                    product_path=product_path,
-                    start_page=pagination_start_page,
-                    max_pages=pagination_max_pages,
-                    retry_attempts=retry_attempts,
-                ):
-                    for node in payload.get("reviews", []):
-                        rid = node.get("reviewId") or node.get("uuid")
-                        if rid and rid in seen_ids:
-                            continue
-                        if rid:
-                            seen_ids.add(rid)
+        try:
+            for attempt in range(1, pagination_attempts + 1):
+                try:
+                    async for page_num, payload in (
+                        self.iter_ozon_reviews_json(
+                            product_path=product_path,
+                            start_page=pagination_start_page,
+                            max_pages=pagination_max_pages,
+                            retry_attempts=retry_attempts,
+                        )
+                    ):
+                        for node in payload.get("reviews", []):
+                            rid = node.get("reviewId") or (
+                                node.get("uuid")
+                            )
+                            if rid and rid in seen_ids:
+                                continue
+                            if rid:
+                                seen_ids.add(rid)
 
-                        yield "pagination", node
+                            yield "pagination", node
 
-                        if (
-                            max_reviews is not None
-                            and len(seen_ids) >= max_reviews
-                        ):
-                            return
+                            if (
+                                max_reviews is not None
+                                and len(seen_ids) >= max_reviews
+                            ):
+                                return
 
-                    if page_delay_seconds > 0:
-                        await sleep_with_jitter(page_delay_seconds)
-                break
-            except Exception as exc:
-                if attempt >= pagination_attempts:
-                    print(
-                        "Ozon (public auto): pagination phase failed "
-                        f"after {attempt} attempts: {exc}"
-                    )
-                else:
-                    print(
-                        "Ozon (public auto): pagination attempt "
-                        f"{attempt}/{pagination_attempts} failed: "
-                        f"{exc} — retry with next proxy"
-                    )
-                    await sleep_with_jitter(5.0)
+                        if self._pacer is not None:
+                            self._pacer.record_success()
+                            await self._pacer.wait()
+                    break
+                except Exception as exc:
+                    if attempt >= pagination_attempts:
+                        print(
+                            "Ozon (public auto): pagination phase "
+                            f"failed after {attempt} attempts: {exc}"
+                        )
+                    else:
+                        print(
+                            "Ozon (public auto): pagination attempt "
+                            f"{attempt}/{pagination_attempts} "
+                            f"failed: {exc} — retry with next proxy"
+                        )
+                        await sleep_with_jitter(5.0)
+        finally:
+            self._pacer = None
 
         if max_reviews is not None and len(seen_ids) >= max_reviews:
             return
@@ -1284,7 +1333,7 @@ class PublicPageTransport:
         # Fresh browser per fetch: new random fingerprint (seed
         # defaults to None → secrets.randbits(31)) and, when a
         # proxy_pool is active, the next proxy in the rotation.
-        page_proxy = self._get_proxy_for_page()
+        page_proxy = await self._get_proxy_for_page()
         if page_proxy is not None and self.proxy_pool is not None:
             print(
                 f"Ozon (public-rand): page {page_number} — "
@@ -1346,9 +1395,7 @@ class PublicPageTransport:
                 page,
                 product_path=product_path,
                 reviews_url=reviews_url,
-                referer_url=(
-                    f"https://www.ozon.ru{product_path}"
-                ),
+                referer_url=self._absolute_url(product_path),
                 retry_async=retry_async,
                 retryable_errors=retryable_errors,
                 label=f"Ozon public-rand page {page_number}",
@@ -1457,6 +1504,73 @@ class PublicPageTransport:
         "'[data-review-uuid] svg path').length"
     )
 
+    # Push-based card-replacement detection for the widget flow:
+    # a MutationObserver resolves the promise as soon as the
+    # rendered card set contains a uuid absent from ``prevUuids``.
+    # Resolves ``{"uuids": [...]}`` on change, ``{"timeout": true}``
+    # when ``timeoutMs`` elapses. The 250 ms debounce avoids
+    # resolving on a mid-render partial set; the 500 ms interval
+    # floor guards against a quiet DOM that never mutates; the
+    # nudge near the deadline mirrors the legacy poll loop's
+    # "scroll a bit to wake the widget" trick.
+    _CARD_REPLACEMENT_OBSERVER_JS = """
+async ({ prevUuids, timeoutMs }) => {
+    const prev = new Set(prevUuids);
+    const uuids = () => Array.from(
+        document.querySelectorAll("[data-review-uuid]"),
+        c => c.getAttribute("data-review-uuid"),
+    );
+    const changed = () => {
+        const cur = uuids();
+        if (cur.length === 0) return null;
+        for (const u of cur) {
+            if (u && !prev.has(u)) return cur;
+        }
+        return null;
+    };
+    return await new Promise(resolve => {
+        const immediate = changed();
+        if (immediate) {
+            return resolve({ uuids: immediate });
+        }
+        let done = false;
+        let settleTimer = null;
+        const finish = result => {
+            if (done) return;
+            done = true;
+            observer.disconnect();
+            clearInterval(floorTimer);
+            clearTimeout(deadlineTimer);
+            clearTimeout(nudgeTimer);
+            if (settleTimer) clearTimeout(settleTimer);
+            resolve(result);
+        };
+        const check = () => {
+            const cur = changed();
+            if (cur) finish({ uuids: cur });
+        };
+        const observer = new MutationObserver(() => {
+            if (done) return;
+            if (settleTimer) clearTimeout(settleTimer);
+            settleTimer = setTimeout(check, 250);
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+        });
+        const floorTimer = setInterval(check, 500);
+        const deadlineTimer = setTimeout(
+            () => finish({ timeout: true }),
+            timeoutMs,
+        );
+        const nudgeTimer = setTimeout(
+            () => window.scrollBy(0, 900),
+            Math.max(0, timeoutMs - 15000),
+        );
+    });
+}
+"""
+
     async def _wait_for_cards_hydrated(
         self, page, timeout_s: float = 3.0,
     ) -> None:
@@ -1536,10 +1650,41 @@ class PublicPageTransport:
 
         The reviews widget paginates by REPLACING the 30 rendered
         cards, so — unlike a lazy-load scroll — the card count does
-        not grow. Poll the UUID set (one round-trip per poll) until
-        it changes, nudging the page with a small scroll near the
-        end of the wait.
+        not grow.
+
+        Fast path: a single ``page.evaluate`` installs a
+        MutationObserver that resolves the moment the card set
+        changes (debounced 250 ms so a mid-render partial set is
+        not mistaken for the final one) — zero per-poll round-trips
+        versus the old 300 ms Python-side poll loop. Falls back to
+        the original polling when ``evaluate`` is unavailable or
+        returns an unexpected shape (unit-test fakes, exotic
+        engines).
         """
+        try:
+            result = await page.evaluate(
+                self._CARD_REPLACEMENT_OBSERVER_JS,
+                {
+                    "prevUuids": sorted(
+                        u for u in prev_uuids if u
+                    ),
+                    "timeoutMs": self.card_wait_ms,
+                },
+            )
+        except Exception:
+            result = None
+        if isinstance(result, dict):
+            got = {
+                u
+                for u in (result.get("uuids") or [])
+                if u
+            }
+            if got:
+                return got
+            # {"timeout": true} — no replacement within the budget
+            return None
+
+        # --- legacy polling fallback ---
         deadline = time.monotonic() + self.card_wait_ms / 1000
         nudged = False
         while time.monotonic() < deadline:
@@ -1605,7 +1750,7 @@ class PublicPageTransport:
         retryable_errors = _import_retryable_errors()
         sleep_with_jitter = _import_sleep_with_jitter()
 
-        product_url = f"https://www.ozon.ru{product_path}"
+        product_url = self._absolute_url(product_path)
         resume_url = f"{product_url}/reviews?page=1"
         seen_uuids: set[str] = set()
         restarts_left = max(3, min(retry_attempts, 10))
@@ -1617,7 +1762,7 @@ class PublicPageTransport:
             ):
                 return
 
-            page_proxy = self._get_proxy_for_page()
+            page_proxy = await self._get_proxy_for_page()
             if page_proxy is not None and self.proxy_pool is not None:
                 print(
                     "Ozon (public-widget): proxy: "
@@ -1789,7 +1934,7 @@ class PublicPageTransport:
         retryable_errors = _import_retryable_errors()
         sleep_with_jitter = _import_sleep_with_jitter()
 
-        product_url = f"https://www.ozon.ru{product_path}"
+        product_url = self._absolute_url(product_path)
         resume_url = f"{product_url}/reviews?page=1"
         seen: set[str] = set()
         restarts_left = max(3, min(retry_attempts, 10))
@@ -1801,7 +1946,7 @@ class PublicPageTransport:
             ):
                 return
 
-            page_proxy = self._get_proxy_for_page()
+            page_proxy = await self._get_proxy_for_page()
             if page_proxy is not None and self.proxy_pool is not None:
                 print(
                     "Ozon (public-widget): proxy: "
@@ -2038,16 +2183,22 @@ class PublicPageTransport:
             ctx["frontier"].put_nowait(None)
             await ctx["out"].put(None)
 
-    def _get_proxy_for_page(self) -> dict[str, str] | None:
+    async def _get_proxy_for_page(self) -> dict[str, str] | None:
         """Return the proxy to use for the next page fetch.
 
         When a ``proxy_pool`` is configured, returns the next proxy
-        in the rotation. When ``proxy`` is configured (single
-        proxy), returns that. When neither is configured, returns
-        ``None`` (direct connection).
+        in the rotation (async — a ``FreeProxyPool`` refill fetches
+        a new batch off the event loop). When ``proxy`` is
+        configured (single proxy), returns that. When neither is
+        configured, returns ``None`` (direct connection).
         """
         if self.proxy_pool is not None:
-            proxy = self.proxy_pool.next()
+            pool = self.proxy_pool
+            next_async = getattr(pool, "next_async", None)
+            if next_async is not None:
+                proxy = await next_async()
+            else:
+                proxy = pool.next()
             if proxy is None:
                 print(
                     "Ozon (public): WARNING — все proxy в пуле "
@@ -2084,17 +2235,19 @@ class PublicPageTransport:
         page_number: int,
         cards: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Save a screenshot + the parsed cards for postmortem."""
+        """Save the parsed cards (+ optional screenshot) for
+        postmortem."""
         page_dir = self.debug_dir / f"page_{page_number}"
         page_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            await page.screenshot(
-                path=str(page_dir / "page.png"),
-                full_page=True,
-            )
-        except Exception:
-            pass
+        if self.screenshots:
+            try:
+                await page.screenshot(
+                    path=str(page_dir / "page.png"),
+                    full_page=True,
+                )
+            except Exception:
+                pass
 
         if cards is not None:
             (page_dir / "cards.json").write_text(

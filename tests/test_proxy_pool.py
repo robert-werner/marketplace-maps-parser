@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
 
 from infrastructure.transports.proxy_pool import (
     ProxyPool,
+    mask_proxy_url,
     parse_proxy_file,
     parse_proxy_line,
+    proxy_to_url,
 )
-
 
 # ---------------------------------------------------------------------------
 # parse_proxy_line
@@ -223,3 +223,71 @@ def test_proxy_pool_from_file(tmp_path):
     assert pool.size == 2
     assert pool.next()["server"] == "http://1.2.3.4:8080"
     assert pool.next()["server"] == "http://5.6.7.8:3128"
+
+
+# ---------------------------------------------------------------------------
+# proxy_to_url
+# ---------------------------------------------------------------------------
+
+
+def test_proxy_to_url_with_credentials():
+    result = proxy_to_url(
+        {
+            "server": "http://1.2.3.4:8080",
+            "username": "user",
+            "password": "pass",
+        }
+    )
+    assert result == "http://user:pass@1.2.3.4:8080"
+
+
+def test_proxy_to_url_without_credentials():
+    result = proxy_to_url({"server": "http://1.2.3.4:8080"})
+    assert result == "http://1.2.3.4:8080"
+
+
+def test_proxy_to_url_socks5():
+    result = proxy_to_url(
+        {
+            "server": "socks5://1.2.3.4:1080",
+            "username": "u",
+            "password": "p",
+        }
+    )
+    assert result == "socks5://u:p@1.2.3.4:1080"
+
+
+def test_proxy_to_url_roundtrip():
+    """proxy_to_url is the inverse of parse_proxy_line."""
+    line = "http://user:pass@1.2.3.4:8080"
+    assert proxy_to_url(parse_proxy_line(line)) == line
+
+
+# ---------------------------------------------------------------------------
+# mask_proxy_url
+# ---------------------------------------------------------------------------
+
+
+def test_mask_proxy_url_masks_password():
+    assert (
+        mask_proxy_url("http://user:secret@1.2.3.4:8080")
+        == "http://user:***@1.2.3.4:8080"
+    )
+
+
+def test_mask_proxy_url_no_credentials_unchanged():
+    assert (
+        mask_proxy_url("http://1.2.3.4:8080")
+        == "http://1.2.3.4:8080"
+    )
+
+
+def test_mask_proxy_url_masks_proxy_to_url_output():
+    proxy = {
+        "server": "http://1.2.3.4:8080",
+        "username": "user",
+        "password": "secret",
+    }
+    masked = mask_proxy_url(proxy_to_url(proxy))
+    assert "secret" not in masked
+    assert masked == "http://user:***@1.2.3.4:8080"

@@ -6,6 +6,7 @@ require a running browser.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,6 +15,7 @@ import pytest
 from domain.entities import ProductRef
 from infrastructure.marketplaces.ozon import (
     build_review_key,
+    extract_ozon_rating_summary,
     extract_reviews_from_ozon_payload,
     map_ozon_review_node,
     normalize_rating,
@@ -21,7 +23,6 @@ from infrastructure.marketplaces.ozon import (
     parse_ozon_date,
     walk_json,
 )
-
 
 PRODUCT = ProductRef(
     marketplace="ozon",
@@ -243,3 +244,56 @@ def test_build_review_key_is_stable() -> None:
     # Different position → different key
     key3 = build_review_key(review, page_number=2, position=4)
     assert key1 != key3
+
+
+def _score_widget_payload() -> dict[str, Any]:
+    """A pdp_reviews-style payload with a webReviewProductScore
+    widget state (the widget value is a JSON-encoded string, exactly
+    like the real API returns)."""
+    widget = {
+        "score": [
+            {"title": "5 звёзд", "value": 4093},
+            {"title": "4 звезды", "value": 199},
+            {"title": "3 звезды", "value": 53},
+            {"title": "2 звезды", "value": 31},
+            {"title": "1 звезда", "value": 96},
+        ],
+        "reviewsCount": 4472,
+        "totalScore": 4.8,
+    }
+    return {
+        "widgetStates": {
+            "webReviewProductScore-14003865-default-1": (
+                json.dumps(widget, ensure_ascii=False)
+            ),
+            "webListReviews-5603940-default-1": "{}",
+        }
+    }
+
+
+def test_extract_ozon_rating_summary_parses_histogram() -> None:
+    summary = extract_ozon_rating_summary(
+        _score_widget_payload(),
+        product_id="2879817631",
+        product_url="https://www.ozon.ru/product/foo",
+    )
+    assert summary is not None
+    assert summary["histogram"] == {
+        "5": 4093,
+        "4": 199,
+        "3": 53,
+        "2": 31,
+        "1": 96,
+    }
+    assert summary["reviews_count"] == 4472
+    assert summary["average_score"] == 4.8
+    assert summary["product_id"] == "2879817631"
+
+
+def test_extract_ozon_rating_summary_returns_none_without_widget() -> None:
+    """Payloads without widgetStates (e.g. DOM-card payloads from
+    the public_page transport) must yield None, not an error."""
+    assert extract_ozon_rating_summary({"reviews": []}) is None
+    assert extract_ozon_rating_summary(
+        {"widgetStates": {"webListReviews-1-default-1": "{}"}},
+    ) is None

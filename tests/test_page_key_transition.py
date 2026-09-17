@@ -255,7 +255,9 @@ async def test_page_key_transition_with_zero_reviews_triggers_retry(
         lambda: lambda **kw: _FakeBrowser(),
     )
     # Stub _save_debug to avoid writing files.
-    async def fake_save_debug(self, *, page, payload, page_number):
+    async def fake_save_debug(
+        self, *, page, payload, page_number, stream_suffix=""
+    ):
         return None
     monkeypatch.setattr(
         BrowserJsonTransport, "_save_debug", fake_save_debug,
@@ -361,7 +363,9 @@ async def test_page_key_transition_with_zero_reviews_retry_also_empty(
         lambda: lambda **kw: _FakeBrowser(),
     )
 
-    async def fake_save_debug(self, *, page, payload, page_number):
+    async def fake_save_debug(
+        self, *, page, payload, page_number, stream_suffix=""
+    ):
         return None
     monkeypatch.setattr(
         BrowserJsonTransport, "_save_debug", fake_save_debug,
@@ -441,7 +445,9 @@ async def test_no_page_key_in_url_no_reset_attempted(monkeypatch):
         "_import_invisible_playwright",
         lambda: lambda **kw: _FakeBrowser(),
     )
-    async def fake_save_debug(self, *, page, payload, page_number):
+    async def fake_save_debug(
+        self, *, page, payload, page_number, stream_suffix=""
+    ):
         return None
     monkeypatch.setattr(
         BrowserJsonTransport, "_save_debug", fake_save_debug,
@@ -510,7 +516,9 @@ async def test_page_key_same_across_pages_no_reset_attempted(
         "_import_invisible_playwright",
         lambda: lambda **kw: _FakeBrowser(),
     )
-    async def fake_save_debug(self, *, page, payload, page_number):
+    async def fake_save_debug(
+        self, *, page, payload, page_number, stream_suffix=""
+    ):
         return None
     monkeypatch.setattr(
         BrowserJsonTransport, "_save_debug", fake_save_debug,
@@ -646,7 +654,9 @@ async def test_nextpage_loop_guard_synthesizes_variant_b_pages(monkeypatch):
         "_import_invisible_playwright",
         lambda: lambda **kw: _FakeBrowser(),
     )
-    async def fake_save_debug(self, *, page, payload, page_number):
+    async def fake_save_debug(
+        self, *, page, payload, page_number, stream_suffix=""
+    ):
         return None
     monkeypatch.setattr(
         BrowserJsonTransport, "_save_debug", fake_save_debug,

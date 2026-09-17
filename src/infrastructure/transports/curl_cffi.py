@@ -45,12 +45,12 @@ Advantages:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+
+from infrastructure.transports.base import OzonTransportMixin
 
 
 def _import_curl_cffi():
@@ -126,7 +126,7 @@ _IMPERSONATE_TARGETS = (
 )
 
 
-class CurlCffiTransport:
+class CurlCffiTransport(OzonTransportMixin):
     """HTTP transport for Ozon reviews JSON using curl_cffi.
 
     Implements the same shape as ``BrowserJsonTransport`` (the
@@ -173,7 +173,7 @@ class CurlCffiTransport:
         # the transport so cookies persist across requests.
         self._session = None
 
-    async def __aenter__(self) -> "CurlCffiTransport":
+    async def __aenter__(self) -> CurlCffiTransport:
         await self._ensure_session()
         return self
 
@@ -234,7 +234,7 @@ class CurlCffiTransport:
         """
         # Visit the product page (HTML). The product_path looks
         # like "/product/ip-telefon-yealink-sip-t30-...".
-        product_url = f"https://www.ozon.ru{product_path}"
+        product_url = self._absolute_url(product_path)
 
         print(
             f"Ozon (curl_cffi): warmup — открываю {product_url} для "
@@ -300,12 +300,15 @@ class CurlCffiTransport:
         start_page: int = 1,
         max_pages: int | None = None,
         retry_attempts: int = 3,
+        extra_query: str = "",
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         """Fetch Ozon review pages via the internal entrypoint-api
         endpoint, following ``nextPage`` links until exhausted.
 
         Yields ``(page_number, payload)`` tuples. ``payload`` is the
-        raw JSON dict returned by Ozon.
+        raw JSON dict returned by Ozon. ``extra_query`` appends
+        stream-variant parameters (e.g. ``&sort=score_asc``) to the
+        first page URL.
         """
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         CloudflareChallengeError = _import_cloudflare_error()
@@ -330,7 +333,7 @@ class CurlCffiTransport:
         current_path = self._build_initial_path(
             product_path=product_path,
             page_number=start_page,
-        )
+        ) + extra_query
 
         seen_paths: set[str] = set()
         processed_pages = 0
@@ -350,8 +353,6 @@ class CurlCffiTransport:
                 return
 
             seen_paths.add(current_path)
-
-            endpoint_url = self._build_api_url(current_path)
 
             payload = await retry_async(
                 lambda path=current_path: self._fetch_api_json(
@@ -442,36 +443,52 @@ class CurlCffiTransport:
         Scroll is not supported (see ``iter_ozon_reviews_by_scroll``).
         All yielded tuples have ``strategy="pagination"``.
         """
+        from shared.pacing import AdaptivePacer
+
         seen_ids: set[str] = set()
 
-        async for page_num, payload in self.iter_ozon_reviews_json(
-            product_path=product_path,
-            start_page=pagination_start_page,
-            max_pages=pagination_max_pages,
-            retry_attempts=retry_attempts,
-        ):
-            review_nodes = self._extract_review_nodes_from_payload(
-                payload,
-            )
+        # Adaptive inter-page pacing (see shared.pacing): shrinks
+        # the delay after clean pages, backs off on challenge
+        # events reported via _notify_pacer_block.
+        self._pacer: AdaptivePacer | None = (
+            AdaptivePacer(base_delay=page_delay_seconds)
+            if page_delay_seconds > 0
+            else None
+        )
 
-            for node in review_nodes:
-                rid = self._review_node_id(node)
-                if rid and rid in seen_ids:
-                    continue
-                if rid:
-                    seen_ids.add(rid)
+        try:
+            async for page_num, payload in (
+                self.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=pagination_start_page,
+                    max_pages=pagination_max_pages,
+                    retry_attempts=retry_attempts,
+                )
+            ):
+                review_nodes = self._extract_review_nodes_from_payload(
+                    payload,
+                )
 
-                yield "pagination", node
+                for node in review_nodes:
+                    rid = self._review_node_id(node)
+                    if rid and rid in seen_ids:
+                        continue
+                    if rid:
+                        seen_ids.add(rid)
 
-                if (
-                    max_reviews is not None
-                    and len(seen_ids) >= max_reviews
-                ):
-                    return
+                    yield "pagination", node
 
-            if page_delay_seconds > 0:
-                from shared.retry import sleep_with_jitter
-                await sleep_with_jitter(page_delay_seconds)
+                    if (
+                        max_reviews is not None
+                        and len(seen_ids) >= max_reviews
+                    ):
+                        return
+
+                if self._pacer is not None:
+                    self._pacer.record_success()
+                    await self._pacer.wait()
+        finally:
+            self._pacer = None
 
     # ------------------------------------------------------------------
     # Internal fetch
@@ -512,6 +529,7 @@ class CurlCffiTransport:
 
         if status < 200 or status >= 300:
             if status == 403 and self._is_cloudflare_challenge(body):
+                self._notify_pacer_block()
                 raise CloudflareChallengeError(
                     status=status,
                     url=endpoint_url,
@@ -538,115 +556,6 @@ class CurlCffiTransport:
             )
 
         return payload
-
-    # ------------------------------------------------------------------
-    # Helpers (mirror BrowserJsonTransport's static helpers)
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _build_initial_path(
-        *,
-        product_path: str,
-        page_number: int,
-    ) -> str:
-        return f"{product_path}/reviews?page={page_number}"
-
-    @staticmethod
-    def _build_api_url(internal_path: str) -> str:
-        """Build the full Ozon API URL for a given internal path."""
-        endpoint = (
-            "https://www.ozon.ru"
-            "/api/entrypoint-api.bx/page/json/v2"
-        )
-        return f"{endpoint}?{urlencode({'url': internal_path})}"
-
-    @staticmethod
-    def extract_next_path(
-        payload: dict[str, Any],
-    ) -> str | None:
-        """Extract the next page path from an Ozon API payload.
-
-        Mirrors ``BrowserJsonTransport.extract_next_path``.
-        """
-        next_page = payload.get("nextPage")
-
-        if isinstance(next_page, str):
-            return next_page or None
-
-        if isinstance(next_page, dict):
-            for key in ("url", "href", "path"):
-                value = next_page.get(key)
-                if isinstance(value, str) and value:
-                    return value
-
-        return None
-
-    @staticmethod
-    def _review_node_id(node: dict[str, Any]) -> str | None:
-        """Best-effort extraction of a stable id from a review node.
-
-        Mirrors ``BrowserJsonTransport._review_node_id``.
-        """
-        for key in (
-            "reviewId",
-            "review_id",
-            "reviewUuid",
-            "review_uuid",
-            "uuid",
-            "id",
-        ):
-            value = node.get(key)
-            if value:
-                return str(value)
-        return None
-
-    @staticmethod
-    def _extract_review_nodes_from_payload(
-        payload: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Pull every dict that looks like a review out of a raw
-        Ozon pagination payload.
-
-        Mirrors ``BrowserJsonTransport._extract_review_nodes_from_payload``.
-        """
-        from domain.entities import ProductRef
-        from infrastructure.marketplaces.ozon import (
-            extract_reviews_from_ozon_payload,
-        )
-
-        placeholder = ProductRef(
-            marketplace="ozon",
-            source_url="",
-            product_id="_placeholder",
-        )
-        reviews = extract_reviews_from_ozon_payload(
-            payload, placeholder,
-        )
-        return [
-            r.raw for r in reviews if isinstance(r.raw, dict)
-        ]
-
-    @staticmethod
-    def _is_cloudflare_challenge(body: str) -> bool:
-        """Same heuristic as BrowserJsonTransport._is_cloudflare_challenge.
-
-        Detects both the JSON envelope (``incidentId`` /
-        ``challengeURL``) and the HTML "enable JavaScript" page.
-        """
-        if not body:
-            return False
-        body_lower = body.lower()
-        return (
-            "challengeurl" in body_lower
-            or "incidentid" in body_lower
-            or "challenge.html" in body_lower
-            or "fab_chlg_" in body_lower
-            or "enable javascript" in body_lower
-            or "включите javascript" in body_lower
-            or "we need to make sure that you are not a robot"
-            in body_lower
-            or "нам нужно убедиться, что вы не робот"
-            in body_lower
-        )
 
     async def _save_debug(
         self,

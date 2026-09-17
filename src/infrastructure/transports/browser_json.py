@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from infrastructure.transports.base import (
+    OZON_BASE_URL,
+    OzonTransportMixin,
+)
+
 
 def _import_invisible_playwright():
     """Lazy import of invisible-playwright.
@@ -17,9 +22,16 @@ def _import_invisible_playwright():
     lets the rest of the module — including the constructor and the
     pure-Python ``_fetch_json_with_retry`` / static helpers — work
     without the browser stack installed.
+
+    The class is wrapped with GPU-safe software-rendering prefs:
+    parallel browser sessions with hardware compositing can hang the
+    GPU and trip Windows TDR ("safe mode" driver). See
+    ``transports/gpu_safety.py``.
     """
     from invisible_playwright.async_api import InvisiblePlaywright
-    return InvisiblePlaywright
+
+    from infrastructure.transports.gpu_safety import make_gpu_safe
+    return make_gpu_safe(InvisiblePlaywright)
 
 
 def _get_retryable_errors() -> tuple[type[BaseException], ...]:
@@ -230,7 +242,7 @@ class CloudflareChallengeError(RuntimeError):
         )
 
 
-class BrowserJsonTransport:
+class BrowserJsonTransport(OzonTransportMixin):
     """Получает JSON Ozon в одной browser-сессии.
 
     Сначала открывается страница отзывов, затем внутренний endpoint
@@ -270,6 +282,18 @@ class BrowserJsonTransport:
         # first navigation — the internal API needs them to serve
         # the full review list instead of the anonymous subset.
         cookies: list[dict[str, Any]] | None = None,
+        # Save a page screenshot into the debug dir on every debug
+        # dump. OFF by default: full-page screenshots of a logged-in
+        # session are a PII hazard and cost a noticeable share of the
+        # per-page wall time. HTML/payload dumps stay on.
+        screenshots: bool = False,
+        # Abort image/font/media requests on scraper navigations.
+        # Review photos dominate the ~880KB reviews page; the JSON
+        # fetch needs none of them, so blocking cuts the per-page
+        # wall time roughly in half. Mirrors the public_page
+        # transport (same measured pattern: route by file extension,
+        # never "**/*").
+        block_assets: bool = True,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -280,6 +304,8 @@ class BrowserJsonTransport:
         self.humanize = humanize
         self.stealth = stealth
         self.cookies = cookies
+        self.screenshots = screenshots
+        self.block_assets = block_assets
         if fetch_strategy not in ("navigation", "fetch"):
             raise ValueError(
                 f"Unknown fetch_strategy: {fetch_strategy!r}. "
@@ -301,6 +327,66 @@ class BrowserJsonTransport:
                 f"cookies ({type(exc).__name__}: {exc})"
             )
 
+    # ------------------------------------------------------------------
+    # Per-page speed helpers
+    # ------------------------------------------------------------------
+    #
+    # Images/fonts/media are the bulk of the reviews page's bytes
+    # (~880KB); the JSON fetch needs none of them. Same measured
+    # pattern as public_page: route by file extension, never
+    # "**/*" (routing all ~200 requests through Python costs more
+    # than the blocked assets save).
+    _BLOCKED_RESOURCE_TYPES = frozenset(
+        {"image", "font", "media"}
+    )
+    _ASSET_ROUTE_PATTERNS = (
+        "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.webp",
+        "**/*.gif", "**/*.avif", "**/*.woff", "**/*.woff2",
+        "**/*.ttf", "**/*.mp4",
+    )
+
+    async def _install_resource_blocker(self, page) -> None:
+        if not self.block_assets:
+            return
+
+        async def _route(route):
+            try:
+                if (
+                    route.request.resource_type
+                    in self._BLOCKED_RESOURCE_TYPES
+                ):
+                    await route.abort()
+                else:
+                    await route.continue_()
+            except Exception:
+                pass
+
+        for pattern in self._ASSET_ROUTE_PATTERNS:
+            try:
+                # invisible-playwright's Page.route is a coroutine —
+                # calling it without await silently drops the route.
+                await page.route(pattern, _route)
+            except Exception:
+                # Fakes / builds without routing support: fall back
+                # to loading assets (slower but correct).
+                pass
+
+    async def _settle_after_goto(self, page) -> None:
+        """Wait after the reviews-HTML goto, before the JSON fetch.
+
+        - ``fetch`` strategy: the full ``settle_ms`` — the page's JS
+          context must be warm before ``fetch()`` runs from it.
+        - ``navigation`` strategy: a short fixed grace (500ms) — the
+          goto to the API URL replaces the page content anyway, so a
+          long settle is pure waste; the grace only lets the page's
+          antibot beacons fire.
+        """
+        if self.fetch_strategy == "fetch":
+            if self.settle_ms > 0:
+                await page.wait_for_timeout(self.settle_ms)
+            return
+        await page.wait_for_timeout(500)
+
     async def iter_ozon_reviews_json(
             self,
             product_path: str,
@@ -308,7 +394,15 @@ class BrowserJsonTransport:
             start_page: int = 1,
             max_pages: int | None = None,
             retry_attempts: int = 3,
+            extra_query: str = "",
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
+        """Paginate the internal Ozon reviews API.
+
+        ``extra_query`` appends stream-variant parameters to the
+        FIRST page URL (e.g. ``&sort=score_asc``); subsequent pages
+        follow Ozon's ``nextPage`` verbatim, so the variant applies
+        to the whole stream when Ozon echoes it in nextPage.
+        """
         self.debug_dir.mkdir(
             parents=True,
             exist_ok=True,
@@ -321,10 +415,11 @@ class BrowserJsonTransport:
                 humanize=self.humanize,
         ) as browser:
 
-            # Page factory: always returns a fresh page. Each retry
-            # attempt asks for a new page so that a broken execution
-            # context (CDP error, "operation aborted") doesn't poison
-            # subsequent fetches.
+            # Page factory: returns a fresh page for retries and
+            # recovery paths; the happy path instead REUSES one tab
+            # (see the ``page=`` argument of _goto_with_retry) so a
+            # stream looks like a user walking pages in one tab —
+            # and skips the per-page new_page/init-script cost.
             #
             # We close the previous page before creating a new one so
             # we don't leak browser tabs. The first call has nothing
@@ -342,6 +437,7 @@ class BrowserJsonTransport:
                         pass
                 new_page = await browser.new_page()
                 await self._inject_cookies(new_page)
+                await self._install_resource_blocker(new_page)
                 # Apply stealth init script to every fresh page. This
                 # patches ``navigator.webdriver``, ``chrome.runtime``,
                 # ``Notification.permission``, ``window.outerWidth`` /
@@ -369,10 +465,21 @@ class BrowserJsonTransport:
             current_path = self._build_initial_path(
                 product_path=product_path,
                 page_number=start_page,
-            )
+            ) + extra_query
 
             seen_paths: set[str] = set()
             processed_pages = 0
+            # Debug dumps are written per page NUMBER; with several
+            # streams (default / score_asc / score_desc) walking in
+            # parallel — or even sequentially — page_1 of one stream
+            # would overwrite page_1 of another. Derive a per-stream
+            # suffix from extra_query so each stream dumps into its
+            # own page_N_<sort> directory.
+            stream_suffix = ""
+            if extra_query and "sort=" in extra_query:
+                stream_suffix = "_" + extra_query.split("sort=")[
+                    -1
+                ].strip("&")
             # Track the page_key of the previous successful request so
             # we can detect a page_key transition (see
             # ``_reset_page_in_path`` docstring for the rationale).
@@ -400,11 +507,12 @@ class BrowserJsonTransport:
 
                 reviews_url = self._absolute_url(current_path)
 
-                # _goto_with_retry recreates the page on each attempt
-                # and returns the page that successfully completed
-                # the navigation. We use that same page for the fetch.
+                # _goto_with_retry reuses the current tab on the
+                # first attempt (one user-like tab per stream) and
+                # falls back to a fresh page on retries.
                 page = await self._goto_with_retry(
                     page_factory=page_factory,
+                    page=page,
                     reviews_url=reviews_url,
                     attempts=retry_attempts,
                     label=(
@@ -413,10 +521,7 @@ class BrowserJsonTransport:
                     ),
                 )
 
-                if self.settle_ms > 0:
-                    await page.wait_for_timeout(
-                        self.settle_ms,
-                    )
+                await self._settle_after_goto(page)
 
                 # If the fetch fails with an execution-context-lost
                 # style error, recreate the page and retry. This is a
@@ -440,24 +545,31 @@ class BrowserJsonTransport:
                         f"{processed_pages + 1}; пересоздаю страницу "
                         f"и повторяю один раз: {exc}"
                     )
-                    page = await page_factory()
-                    await page.goto(
-                        reviews_url,
-                        wait_until="domcontentloaded",
-                        timeout=self.timeout_ms,
-                    )
-                    if self.settle_ms > 0:
-                        await page.wait_for_timeout(self.settle_ms)
-                    payload = await self._fetch_json_with_retry(
-                        page=page,
-                        internal_path=current_path,
-                        attempts=retry_attempts,
-                        label=(
-                            f"Ozon pagination page "
-                            f"{processed_pages + 1} "
-                            f"({current_path}) [retry-after-recreate]"
-                        ),
-                    )
+                    try:
+                        page = await page_factory()
+                        await page.goto(
+                            reviews_url,
+                            wait_until="domcontentloaded",
+                            timeout=self.timeout_ms,
+                        )
+                        await self._settle_after_goto(page)
+                        payload = await self._fetch_json_with_retry(
+                            page=page,
+                            internal_path=current_path,
+                            attempts=retry_attempts,
+                            label=(
+                                f"Ozon pagination page "
+                                f"{processed_pages + 1} "
+                                f"({current_path}) [retry-after-recreate]"
+                            ),
+                        )
+                    except _retryable_errors() as exc2:
+                        print(
+                            f"Ozon: second retry also failed on page "
+                            f"{processed_pages + 1}: {exc2}; "
+                            f"останавливаю сбор для избежания пропусков"
+                        )
+                        return
 
                 processed_pages += 1
 
@@ -465,6 +577,7 @@ class BrowserJsonTransport:
                     page=page,
                     payload=payload,
                     page_number=processed_pages,
+                    stream_suffix=stream_suffix,
                 )
 
                 print(
@@ -580,42 +693,6 @@ class BrowserJsonTransport:
 
                 current_path = next_path
 
-    @staticmethod
-    def _build_initial_path(
-            *,
-            product_path: str,
-            page_number: int,
-    ) -> str:
-        return (
-            f"{product_path}/reviews"
-            f"?page={page_number}"
-        )
-
-    @staticmethod
-    def _absolute_url(path: str) -> str:
-        if path.startswith(("http://", "https://")):
-            return path
-
-        return f"https://www.ozon.ru{path}"
-
-    @staticmethod
-    def extract_next_path(
-            payload: dict[str, Any],
-    ) -> str | None:
-        next_page = payload.get("nextPage")
-
-        if isinstance(next_page, str):
-            return next_page or None
-
-        if isinstance(next_page, dict):
-            for key in ("url", "href", "path"):
-                value = next_page.get(key)
-
-                if isinstance(value, str) and value:
-                    return value
-
-        return None
-
     # ------------------------------------------------------------------
     # page_key transition detection
     # ------------------------------------------------------------------
@@ -705,9 +782,10 @@ class BrowserJsonTransport:
         ) as browser:
             page = await browser.new_page()
             await self._inject_cookies(page)
+            await self._install_resource_blocker(page)
 
             reviews_url = (
-                f"https://www.ozon.ru"
+                f"{OZON_BASE_URL}"
                 f"{product_path}/reviews/"
             )
 
@@ -965,14 +1043,20 @@ class BrowserJsonTransport:
         Deduplication is by review UUID across both strategies.
         """
         from shared.logging import get_logger
-        from shared.retry import (
-            retry_async,
-            sleep_with_jitter,
-        )
+        from shared.pacing import AdaptivePacer
 
         log = get_logger("transports.browser_json")
 
         seen_ids: set[str] = set()
+
+        # Adaptive inter-page pacing (see shared.pacing): shrinks
+        # the delay after clean pages, backs off on challenge
+        # events reported via _notify_pacer_block.
+        self._pacer: AdaptivePacer | None = (
+            AdaptivePacer(base_delay=page_delay_seconds)
+            if page_delay_seconds > 0
+            else None
+        )
 
         # ------------------ pagination ------------------
         pagination_yielded = 0
@@ -1007,16 +1091,17 @@ class BrowserJsonTransport:
                         )
                         return
 
-                if page_delay_seconds > 0:
-                    await sleep_with_jitter(
-                        page_delay_seconds,
-                    )
+                if self._pacer is not None:
+                    self._pacer.record_success()
+                    await self._pacer.wait()
         except Exception as exc:
             log.warning(
                 "Ozon: pagination failed after {} reviews: {} — "
                 "falling back to scroll",
                 pagination_yielded, exc,
             )
+        finally:
+            self._pacer = None
 
         log.info(
             "Ozon: pagination phase done, {} unique reviews",
@@ -1075,54 +1160,6 @@ class BrowserJsonTransport:
             scroll_yielded, len(seen_ids),
         )
 
-    @staticmethod
-    def _extract_review_nodes_from_payload(
-        payload: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Pull every dict that looks like a review out of a raw
-        Ozon pagination payload.
-
-        Reuses ``walk_json`` semantics from the adapter without
-        duplicating its fuzzy matcher — this is intentionally a thin
-        pass-through that just surfaces raw candidate nodes.
-        """
-        # Local import to avoid a hard dep cycle with the adapter module.
-        from infrastructure.marketplaces.ozon import (
-            extract_reviews_from_ozon_payload,
-        )
-        from domain.entities import ProductRef
-
-        # extract_reviews_from_ozon_payload needs a ProductRef for
-        # building Review objects, but we only need the raw node
-        # identification logic. Pass a minimal placeholder.
-        placeholder = ProductRef(
-            marketplace="ozon",
-            source_url="",
-            product_id="_placeholder",
-        )
-        reviews = extract_reviews_from_ozon_payload(
-            payload, placeholder,
-        )
-        # ``raw`` field on each Review is the original node dict
-        return [r.raw for r in reviews if isinstance(r.raw, dict)]
-
-    @staticmethod
-    def _review_node_id(node: dict[str, Any]) -> str | None:
-        """Best-effort extraction of a stable id from a review node."""
-        for key in (
-            "reviewId",
-            "review_id",
-            "reviewUuid",
-            "review_uuid",
-            "uuid",
-            "id",
-        ):
-            value = node.get(key)
-            if value:
-                return str(value)
-        return None
-
-
     async def _fetch_json_inside_page(
         self,
         *,
@@ -1173,23 +1210,37 @@ class BrowserJsonTransport:
         to the actual JSON. We detect that page and wait for the
         body to change before reading the final response.
         """
-        endpoint = (
-            "https://www.ozon.ru"
-            "/api/entrypoint-api.bx/page/json/v2"
-        )
-        endpoint_url = (
-            f"{endpoint}?"
-            f"{urlencode({'url': internal_path})}"
-        )
+        endpoint_url = self._build_api_url(internal_path)
 
         # Navigate directly to the API URL. The browser sends all
         # session cookies and produces a request that Cloudflare
         # cannot distinguish from a real user navigation.
-        response = await page.goto(
-            endpoint_url,
-            wait_until="domcontentloaded",
-            timeout=self.timeout_ms,
+        response, body = await self._goto_and_read_body(
+            page=page,
+            endpoint_url=endpoint_url,
         )
+
+        # ----------------------------------------------------------
+        # Fast re-navigation on a lost body.
+        # ----------------------------------------------------------
+        # The FIRST navigation to the API URL sometimes loses the
+        # response body: ``response.text()`` comes back empty and the
+        # DOM fallback then reads the Firefox JSON-viewer's UI text
+        # instead of the raw JSON. Empirically (logs 2026-09-16) the
+        # SECOND navigation of the same URL on the same tab returns
+        # the body — today that recovery costs a full retry_async
+        # cycle (3-8s backoff per page). Doing the re-navigation
+        # IMMEDIATELY, without backoff, removes the most frequent
+        # slow-retry source. Challenge pages are excluded: they need
+        # waiting, not re-navigation.
+        if (
+            not body.lstrip().startswith(("{", "["))
+            and not self._is_cloudflare_challenge(body)
+        ):
+            response, body = await self._goto_and_read_body(
+                page=page,
+                endpoint_url=endpoint_url,
+            )
 
         # Extract response metadata via the Playwright response
         # object (more reliable than parsing document headers).
@@ -1212,35 +1263,6 @@ class BrowserJsonTransport:
                 ).lower()
             except Exception:
                 content_type = ""
-
-        # Read the response body. We have two options:
-        #
-        # 1. ``response.text()`` — the raw HTTP response body as
-        #    received by the browser, before any rendering. This is
-        #    the only reliable way to get JSON when the browser
-        #    renders it through its built-in JSON viewer (Firefox
-        #    shows a tree UI for ``application/json`` URLs, and
-        #    ``document.body.textContent`` returns the viewer text,
-        #    not the raw JSON).
-        #
-        # 2. ``page.evaluate(document.body.textContent)`` — what
-        #    the rendered DOM looks like. Used as a fallback when
-        #    ``response`` is None (e.g. when Cloudflare returns a
-        #    redirect chain and the final response isn't the one
-        #    ``page.goto`` returned).
-        body = ""
-        if response is not None:
-            try:
-                body = await response.text() or ""
-            except Exception:
-                body = ""
-
-        if not body:
-            # Fallback: read from the rendered DOM (works when
-            # ``response.text()`` is unavailable or when the body
-            # was already rendered into <pre> by a non-JSON-viewer
-            # browser).
-            body = await self._read_page_body(page)
 
         # ----------------------------------------------------------
         # Cloudflare JS challenge handling
@@ -1282,6 +1304,7 @@ class BrowserJsonTransport:
 
         if status < 200 or status >= 300:
             if status == 403 and self._is_cloudflare_challenge(body):
+                self._notify_pacer_block()
                 raise CloudflareChallengeError(
                     status=status,
                     url=response_url,
@@ -1324,6 +1347,49 @@ class BrowserJsonTransport:
             )
 
         return payload
+
+    async def _goto_and_read_body(
+        self,
+        *,
+        page,
+        endpoint_url: str,
+    ) -> tuple[Any, str]:
+        """Navigate to the API URL and read the response body.
+
+        Body reading has two layers:
+
+        1. ``response.text()`` — the raw HTTP response body as
+           received by the browser, before any rendering. This is
+           the only reliable way to get JSON when the browser
+           renders it through its built-in JSON viewer (Firefox
+           shows a tree UI for ``application/json`` URLs, and
+           ``document.body.textContent`` returns the viewer text,
+           not the raw JSON).
+        2. ``page.evaluate(<pre>/body)`` — the rendered DOM, used
+           when the response object loses its body (Firefox/JUGGLER
+           navigation quirk: ``response.text()`` returns empty right
+           after the JSON viewer takes over).
+
+        Returns ``(response, body)``; ``response`` may be None and
+        ``body`` may be empty — callers decide what to do with them.
+        """
+        response = await page.goto(
+            endpoint_url,
+            wait_until="domcontentloaded",
+            timeout=self.timeout_ms,
+        )
+
+        body = ""
+        if response is not None:
+            try:
+                body = await response.text() or ""
+            except Exception:
+                body = ""
+
+        if not body:
+            body = await self._read_page_body(page)
+
+        return response, body
 
     async def _read_page_body(self, page) -> str:
         """Read the rendered page's body text.
@@ -1464,15 +1530,7 @@ class BrowserJsonTransport:
         Kept for fallback / comparison. Cloudflare blocks this much
         more aggressively than the direct-navigation strategy.
         """
-        endpoint = (
-            "https://www.ozon.ru"
-            "/api/entrypoint-api.bx/page/json/v2"
-        )
-
-        endpoint_url = (
-            f"{endpoint}?"
-            f"{urlencode({'url': internal_path})}"
-        )
+        endpoint_url = self._build_api_url(internal_path)
 
         result = await page.evaluate(
             """
@@ -1504,6 +1562,7 @@ class BrowserJsonTransport:
 
         if status < 200 or status >= 300:
             if status == 403 and self._is_cloudflare_challenge(body):
+                self._notify_pacer_block()
                 raise CloudflareChallengeError(
                     status=status,
                     url=response_url,
@@ -1543,38 +1602,47 @@ class BrowserJsonTransport:
         reviews_url: str,
         attempts: int = 3,
         label: str = "Ozon goto",
+        page: Any = None,
     ) -> Any:
         """Wrap ``page.goto`` with exponential-backoff retry.
+
+        When ``page`` is given, the FIRST attempt navigates that
+        existing tab (a stream then looks like a user paging through
+        reviews in one tab, and we skip the new_page/init-script
+        cost); every retry — and every call without ``page`` — asks
+        ``page_factory()`` for a fresh one. This survives "execution
+        context lost" errors that would otherwise kill the whole
+        pagination stream: the broken tab is simply replaced.
 
         ``page.goto`` can fail with the same family of Playwright errors
         as ``page.evaluate`` ("The operation was aborted", navigation
         timeout, CDP connection drop). When that happens we close the
         current page and ask ``page_factory()`` for a fresh one, then
-        retry the goto on the new page. This survives "execution
-        context lost" errors that would otherwise kill the whole
-        pagination stream.
+        retry the goto on the new page.
         """
-        if attempts <= 1:
-            page = await page_factory()
-            await page.goto(
-                reviews_url,
-                wait_until="domcontentloaded",
-                timeout=self.timeout_ms,
-            )
-            return page
-
         from shared.retry import retry_async
 
+        reusable_used = False
+
         async def _goto_once() -> Any:
-            # Always create a fresh page on each attempt — the
-            # previous one is likely in a broken state if we got here.
-            page = await page_factory()
-            await page.goto(
+            nonlocal reusable_used
+            if page is not None and not reusable_used:
+                # First attempt: reuse the caller's tab.
+                reusable_used = True
+                target = page
+            else:
+                # Retries (or no reusable page): fresh page — the
+                # previous one is likely in a broken state.
+                target = await page_factory()
+            await target.goto(
                 reviews_url,
                 wait_until="domcontentloaded",
                 timeout=self.timeout_ms,
             )
-            return page
+            return target
+
+        if attempts <= 1:
+            return await _goto_once()
 
         return await retry_async(
             _goto_once,
@@ -1641,47 +1709,17 @@ class BrowserJsonTransport:
             label=label,
         )
 
-    @staticmethod
-    def _is_cloudflare_challenge(body: str) -> bool:
-        """Heuristic for detecting a Cloudflare challenge response body.
-
-        Two known shapes:
-
-        1. JSON envelope (older API-level challenge):
-           ``{"incidentId": "fab_chlg_...", "challengeURL": "..."}``
-
-        2. HTML "Browser Challenge" page (Cloudflare Under-Attack
-           interstitial):
-           Contains ``Пожалуйста, включите JavaScript`` /
-           ``enable JavaScript to continue`` /
-           ``We need to make sure that you are not a robot`` /
-           an ``ID: fab_chlg_...`` line.
-        """
-        if not body:
-            return False
-        body_lower = body.lower()
-        return (
-            "challengeurl" in body_lower
-            or "incidentid" in body_lower
-            or "challenge.html" in body_lower
-            # HTML challenge page markers
-            or "fab_chlg_" in body_lower
-            or "enable javascript" in body_lower
-            or "включите javascript" in body_lower
-            or "we need to make sure that you are not a robot"
-            in body_lower
-            or "нам нужно убедиться, что вы не робот"
-            in body_lower
-        )
-
     async def _save_debug(
         self,
         *,
         page,
         payload: dict[str, Any],
         page_number: int,
+        stream_suffix: str = "",
     ) -> None:
-        page_dir = self.debug_dir / f"page_{page_number}"
+        page_dir = self.debug_dir / (
+            f"page_{page_number}{stream_suffix}"
+        )
         page_dir.mkdir(
             parents=True,
             exist_ok=True,
@@ -1701,41 +1739,9 @@ class BrowserJsonTransport:
             encoding="utf-8",
         )
 
-        await page.screenshot(
-            path=str(page_dir / "page.png"),
-            full_page=True,
-        )
+        if self.screenshots:
+            await page.screenshot(
+                path=str(page_dir / "page.png"),
+                full_page=True,
+            )
 
-    @staticmethod
-    def _absolute_url(path: str) -> str:
-        if path.startswith("http://") or path.startswith("https://"):
-            return path
-
-        return f"https://www.ozon.ru{path}"
-
-    @staticmethod
-    def _build_initial_path(
-        *,
-        product_path: str,
-        page_number: int,
-    ) -> str:
-        query = urlencode({"page": page_number})
-        return f"{product_path}/reviews?{query}"
-
-    @staticmethod
-    def extract_next_path(
-        payload: dict[str, Any],
-    ) -> str | None:
-        next_page = payload.get("nextPage")
-
-        if isinstance(next_page, str):
-            return next_page or None
-
-        if isinstance(next_page, dict):
-            for key in ("url", "href", "path"):
-                value = next_page.get(key)
-
-                if isinstance(value, str) and value:
-                    return value
-
-        return None

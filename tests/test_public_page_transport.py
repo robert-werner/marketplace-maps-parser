@@ -1229,7 +1229,10 @@ async def test_single_browser_antibot_exhaustion_counts_idle(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1,
+        screenshots=True,
+    )
     pages = []
     async for page_num, _ in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -1589,3 +1592,70 @@ async def test_widget_scroll_disabled_skips_wheel(monkeypatch):
 
     assert batches == [["r1"]]
     assert fake_browser.pages_created[0].mouse_wheel_calls == []
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_card_replacement — push-based MutationObserver fast path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wait_for_card_replacement_uses_push_observer():
+    """When page.evaluate speaks the observer protocol, the wait
+    resolves from the single evaluate round-trip — no polling."""
+
+    class _PushPage:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def evaluate(self, expression, arg=None):
+            self.calls.append((expression, arg))
+            return {"uuids": ["c", "d"]}
+
+    page = _PushPage()
+    transport = PublicPageTransport()
+    result = await transport._wait_for_card_replacement(
+        page, locator=None, prev_uuids={"a", "b"},
+    )
+
+    assert result == {"c", "d"}
+    assert len(page.calls) == 1
+    expression, arg = page.calls[0]
+    assert "MutationObserver" in expression
+    assert set(arg["prevUuids"]) == {"a", "b"}
+    assert arg["timeoutMs"] == transport.card_wait_ms
+
+
+@pytest.mark.asyncio
+async def test_wait_for_card_replacement_observer_timeout():
+    """A JS-side timeout resolves to None without falling back to
+    the polling loop."""
+
+    class _TimeoutPage:
+        async def evaluate(self, expression, arg=None):
+            return {"timeout": True}
+
+    transport = PublicPageTransport()
+    result = await transport._wait_for_card_replacement(
+        _TimeoutPage(), locator=None, prev_uuids={"a"},
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_card_replacement_unknown_shape_falls_back():
+    """A page that returns an unknown evaluate shape (unit-test
+    fakes, exotic engines) falls back to the legacy poll loop."""
+
+    class _LegacyPage:
+        async def evaluate(self, expression, arg=None):
+            # Unknown shape: a bare list, not the observer dict.
+            return ["x"]
+
+    # card_wait_ms=0 → the fallback poll loop's deadline has
+    # already passed → returns None immediately.
+    transport = PublicPageTransport(card_wait_ms=0)
+    result = await transport._wait_for_card_replacement(
+        _LegacyPage(), locator=None, prev_uuids={"x"},
+    )
+    assert result is None

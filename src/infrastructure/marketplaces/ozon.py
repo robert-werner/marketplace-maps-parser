@@ -73,6 +73,12 @@ class OzonAdapter(MarketplaceAdapter):
         browser_transport: OzonBrowserTransport,
     ) -> None:
         self.browser_transport = browser_transport
+        # Rating histogram from the webReviewProductScore widget of the
+        # most recent payload (filled by ``iter_reviews``). Ozon does
+        # NOT expose rating-only "оценки" as individual review cards —
+        # only these aggregate counts — so the summary is the only way
+        # to account for them.
+        self.last_rating_summary: dict[str, Any] | None = None
 
     async def collect(self, product_url: str) -> ReviewPage:
         product_id = extract_ozon_product_id(product_url)
@@ -107,7 +113,15 @@ class OzonAdapter(MarketplaceAdapter):
             *,
             start_page: int = 1,
             max_pages: int | None = None,
+            extra_query: str = "",
     ) -> AsyncIterator[Review]:
+        """Walk ONE reviews stream (``extra_query`` selects the
+        stream variant, e.g. ``&sort=score_asc``).
+
+        ``extra_query`` is passed to the transport only when
+        non-empty, so transports (and test fakes) that predate the
+        parameter keep working for the default stream.
+        """
         product_id = extract_ozon_product_id(product_url)
         product_path = extract_ozon_product_path(product_url)
 
@@ -119,13 +133,29 @@ class OzonAdapter(MarketplaceAdapter):
 
         seen_keys: set[str] = set()
 
+        fetch_kwargs: dict[str, Any] = {}
+        if extra_query:
+            fetch_kwargs["extra_query"] = extra_query
+
         async for page_number, payload in (
                 self.browser_transport.iter_ozon_reviews_json(
                     product_path=product_path,
                     start_page=start_page,
                     max_pages=max_pages,
+                    **fetch_kwargs,
                 )
         ):
+
+            # The first page of every stream carries the rating
+            # histogram (webReviewProductScore widget); keep the
+            # freshest copy for the run summary / --include-rating-only.
+            summary = extract_ozon_rating_summary(
+                payload,
+                product_id=str(product_id),
+                product_url=product_url,
+            )
+            if summary is not None:
+                self.last_rating_summary = summary
 
             reviews = extract_reviews_from_ozon_payload(
                 payload=payload,
@@ -235,6 +265,34 @@ class OzonAdapter(MarketplaceAdapter):
     # ------------------------------------------------------------------
     # Unified "collect ALL reviews" stream
     # ------------------------------------------------------------------
+
+    # Additional review-stream sorts. Ozon exposes through the
+    # DEFAULT stream (usefulness_desc) only a window of ~34 pages
+    # (~1000 reviews) even for a logged-in session, while the API
+    # payload knows the full total (measured 2026-09-16: total=4470,
+    # default stream EOF at 34 pages / 1020 unique, of which only 20
+    # of 96 one-star reviews; a previous 5814-review product also
+    # capped at ~990). The OTHER sorts open different windows:
+    # score_asc starts from the low-star reviews that are almost
+    # absent from the default window. Streams are walked with the
+    # same nextPage chain and merged by review_id.
+    _EXTRA_STREAMS: tuple[str, ...] = ("score_asc", "score_desc")
+
+    # Additional FILTER windows (opt-in via --filter-streams). The
+    # webListReviews widget exposes ``filters: {withPhotos,
+    # withMedia}``; each active filter is its own list ordering and
+    # therefore its own ~7k-review window (measured 2026-09-17:
+    # each sort window tops out at ~7080-7266 unique). Photo/video
+    # reviews ranked below the plain windows' cutoffs become
+    # reachable through the filter window. If the param guess is
+    # wrong Ozon serves the default stream — the cross-duplicate
+    # streak stop (``--dup-streak-stop``) bounds that waste to a
+    # few pages.
+    _FILTER_STREAMS: tuple[tuple[str, str], ...] = (
+        ("&withPhotos=true", "withPhotos"),
+        ("&withMedia=true", "withMedia"),
+    )
+
     async def iter_all_reviews(
             self,
             product_url: str,
@@ -247,6 +305,10 @@ class OzonAdapter(MarketplaceAdapter):
             page_delay_seconds: float = 1.5,
             scroll_pause_seconds: float = 1.0,
             retry_attempts: int = 3,
+            extra_streams: bool = True,
+            parallel_streams: bool = False,
+            filter_streams: bool = False,
+            dup_streak_stop: int = 300,
     ) -> AsyncIterator[Review]:
         """Stream every review for an Ozon product.
 
@@ -257,6 +319,18 @@ class OzonAdapter(MarketplaceAdapter):
           stable id (``reviewId`` / ``uuid``) across both strategies.
         - ``"pagination"``: only the internal Ozon API pagination.
         - ``"scroll"``: only the DOM scroll.
+
+        When ``extra_streams`` is True (default), after the main
+        stream ends the adapter walks the additional sorts from
+        :attr:`_EXTRA_STREAMS` and yields only reviews not seen in
+        earlier streams — this is what lifts the collection beyond
+        the default ~1000-review window.
+
+        ``parallel_streams=True`` (pagination strategy only) runs all
+        streams CONCURRENTLY — each opens its own browser session and
+        walks its nextPage chain independently, so wall time ≈ the
+        slowest stream instead of the sum (~3x for default +
+        score_asc + score_desc).
 
         Always streams — never materializes the full set in memory.
         """
@@ -277,18 +351,83 @@ class OzonAdapter(MarketplaceAdapter):
         yielded = 0
 
         if strategy == "pagination":
-            async for review in self.iter_reviews(
-                product_url=product_url,
-                start_page=pagination_start_page,
-                max_pages=pagination_max_pages,
-            ):
-                yield review
-                yielded += 1
+            streams: list[tuple[str, str, int]] = [
+                ("", "default", pagination_start_page),
+            ]
+            if extra_streams:
+                streams += [
+                    (f"&sort={s}", s, 1)
+                    for s in self._EXTRA_STREAMS
+                ]
+            if filter_streams:
+                streams += [
+                    (query, label, 1)
+                    for query, label in self._FILTER_STREAMS
+                ]
+            if parallel_streams and len(streams) > 1:
+                async for review in self._iter_streams_concurrently(
+                    product_url=product_url,
+                    streams=streams,
+                    max_reviews=max_reviews,
+                    pagination_max_pages=pagination_max_pages,
+                    dup_streak_stop=dup_streak_stop,
+                ):
+                    yield review
+                return
+            for extra_query, label, start_page in streams:
                 if (
                     max_reviews is not None
                     and yielded >= max_reviews
                 ):
                     return
+                if label != "default":
+                    print(
+                        f"Ozon: дополнительный стрим {label} — "
+                        "ищу отзывы вне дефолтного окна"
+                    )
+                stream_new = 0
+                # Cross-stream duplicate streak: consecutive reviews
+                # already claimed by earlier streams. A long streak
+                # means the stream is re-serving known ground (e.g.
+                # an ignored filter param) — stop it instead of
+                # walking hundreds of duplicate pages.
+                dup_streak = 0
+                async for review in self.iter_reviews(
+                    product_url=product_url,
+                    start_page=start_page,
+                    max_pages=pagination_max_pages,
+                    extra_query=extra_query,
+                ):
+                    key = review.review_id or build_review_key(
+                        review,
+                        page_number=0,
+                        position=yielded,
+                    )
+                    if key in seen_keys:
+                        if dup_streak_stop > 0:
+                            dup_streak += 1
+                            if dup_streak >= dup_streak_stop:
+                                print(
+                                    f"Ozon: стрим {label}: "
+                                    f"{dup_streak} подряд дубликатов "
+                                    f"— останавливаю стрим"
+                                )
+                                break
+                        continue
+                    dup_streak = 0
+                    seen_keys.add(key)
+                    stream_new += 1
+                    yielded += 1
+                    yield review
+                    if (
+                        max_reviews is not None
+                        and yielded >= max_reviews
+                    ):
+                        return
+                print(
+                    f"Ozon: стрим {label}: +{stream_new} новых "
+                    f"(всего уникальных: {yielded})"
+                )
             return
 
         if strategy == "scroll":
@@ -373,10 +512,190 @@ class OzonAdapter(MarketplaceAdapter):
                 )
                 return
 
+        # --- extra sort streams (beyond the default window) ---
+        if extra_streams:
+            for sort_value in self._EXTRA_STREAMS:
+                if (
+                    max_reviews is not None
+                    and yielded >= max_reviews
+                ):
+                    return
+                print(
+                    f"Ozon: дополнительный стрим sort={sort_value} — "
+                    "ищу отзывы вне дефолтного окна"
+                )
+                stream_new = 0
+                try:
+                    async for review in self.iter_reviews(
+                        product_url=product_url,
+                        start_page=1,
+                        max_pages=pagination_max_pages,
+                        extra_query=f"&sort={sort_value}",
+                    ):
+                        key = (
+                            review.review_id
+                            or build_review_key(
+                                review,
+                                page_number=0,
+                                position=yielded,
+                            )
+                        )
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        stream_new += 1
+                        yielded += 1
+                        yield review
+                        if (
+                            max_reviews is not None
+                            and yielded >= max_reviews
+                        ):
+                            return
+                except Exception as exc:
+                    log.warning(
+                        "Ozon: стрим sort={} не удался: {} — "
+                        "пропускаю",
+                        sort_value, exc,
+                    )
+                print(
+                    f"Ozon: стрим {sort_value}: +{stream_new} новых "
+                    f"(всего уникальных: {yielded})"
+                )
+
         log.info(
             "Ozon: auto strategy done, {} unique reviews",
             yielded,
         )
+
+    async def _iter_streams_concurrently(
+            self,
+            *,
+            product_url: str,
+            streams: list[tuple[str, str, int]],
+            max_reviews: int | None,
+            pagination_max_pages: int | None,
+            dup_streak_stop: int = 300,
+    ) -> AsyncIterator[Review]:
+        """Run ALL review streams concurrently and merge by review_id.
+
+        Each worker walks one stream (``iter_reviews`` → its own
+        browser session inside the transport) and claims reviews
+        into a shared ``seen_keys`` set before pushing them into the
+        queue, so exactly one worker pushes each review. A worker
+        that sees ``dup_streak_stop`` CONSECUTIVE reviews already
+        claimed by other streams stops itself — that bounds the cost
+        of streams that re-serve known ground (measured 2026-09-17:
+        an ignored ``withPhotos`` param would just re-walk the
+        default window). Wall time ≈ the slowest stream instead of
+        the sum of the streams.
+
+        A failed stream is logged and skipped — the others keep
+        going. When ``max_reviews`` is reached (or the consumer stops
+        iterating), the remaining workers are cancelled in ``finally``
+        so no browser session is leaked.
+        """
+        import asyncio
+
+        from shared.logging import get_logger
+
+        log = get_logger("marketplaces.ozon")
+
+        queue: asyncio.Queue[Review | None] = asyncio.Queue()
+        total_streams = len(streams)
+        # Shared claim set; the event loop is single-threaded, and
+        # ``queue.put`` on an unbounded queue never suspends, so the
+        # check-claim-put sequence in a worker is atomic.
+        seen_keys: set[str] = set()
+        yielded = 0
+
+        async def worker(
+            extra_query: str,
+            label: str,
+            start_page: int,
+        ) -> None:
+            stream_new = 0
+            dup_streak = 0
+            try:
+                async for review in self.iter_reviews(
+                    product_url=product_url,
+                    start_page=start_page,
+                    max_pages=pagination_max_pages,
+                    extra_query=extra_query,
+                ):
+                    key = review.review_id or build_review_key(
+                        review,
+                        page_number=0,
+                        position=yielded,
+                    )
+                    if key in seen_keys:
+                        if dup_streak_stop > 0:
+                            dup_streak += 1
+                            if dup_streak >= dup_streak_stop:
+                                print(
+                                    f"Ozon: стрим {label}: "
+                                    f"{dup_streak} подряд "
+                                    f"дубликатов — останавливаю "
+                                    f"стрим"
+                                )
+                                break
+                        continue
+                    dup_streak = 0
+                    seen_keys.add(key)
+                    stream_new += 1
+                    await queue.put(review)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "Ozon: параллельный стрим {} не удался: {} — "
+                    "пропускаю",
+                    label,
+                    exc,
+                )
+            finally:
+                print(
+                    f"Ozon: стрим {label} завершён "
+                    f"(+{stream_new} новых)"
+                )
+                await queue.put(None)
+
+        tasks = [
+            asyncio.create_task(
+                worker(extra_query, label, start_page)
+            )
+            for extra_query, label, start_page in streams
+        ]
+        print(
+            f"Ozon: запускаю {total_streams} стрима параллельно"
+        )
+
+        finished = 0
+        try:
+            while finished < total_streams:
+                review = await queue.get()
+                if review is None:
+                    finished += 1
+                    continue
+
+                # Workers claim reviews into shared seen_keys BEFORE
+                # pushing, so every queued review is unique — count
+                # and yield directly.
+                yielded += 1
+                yield review
+
+                if (
+                    max_reviews is not None
+                    and yielded >= max_reviews
+                ):
+                    return
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            print(
+                f"Ozon: параллельный сбор завершён, "
+                f"всего уникальных: {yielded}"
+            )
+
 
     async def _iter_all_reviews_adapter_fallback(
             self,
@@ -497,6 +816,74 @@ class OzonAdapter(MarketplaceAdapter):
             reviews=reviews,
             total_count=len(reviews),
         )
+
+
+def extract_ozon_rating_summary(
+    payload: dict[str, Any],
+    *,
+    product_id: str | None = None,
+    product_url: str | None = None,
+) -> dict[str, Any] | None:
+    """Extract the rating histogram from a pdp_reviews payload.
+
+    Ozon's ``webReviewProductScore`` widget state carries the
+    per-star counts (e.g. ``{"5 звёзд": 4093, ...}``), the total
+    ratings count and the average score. Rating-only «оценки» are
+    NOT exposed as individual review cards anywhere — the histogram
+    is the only place they exist — so this summary is what allows
+    the CLI to account for them (summary file + optional synthetic
+    rows via ``--include-rating-only``).
+
+    Returns ``None`` when the payload has no score widget (e.g.
+    DOM-card payloads from the public_page transport).
+    """
+    widget_states = payload.get("widgetStates")
+    if not isinstance(widget_states, dict):
+        return None
+
+    for name, raw in widget_states.items():
+        if "webReviewProductScore" not in str(name):
+            continue
+
+        try:
+            widget = (
+                json.loads(raw) if isinstance(raw, str) else raw
+            )
+        except (TypeError, ValueError):
+            continue
+
+        if not isinstance(widget, dict):
+            continue
+
+        score_rows = widget.get("score")
+        if not isinstance(score_rows, list):
+            continue
+
+        histogram: dict[str, int] = {}
+        for row in score_rows:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title", "")).strip()
+            value = row.get("value")
+            digit = re.search(r"\d", title)
+            if not title or digit is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            histogram[digit.group(0)] = value
+
+        if not histogram:
+            return None
+
+        return {
+            "product_id": product_id,
+            "product_url": product_url,
+            "histogram": histogram,
+            "reviews_count": widget.get("reviewsCount"),
+            "average_score": widget.get("totalScore"),
+        }
+
+    return None
 
 
 def extract_reviews_from_ozon_payload(

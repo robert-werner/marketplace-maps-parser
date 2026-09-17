@@ -57,13 +57,11 @@ Thumbs.db
 .env.*.local
 
 # ----- Project runtime artifacts -----
-debug_ozon/
-debug_wb/
+# Scraped data, debug dumps and other run outputs live in data/ and
+# are never committed.
+data/
 debug_*/
-ozon_reviews*.jsonl
-wildberries_reviews*.jsonl
-yandex_reviews*.jsonl
-*_reviews.jsonl
+*.jsonl
 *.log
 
 # ----- Jupyter -----

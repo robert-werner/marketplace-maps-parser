@@ -20,14 +20,18 @@ This module provides:
   line, ``#`` comments allowed) and returns a list of proxy dicts
   in the format invisible-playwright expects
   (``{"server": "...", "username": "...", "password": "..."}``).
+- ``proxy_to_url`` — the inverse of ``parse_proxy_line``: renders
+  a proxy dict as a ``scheme://user:pass@host:port`` URL string
+  for transports that take a plain proxy URL (curl_cffi, CLI
+  child processes).
+- ``mask_proxy_url`` — same URL with the password replaced by
+  ``***``, safe for logs.
 """
 from __future__ import annotations
 
-import itertools
 import threading
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
 
 
 def parse_proxy_line(line: str) -> dict[str, str] | None:
@@ -107,6 +111,43 @@ def parse_proxy_file(path: str | Path) -> list[dict[str, str]]:
     return proxies
 
 
+def proxy_to_url(proxy: dict[str, str]) -> str:
+    """Render a Playwright-style proxy dict as a proxy URL string.
+
+    The inverse of ``parse_proxy_line``: turns
+    ``{"server": "http://h:1", "username": "u", "password": "p"}``
+    into ``"http://u:p@h:1"``. Without credentials the ``server``
+    value is returned as is.
+    """
+    url = proxy.get("server", "")
+    if proxy.get("username"):
+        parsed = urlparse(url)
+        url = (
+            f"{parsed.scheme}://{proxy['username']}:"
+            f"{proxy.get('password', '')}@{parsed.hostname}"
+            f":{parsed.port}"
+        )
+    return url
+
+
+def mask_proxy_url(url: str) -> str:
+    """Return ``url`` with the proxy password replaced by ``***``.
+
+    For logging credentialed proxy URLs without leaking secrets.
+    """
+    parsed = urlparse(url)
+    if parsed.password is None:
+        return url
+    host_port = parsed.hostname
+    if parsed.port:
+        host_port += f":{parsed.port}"
+    netloc = f"{parsed.username}:***@{host_port}"
+    return urlunsplit(
+        (parsed.scheme, netloc, parsed.path,
+         parsed.query, parsed.fragment)
+    )
+
+
 class ProxyPool:
     """Round-robin proxy pool with per-proxy block tracking.
 
@@ -137,7 +178,7 @@ class ProxyPool:
         path: str | Path,
         *,
         rotation: str = "round_robin",
-    ) -> "ProxyPool":
+    ) -> ProxyPool:
         """Load a proxy pool from a file."""
         return cls(parse_proxy_file(path), rotation=rotation)
 
@@ -147,7 +188,7 @@ class ProxyPool:
         proxies: list[dict[str, str]],
         *,
         rotation: str = "round_robin",
-    ) -> "ProxyPool":
+    ) -> ProxyPool:
         """Create a proxy pool from a list of proxy dicts."""
         return cls(proxies, rotation=rotation)
 
@@ -155,7 +196,7 @@ class ProxyPool:
     def single(
         cls,
         proxy: dict[str, str],
-    ) -> "ProxyPool":
+    ) -> ProxyPool:
         """Create a pool with a single proxy (no rotation)."""
         return cls([proxy], rotation="round_robin")
 
@@ -192,6 +233,11 @@ class ProxyPool:
                     return proxy
 
             return None
+
+    async def next_async(self) -> dict[str, str] | None:
+        """Async version of ``next()`` — no I/O, kept for interface
+        parity with :class:`FreeProxyPool`."""
+        return self.next()
 
     def mark_blocked(self, proxy: dict[str, str]) -> None:
         """Mark a proxy as blocked — it won't be returned by

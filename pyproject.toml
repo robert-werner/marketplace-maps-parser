@@ -15,8 +15,6 @@ dependencies = [
     "invisible-playwright>=0.14.0",
     "loguru>=0.7.3",
     "playwright>=1.62.0",
-    "pydantic>=2.13.5",
-    "pydantic-settings>=2.15.0",
     "typing_extensions>=4.12",
 ]
 
@@ -42,10 +40,8 @@ build-backend = "hatchling.build"
 packages = [
     "src/marketplace_maps_parser",
     "src/domain",
-    "src/application",
     "src/infrastructure",
     "src/shared",
-    "src/app",
 ]
 
 [tool.pytest.ini_options]

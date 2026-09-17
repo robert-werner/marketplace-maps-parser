@@ -10,9 +10,13 @@ from typing_extensions import AsyncIterator
 
 
 def _import_invisible_playwright():
-    """Lazy import; see transports/browser_json.py for rationale."""
+    """Lazy import; see transports/browser_json.py for rationale.
+    Wrapped with GPU-safe software-rendering prefs (see
+    transports/gpu_safety.py)."""
     from invisible_playwright.async_api import InvisiblePlaywright
-    return InvisiblePlaywright
+
+    from infrastructure.transports.gpu_safety import make_gpu_safe
+    return make_gpu_safe(InvisiblePlaywright)
 
 
 class BrowserDomTransport:

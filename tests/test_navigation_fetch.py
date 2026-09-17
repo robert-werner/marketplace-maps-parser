@@ -667,3 +667,216 @@ def test_transport_rejects_unknown_fetch_strategy():
 
     with _pytest.raises(ValueError, match="Unknown fetch_strategy"):
         BrowserJsonTransport(fetch_strategy="bogus")
+
+
+# ---------------------------------------------------------------------------
+# Speed optimizations: fast re-navigation on a lost body
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponseWithText:
+    """Response stand-in whose ``text()`` works."""
+
+    def __init__(self, *, body: str, status: int = 200) -> None:
+        self._body = body
+        self.status = status
+        self.url = "https://www.ozon.ru/api/..."
+        self.headers = {"content-type": "application/json"}
+
+    async def text(self) -> str:
+        return self._body
+
+
+class _FakePageLosingFirstBody:
+    """First navigation loses the response body (``response.text()``
+    is unavailable and the DOM fallback renders the Firefox JSON
+    viewer's UI text); the SECOND navigation of the same URL returns
+    the raw JSON. Mirrors the production failure mode measured in
+    the 2026-09-16 logs."""
+
+    def __init__(self, *, json_body: str) -> None:
+        self._json_body = json_body
+        self.goto_calls = 0
+
+    async def goto(self, url: str, **kwargs) -> Any:
+        self.goto_calls += 1
+        if self.goto_calls == 1:
+            # No text() on purpose: response.text() raises
+            # AttributeError and the DOM fallback reads viewer text.
+            return _FakeResponse(status=200, url=url)
+        return _FakeResponseWithText(body=self._json_body)
+
+    async def evaluate(self, expression: str, *args) -> Any:
+        # DOM fallback during the broken first navigation.
+        return (
+            "JSONRaw DataHeadersSaveCopyCollapse AllExpand All "
+            "(slow)layout(3)widgetStates..."
+        )
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_via_navigation_renavigates_immediately_when_body_lost():
+    """A lost body on the first navigation must trigger ONE immediate
+    re-navigation (no retry_async backoff) that recovers the JSON."""
+    import json as _json
+
+    transport = BrowserJsonTransport()
+    payload = {"reviews": [{"reviewId": "r1", "rating": 5}]}
+    json_body = _json.dumps(payload)
+
+    page = _FakePageLosingFirstBody(json_body=json_body)
+
+    result = await transport._fetch_json_via_navigation(
+        page=page,
+        internal_path="/p",
+    )
+
+    assert result == payload
+    # Exactly two navigations: the lost one + the immediate retry.
+    assert page.goto_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_via_navigation_no_renavigation_for_json_body():
+    """A healthy first navigation must not pay the extra goto."""
+    import json as _json
+
+    transport = BrowserJsonTransport()
+    payload = {"reviews": [{"reviewId": "r1", "rating": 5}]}
+
+    page = _FakePageLosingFirstBody(json_body=_json.dumps(payload))
+    # Make the FIRST response healthy too.
+    async def healthy_goto(url: str, **kwargs) -> Any:
+        page.goto_calls += 1
+        return _FakeResponseWithText(body=page._json_body)
+
+    page.goto = healthy_goto  # type: ignore[method-assign]
+
+    result = await transport._fetch_json_via_navigation(
+        page=page,
+        internal_path="/p",
+    )
+
+    assert result == payload
+    assert page.goto_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Speed optimizations: tab reuse in _goto_with_retry
+# ---------------------------------------------------------------------------
+
+
+class _FakePageCountingGoto:
+    def __init__(self) -> None:
+        self.goto_calls: list[str] = []
+
+    async def goto(self, url: str, **kwargs) -> None:
+        self.goto_calls.append(url)
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_goto_with_retry_reuses_passed_page_on_first_attempt():
+    """The first attempt navigates the CALLER's tab (one user-like
+    tab per stream); page_factory is not called."""
+    transport = BrowserJsonTransport()
+    existing_page = _FakePageCountingGoto()
+    factory_calls = {"n": 0}
+
+    async def page_factory() -> Any:
+        factory_calls["n"] += 1
+        return _FakePageCountingGoto()
+
+    result = await transport._goto_with_retry(
+        page_factory=page_factory,
+        page=existing_page,
+        reviews_url="https://www.ozon.ru/product/foo/reviews?page=2",
+        attempts=3,
+    )
+
+    assert result is existing_page
+    assert factory_calls["n"] == 0
+    assert len(existing_page.goto_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_goto_with_retry_recreates_page_after_failure(monkeypatch):
+    """A failing first attempt on the reused tab falls back to a
+    fresh page from the factory for the retry."""
+    from infrastructure.transports import browser_json as bj
+
+    transport = BrowserJsonTransport()
+    broken_page = _FakePageCountingGoto()
+
+    async def broken_goto(url: str, **kwargs) -> None:
+        raise RuntimeError("net::ERR_CONNECTION_RESET")
+
+    broken_page.goto = broken_goto  # type: ignore[method-assign]
+
+    factory_calls = {"n": 0}
+
+    async def page_factory() -> Any:
+        factory_calls["n"] += 1
+        return _FakePageCountingGoto()
+
+    monkeypatch.setattr(bj, "_retryable_errors", lambda: (RuntimeError,))
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+
+    result = await transport._goto_with_retry(
+        page_factory=page_factory,
+        page=broken_page,
+        reviews_url="https://www.ozon.ru/product/foo/reviews?page=2",
+        attempts=3,
+    )
+
+    assert result is not broken_page
+    assert factory_calls["n"] == 1
+    assert len(result.goto_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Speed optimizations: short settle for the navigation strategy
+# ---------------------------------------------------------------------------
+
+
+class _FakePageRecordingWaits:
+    def __init__(self) -> None:
+        self.wait_calls: list[int] = []
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        self.wait_calls.append(ms)
+
+
+@pytest.mark.asyncio
+async def test_settle_after_goto_is_short_for_navigation():
+    """Navigation strategy waits only a 500ms beacon grace, not the
+    full settle_ms — the API goto replaces the page content anyway."""
+    transport = BrowserJsonTransport(
+        settle_ms=5000,
+        fetch_strategy="navigation",
+    )
+    page = _FakePageRecordingWaits()
+
+    await transport._settle_after_goto(page)
+
+    assert page.wait_calls == [500]
+
+
+@pytest.mark.asyncio
+async def test_settle_after_goto_is_full_for_fetch_strategy():
+    """Fetch strategy keeps the full settle: the page's JS context
+    must be warm before fetch() runs from it."""
+    transport = BrowserJsonTransport(
+        settle_ms=2000,
+        fetch_strategy="fetch",
+    )
+    page = _FakePageRecordingWaits()
+
+    await transport._settle_after_goto(page)
+
+    assert page.wait_calls == [2000]

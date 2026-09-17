@@ -19,6 +19,7 @@ servers and rotate them with the same interface as
 """
 from __future__ import annotations
 
+import asyncio
 import threading
 from typing import Any
 
@@ -65,6 +66,7 @@ class FreeProxyPool:
         elite: bool = False,
         https: bool = False,
         batch_size: int = 100,
+        fetch_on_init: bool = True,
     ) -> None:
         # Default to Russian proxies when no country specified —
         # Ozon is a Russian marketplace and RU IPs are least likely
@@ -83,8 +85,23 @@ class FreeProxyPool:
         # Track which country sets we've already tried (for
         # fallback logic in _refill_sync).
         self._refill_round = 0
-        # Fetch the initial batch
-        self._refill_sync()
+        # Fetch the initial batch. Pass ``fetch_on_init=False`` (or
+        # use the async factory ``create_async``) to skip the
+        # blocking fetch at construction time.
+        if fetch_on_init:
+            self._refill_sync()
+
+    @classmethod
+    async def create_async(
+        cls,
+        **kwargs: Any,
+    ) -> FreeProxyPool:
+        """Async factory: constructs the pool and fetches the first
+        proxy batch in a worker thread, so the event loop is never
+        blocked by the (network-bound) free-proxy fetch."""
+        pool = cls(fetch_on_init=False, **kwargs)
+        await asyncio.to_thread(pool.refill)
+        return pool
 
     def _refill_sync(self) -> None:
         """Fetch a new batch of free proxies (synchronous, called
@@ -225,16 +242,13 @@ class FreeProxyPool:
             if self._proxy_key(p) not in self._blocked
         )
 
-    def next(self) -> dict[str, str] | None:
-        """Return the next available proxy, or ``None`` if all
-        are blocked (even after a refill attempt).
-        """
+    def _next_no_refill(self) -> dict[str, str] | None:
+        """Return the next available proxy WITHOUT touching the
+        network. ``None`` when no unblocked proxy remains in the
+        current batch."""
         with self._lock:
             if self.available_count == 0:
-                # Try refilling once
-                self._refill_sync()
-                if self.available_count == 0:
-                    return None
+                return None
 
             for _ in range(len(self._proxies)):
                 if self._index >= len(self._proxies):
@@ -245,6 +259,38 @@ class FreeProxyPool:
                     return proxy
 
             return None
+
+    def next(self) -> dict[str, str] | None:
+        """Return the next available proxy, or ``None`` if all
+        are blocked (even after a refill attempt).
+
+        ⚠️ Synchronous: a refill fetches a new proxy batch over the
+        network and blocks the caller. From async code prefer
+        ``next_async()``.
+        """
+        proxy = self._next_no_refill()
+        if proxy is not None:
+            return proxy
+
+        with self._lock:
+            self._refill_sync()
+
+        return self._next_no_refill()
+
+    async def next_async(self) -> dict[str, str] | None:
+        """Async version of ``next()``.
+
+        The potentially slow part — fetching a fresh proxy batch
+        when the current one is exhausted — runs in a worker thread
+        via ``asyncio.to_thread`` so the event loop never blocks.
+        """
+        proxy = self._next_no_refill()
+        if proxy is not None:
+            return proxy
+
+        await asyncio.to_thread(self.refill)
+
+        return self._next_no_refill()
 
     def mark_blocked(self, proxy: dict[str, str]) -> None:
         """Mark a proxy as blocked."""
