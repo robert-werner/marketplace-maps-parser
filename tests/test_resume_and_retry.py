@@ -169,7 +169,7 @@ async def test_fetch_json_with_retry_succeeds_after_transient_failures(
 ):
     """The retry wrapper retries on RuntimeError and returns the
     payload once the inner fetch succeeds."""
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         BrowserJsonTransport,
     )
 
@@ -209,7 +209,7 @@ async def test_fetch_json_with_retry_succeeds_after_transient_failures(
 @pytest.mark.asyncio
 async def test_fetch_json_with_retry_exhausts_attempts(monkeypatch):
     """When all attempts raise, the last RuntimeError propagates."""
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         BrowserJsonTransport,
     )
 
@@ -245,7 +245,7 @@ async def test_fetch_json_with_retry_no_retry_on_non_runtime_error(
 ):
     """TypeError is not in retry_on=(RuntimeError,) — it should
     propagate on the first attempt without consuming the retry budget."""
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         BrowserJsonTransport,
     )
 
@@ -281,7 +281,7 @@ async def test_fetch_json_with_retry_attempts_le_1_skips_retry(monkeypatch):
     """When attempts <= 1, the inner fetch is called directly without
     going through retry_async — this is the fast path that avoids
     the overhead of setting up retry state for the common case."""
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         BrowserJsonTransport,
     )
 

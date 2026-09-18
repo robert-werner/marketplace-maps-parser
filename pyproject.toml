@@ -3,7 +3,7 @@ name = "marketplace-maps-parser"
 version = "0.1.0"
 description = "Async review scraper for Russian e-commerce marketplaces (Ozon, Wildberries, Yandex Market — planned)."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 license = { text = "Proprietary" }
 authors = [
     { name = "Leonid Kolesnichenko", email = "xperience439@gmail.com" },

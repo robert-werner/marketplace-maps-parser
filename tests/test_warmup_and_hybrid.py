@@ -491,7 +491,7 @@ async def test_hybrid_falls_back_to_playwright_on_cloudflare_challenge(
     """When curl_cffi raises CloudflareChallengeError, hybrid
     should fall back to Playwright for that page.
     """
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         CloudflareChallengeError,
     )
     from infrastructure.transports.hybrid import HybridTransport
@@ -568,7 +568,7 @@ async def test_hybrid_raises_when_both_transports_fail(monkeypatch):
     """If both curl_cffi and Playwright fail to produce a page,
     hybrid should raise RuntimeError.
     """
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         CloudflareChallengeError,
     )
     from infrastructure.transports.hybrid import HybridTransport
@@ -606,7 +606,7 @@ async def test_hybrid_multiple_pages_alternates_transports(monkeypatch):
     cookies are session-bound; the curl_cffi session is separate
     from Playwright's.)
     """
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         CloudflareChallengeError,
     )
     from infrastructure.transports.hybrid import HybridTransport

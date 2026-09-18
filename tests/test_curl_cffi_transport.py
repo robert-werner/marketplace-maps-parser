@@ -312,7 +312,7 @@ async def test_iter_ozon_reviews_json_raises_cloudflare_challenge(monkeypatch):
     """HTTP 403 with a Cloudflare challenge body raises
     CloudflareChallengeError (which is a RuntimeError subclass).
     """
-    from infrastructure.transports.browser_json import (
+    from infrastructure.transports.browser_json.transport import (
         CloudflareChallengeError,
     )
 

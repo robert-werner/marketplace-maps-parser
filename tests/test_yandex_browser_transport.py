@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 import infrastructure.transports.yandex_browser as yb
-from infrastructure.transports.yandex_browser import (
+from src.infrastructure.transports.yandex_browser import (
     YANDEX_MARKET_BASE,
     YandexBrowserTransport,
     YandexCaptchaError,
