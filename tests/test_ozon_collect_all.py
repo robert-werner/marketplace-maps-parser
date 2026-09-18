@@ -13,15 +13,12 @@ required. They exercise:
 """
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from domain.entities import ProductRef, Review
 from infrastructure.marketplaces.ozon import OzonAdapter
-
 
 PRODUCT_URL = (
     "https://www.ozon.ru/product/"
@@ -410,16 +407,14 @@ async def test_iter_all_reviews_adapter_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_iter_all_reviews_adapter_fallback_pagination_only_error() -> None:
+async def test_iter_all_reviews_adapter_fallback_pagination_error() -> None:
     """If pagination raises, the fallback should still try scroll."""
     transport = StubTransportWithoutIterAll(
         pagination_payloads=[],
         scroll_batches=[[_scroll_card("s1"), _scroll_card("s2")]],
     )
 
-    # Wrap iter_ozon_reviews_json to raise
-    original = transport.iter_ozon_reviews_json
-
+    # Make pagination raise before the fallback scroll pass.
     async def raising_iter(*args, **kwargs):
         raise RuntimeError("pagination exploded")
         yield  # pragma: no cover

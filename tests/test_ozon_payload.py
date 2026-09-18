@@ -7,7 +7,7 @@ require a running browser.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -78,7 +78,7 @@ def test_map_ozon_review_node_complete() -> None:
     assert review.cons == "Цена"
     assert review.author == "Иван"
     assert review.created_at == datetime(
-        2024, 3, 15, 10, 30, tzinfo=timezone.utc
+        2024, 3, 15, 10, 30, tzinfo=UTC
     )
 
 
@@ -220,7 +220,7 @@ def test_parse_ozon_date_handles_unix_ms() -> None:
     # 2024-01-01 00:00:00 UTC in milliseconds
     ts_ms = 1_704_067_200_000
     result = parse_ozon_date(ts_ms)
-    assert result == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert result == datetime(2024, 1, 1, tzinfo=UTC)
 
 
 def test_build_review_key_is_stable() -> None:

@@ -23,7 +23,6 @@ import pytest
 
 from infrastructure.transports.curl_cffi import CurlCffiTransport
 
-
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.
 _REAL_SLEEP = asyncio.sleep
@@ -80,7 +79,10 @@ class _FakeAsyncSession:
         self.closed = True
 
 
-def _patch_session(monkeypatch, transport: CurlCffiTransport, session: _FakeAsyncSession):
+def _patch_session(
+    monkeypatch, transport: CurlCffiTransport,
+    session: _FakeAsyncSession,
+):
     async def fake_ensure():
         transport._session = session
         return session
@@ -93,7 +95,9 @@ def _patch_session(monkeypatch, transport: CurlCffiTransport, session: _FakeAsyn
 
 
 @pytest.mark.asyncio
-async def test_warmup_visits_product_page_before_first_api_request(monkeypatch):
+async def test_warmup_visits_product_page_before_first_api_request(
+    monkeypatch,
+):
     """When warmup=True, the first request to iter_ozon_reviews_json
     must be to the product page (not the API), so that Cloudflare
     cookies are obtained.
@@ -130,7 +134,7 @@ async def test_warmup_visits_product_page_before_first_api_request(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -175,7 +179,7 @@ async def test_warmup_disabled_skips_product_page_visit(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -308,12 +312,6 @@ async def test_warmup_handles_network_error_gracefully(monkeypatch):
     transport should print a warning and continue to the API.
     """
     transport = CurlCffiTransport(warmup=True)
-
-    product_url = "https://www.ozon.ru/product/foo-123"
-    api_url = (
-        "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?"
-        "url=%2Fproduct%2Ffoo-123%2Freviews%3Fpage%3D1"
-    )
 
     # Stub the session.get to raise on the product page URL
     class _RaisingSession:
@@ -487,14 +485,16 @@ async def test_hybrid_uses_curl_cffi_when_it_succeeds(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_falls_back_to_playwright_on_cloudflare_challenge(monkeypatch):
+async def test_hybrid_falls_back_to_playwright_on_cloudflare_challenge(
+    monkeypatch,
+):
     """When curl_cffi raises CloudflareChallengeError, hybrid
     should fall back to Playwright for that page.
     """
-    from infrastructure.transports.hybrid import HybridTransport
     from infrastructure.transports.browser_json import (
         CloudflareChallengeError,
     )
+    from infrastructure.transports.hybrid import HybridTransport
 
     hybrid = HybridTransport()
 
@@ -568,10 +568,10 @@ async def test_hybrid_raises_when_both_transports_fail(monkeypatch):
     """If both curl_cffi and Playwright fail to produce a page,
     hybrid should raise RuntimeError.
     """
-    from infrastructure.transports.hybrid import HybridTransport
     from infrastructure.transports.browser_json import (
         CloudflareChallengeError,
     )
+    from infrastructure.transports.hybrid import HybridTransport
 
     hybrid = HybridTransport()
 
@@ -606,10 +606,10 @@ async def test_hybrid_multiple_pages_alternates_transports(monkeypatch):
     cookies are session-bound; the curl_cffi session is separate
     from Playwright's.)
     """
-    from infrastructure.transports.hybrid import HybridTransport
     from infrastructure.transports.browser_json import (
         CloudflareChallengeError,
     )
+    from infrastructure.transports.hybrid import HybridTransport
 
     hybrid = HybridTransport()
 
@@ -618,7 +618,10 @@ async def test_hybrid_multiple_pages_alternates_transports(monkeypatch):
     # playwright, but they're separate sessions).
     # Page 3: nextPage=None, stop.
 
-    page1_pw = {"nextPage": "/product/foo/reviews?page=2", "reviews": [{"reviewId": "r1"}]}
+    page1_pw = {
+        "nextPage": "/product/foo/reviews?page=2",
+        "reviews": [{"reviewId": "r1"}],
+    }
     page2_curl = {"nextPage": None, "reviews": [{"reviewId": "r2"}]}
 
     # The hybrid transport calls curl_cffi.iter_ozon_reviews_json

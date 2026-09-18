@@ -16,7 +16,6 @@ import pytest
 from infrastructure.transports import public_page as pp_module
 from infrastructure.transports.public_page import PublicPageTransport
 
-
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.
 _REAL_SLEEP = asyncio.sleep
@@ -38,7 +37,7 @@ class _FakeNextButtonLocator:
     cards; clicking advances the fake page's number (the widget
     replaces its content rather than appending)."""
 
-    def __init__(self, *, page: "_FakePage") -> None:
+    def __init__(self, *, page: _FakePage) -> None:
         self._page = page
 
     def _next_has_cards(self) -> bool:
@@ -51,7 +50,7 @@ class _FakeNextButtonLocator:
         return 1 if self._next_has_cards() else 0
 
     @property
-    def first(self) -> "_FakeNextButtonLocator":
+    def first(self) -> _FakeNextButtonLocator:
         return self
 
     async def click(self, **kwargs) -> None:
@@ -79,14 +78,14 @@ class _FakeLocator:
         return len(self._cards_getter())
 
     @property
-    def first(self) -> "_FakeFirstCard":
+    def first(self) -> _FakeFirstCard:
         if not self._cards_getter():
             # Return a _FakeFirstCard that raises wait_for to simulate
             # the "no cards" case
             return _FakeFirstCard(has_card=False)
         return _FakeFirstCard(has_card=True)
 
-    def nth(self, index: int) -> "_FakeCardLocator":
+    def nth(self, index: int) -> _FakeCardLocator:
         cards = self._cards_getter()
         if index >= len(cards):
             raise IndexError(f"card index {index} out of range")
@@ -125,7 +124,7 @@ class _FakeCardLocator:
     async def inner_text(self) -> str:
         return self._card.get("text", "")
 
-    def locator(self, selector: str) -> "_FakeStarOrImageLocator":
+    def locator(self, selector: str) -> _FakeStarOrImageLocator:
         if "rpProducta9c" in selector:
             # Rating container
             return _FakeStarOrImageLocator(
@@ -163,13 +162,13 @@ class _FakeStarOrImageLocator:
     async def count(self) -> int:
         return len(self.items)
 
-    def nth(self, index: int) -> "_FakeStarOrImageItemLocator":
+    def nth(self, index: int) -> _FakeStarOrImageItemLocator:
         return _FakeStarOrImageItemLocator(
             item=self.items[index],
             kind=self.kind,
         )
 
-    def locator(self, selector: str) -> "_FakeStarOrImageLocator":
+    def locator(self, selector: str) -> _FakeStarOrImageLocator:
         # Nested locators (e.g. svg inside rating container) — return
         # the same set of items. The transport calls
         # ``rating_container.locator("svg")`` to get the stars.
@@ -224,7 +223,7 @@ class _FakePage:
         self,
         *,
         cards_by_page: dict[int, list[dict[str, Any]]],
-        browser: "_FakeBrowser",
+        browser: _FakeBrowser,
     ) -> None:
         self.cards_by_page = cards_by_page
         self._browser = browser
@@ -236,7 +235,7 @@ class _FakePage:
         # Cached _FakeMouse — created lazily and reused so that
         # ``page.mouse.on_wheel_callback = ...`` (set by the test)
         # persists across accesses.
-        self._mouse: "_FakeMouse | None" = None
+        self._mouse: _FakeMouse | None = None
         self._cookie_context = _FakeCookieContext()
 
     @property
@@ -308,7 +307,7 @@ class _FakePage:
         self.screenshot_calls.append("screenshot")
 
     @property
-    def mouse(self) -> "_FakeMouse":
+    def mouse(self) -> _FakeMouse:
         # Reuse the same _FakeMouse instance so test callbacks
         # set via ``page.mouse.on_wheel_callback = ...`` persist.
         if self._mouse is None:
@@ -424,14 +423,42 @@ def _make_card(
     published_at: str = "1700000000",
 ) -> dict[str, Any]:
     """Build a fake card dict that _read_review_cards will parse."""
-    full_text = f"АБ\n{author}\n5 октября 2023\n{text}\nВам помог этот отзыв?\nДа 5 Нет 1"
+    full_text = (
+        f"АБ\n{author}\n5 октября 2023\n{text}\n"
+        "Вам помог этот отзыв?\nДа 5 Нет 1"
+    )
     stars = [
         # 5 filled stars
-        {"elementColor": "rgb(0,0,0)", "pathFill": "rgb(255, 168, 0)", "pathAttribute": "fill", "className": "filled"},
-        {"elementColor": "rgb(0,0,0)", "pathFill": "rgb(255, 168, 0)", "pathAttribute": "fill", "className": "filled"},
-        {"elementColor": "rgb(0,0,0)", "pathFill": "rgb(255, 168, 0)", "pathAttribute": "fill", "className": "filled"},
-        {"elementColor": "rgb(0,0,0)", "pathFill": "rgb(255, 168, 0)", "pathAttribute": "fill", "className": "filled"},
-        {"elementColor": "rgb(0,0,0)", "pathFill": "rgb(255, 168, 0)", "pathAttribute": "fill", "className": "filled"},
+        {
+            "elementColor": "rgb(0,0,0)",
+            "pathFill": "rgb(255, 168, 0)",
+            "pathAttribute": "fill",
+            "className": "filled",
+        },
+        {
+            "elementColor": "rgb(0,0,0)",
+            "pathFill": "rgb(255, 168, 0)",
+            "pathAttribute": "fill",
+            "className": "filled",
+        },
+        {
+            "elementColor": "rgb(0,0,0)",
+            "pathFill": "rgb(255, 168, 0)",
+            "pathAttribute": "fill",
+            "className": "filled",
+        },
+        {
+            "elementColor": "rgb(0,0,0)",
+            "pathFill": "rgb(255, 168, 0)",
+            "pathAttribute": "fill",
+            "className": "filled",
+        },
+        {
+            "elementColor": "rgb(0,0,0)",
+            "pathFill": "rgb(255, 168, 0)",
+            "pathAttribute": "fill",
+            "className": "filled",
+        },
     ][:rating]
     return {
         "uuid": uuid,
@@ -493,7 +520,9 @@ async def test_iter_ozon_reviews_json_paginates_through_pages(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
     pages_yielded = []
     async for page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
@@ -527,9 +556,11 @@ async def test_iter_ozon_reviews_json_dedupes_across_pages(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
     all_reviews = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for _page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -557,9 +588,11 @@ async def test_iter_ozon_reviews_json_stops_on_empty_page(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=2)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=2
+    )
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -585,9 +618,11 @@ async def test_iter_ozon_reviews_json_respects_max_pages(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=10)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=10
+    )
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         max_pages=2,
         retry_attempts=1,
@@ -614,8 +649,10 @@ async def test_iter_ozon_reviews_json_payload_shape(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
+    async for _page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -710,7 +747,10 @@ async def test_no_stealth_init_script_even_when_enabled(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, stealth=True, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, stealth=True,
+        max_idle_pages=1,
+    )
     async for _ in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
@@ -732,7 +772,10 @@ async def test_stealth_not_applied_when_disabled(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, stealth=False, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, stealth=False,
+        max_idle_pages=1,
+    )
     async for _ in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
@@ -764,7 +807,9 @@ async def test_iter_all_ozon_reviews_widget_primary(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
     yielded = []
     async for strategy, node in transport.iter_all_ozon_reviews(
         product_path="/product/foo-123",
@@ -795,7 +840,9 @@ async def test_widget_flow_follows_next_button(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
     batches = []
     async for batch in transport.iter_ozon_reviews_by_widget(
         product_path="/product/foo-123",
@@ -823,9 +870,11 @@ async def test_iter_all_ozon_reviews_max_reviews_cap(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
     yielded = []
-    async for strategy, node in transport.iter_all_ozon_reviews(
+    async for _strategy, node in transport.iter_all_ozon_reviews(
         product_path="/product/foo-123",
         max_reviews=3,
         retry_attempts=1,
@@ -857,7 +906,9 @@ async def test_get_ozon_reviews_json_returns_first_page(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
     payload = await transport.get_ozon_reviews_json(
         product_path="/product/foo-123",
         page_number=1,
@@ -984,7 +1035,7 @@ async def test_randomize_fingerprint_creates_new_browser_per_page(monkeypatch):
         randomize_fingerprint=True,
     )
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -1075,7 +1126,7 @@ async def test_no_randomize_fingerprint_uses_single_browser(monkeypatch):
         randomize_fingerprint=False,  # default
     )
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -1117,7 +1168,7 @@ async def test_randomize_fingerprint_dedup_across_pages(monkeypatch):
         randomize_fingerprint=True,
     )
     all_reviews = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for _page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=1,
     ):
@@ -1202,9 +1253,11 @@ async def test_single_browser_retries_antibot_challenge(monkeypatch):
         return None
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
-    transport = PublicPageTransport(settle_ms=0, lazy_wait_ms=0, max_idle_pages=1)
+    transport = PublicPageTransport(
+        settle_ms=0, lazy_wait_ms=0, max_idle_pages=1
+    )
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=3,
     ):
@@ -1313,7 +1366,7 @@ async def test_randomized_rotates_proxy_on_antibot(monkeypatch):
         proxy_pool=pool,
     )
     reviews: list[str] = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for _page_num, payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         retry_attempts=3,
     ):

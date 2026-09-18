@@ -19,15 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
-from typing import Any
 
 import pytest
 
 from marketplace_maps_parser.__main__ import (
     _load_existing_reviews,
 )
-
 
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.

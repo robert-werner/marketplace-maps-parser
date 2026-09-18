@@ -5,13 +5,8 @@ make real network requests to free proxy sources.
 """
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
-
 from infrastructure.transports import free_proxy_pool as fpp_module
 from infrastructure.transports.free_proxy_pool import FreeProxyPool
-
 
 # ---------------------------------------------------------------------------
 # Stub FreeProxy
@@ -292,7 +287,7 @@ def test_free_proxy_pool_defaults_to_ru(monkeypatch):
         lambda: _CountryTrackingFreeProxy,
     )
 
-    pool = FreeProxyPool()  # country_id=None → default RU
+    FreeProxyPool()  # country_id=None → default RU (refill runs)
     # The first refill (round 0) should request RU proxies
     assert received_countries[0] == ["RU"]
 

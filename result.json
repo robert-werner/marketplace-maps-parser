@@ -1,0 +1,2365 @@
+[
+    {
+        "id": "FFn7UV3O9lYhERIOoPPs",
+        "globalUserId": "LhJOEcjVtpSddzevGs54No7aNHUAupyxYwrSEg/wnoM=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 1405699024,
+        "text": "\u041a\u0443\u043f\u0438\u043b\u0430 \u0432 \u043f\u043e\u0434\u0430\u0440\u043e\u043a, \u0443\u043f\u0430\u043a\u043e\u0432\u0430\u043d\u043e \u0445\u043e\u0440\u043e\u0448\u043e",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0427\u0435\u0440\u043d\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-09-12T15:24:54Z",
+        "updatedDate": "2026-09-12T15:43:27.280971259Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432, \u043c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u043b\u0438 \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440. \u0422\u0435, \u043a\u0442\u043e \u043f\u0440\u0438\u0441\u043c\u0430\u0442\u0440\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u043a \u043c\u043e\u0434\u0435\u043b\u0438, \u043c\u043e\u0433\u0443\u0442 \u0441\u043c\u0435\u043b\u043e \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u043d\u0430 \u0432\u0430\u0448 \u043e\u043f\u044b\u0442.",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-09-12T15:30:54Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "photos": [
+            {
+                "id": 0,
+                "key": "1/79b6c3dc-b42d-4a6c-a685-32930a8cfb2b",
+                "isBlurred": false,
+                "isReady": true
+            },
+            {
+                "id": 0,
+                "key": "1/48957502-f179-4e6a-bc83-7d0e4a47b88a",
+                "isBlurred": false,
+                "isReady": true
+            }
+        ],
+        "video": {
+            "id": "7/d538b132-6a9f-4cf9-a58b-97596b7673fb",
+            "durationSec": 29,
+            "isReady": true
+        },
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 44.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10085,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "childFeedbackId": "lnyA1CC7zLS6cjfxEFCw",
+        "excludedFromRating": {
+            "isExcluded": true,
+            "reasons": [
+                "hasIncludedChild"
+            ]
+        }
+    },
+    {
+        "id": "qLIpeng7ZId59Q0VzinC",
+        "globalUserId": "3F+dIEG8bM+znk1Kau10n+3gRt2PSpCB5ONV2rQqW0Wu",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u0435\u043a\u0441\u0435\u0439",
+            "hasPhoto": false
+        },
+        "nmId": 1405699024,
+        "text": "\u041a\u0440\u0435\u043f\u0438\u0442\u0441\u044f \u043b\u0435\u0433\u043a\u043e, \u043a\u0430\u0440\u0442\u0443 \u0432\u0438\u0434\u0438\u0442,\u043f\u0438\u0448\u0435\u0442 \u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e.\n\u0425\u043e\u0440\u043e\u0448\u0438\u0439 \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440, \u043c\u043d\u0435 \u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f.",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0427\u0435\u0440\u043d\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-09-11T11:06:21Z",
+        "updatedDate": "2026-09-11T11:21:16.707874363Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432, \u043c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u043b\u0438 \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440. \u0422\u0435, \u043a\u0442\u043e \u043f\u0440\u0438\u0441\u043c\u0430\u0442\u0440\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u043a \u043c\u043e\u0434\u0435\u043b\u0438, \u043c\u043e\u0433\u0443\u0442 \u0441\u043c\u0435\u043b\u043e \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u043d\u0430 \u0432\u0430\u0448 \u043e\u043f\u044b\u0442.",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-09-11T11:19:56Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "photos": [
+            {
+                "id": 0,
+                "key": "5/22f396e7-19c1-4d09-8a93-f3599c0c1ecd",
+                "isBlurred": false,
+                "isReady": true
+            }
+        ],
+        "video": {
+            "id": "11/ce957e90-71fd-4a47-9212-38cb22ddc876",
+            "durationSec": 8,
+            "isReady": true
+        },
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 43.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "cNtzxUdzdyuRmdXswJxk",
+        "globalUserId": "IkZcQ/XDgc5evNaDcu6xpwpfT5BQijTT1OWq5lYy6XU=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u044c\u0431\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 1405699024,
+        "text": "\u041e\u0442\u043b\u0438\u0447\u043d\u043e \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442, \u043f\u0440\u043e\u0441\u0442\u043e\u0439 \u0438 \u043d\u0430\u0434\u0435\u0436\u043d\u044b\u0439, \u043c\u0443\u0436 \u0434\u043e\u0432\u043e\u043b\u0435\u043d",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0447\u0435\u0440\u043d\u044b\u0439",
+        "size": "",
+        "createdDate": "2026-09-11T10:15:14Z",
+        "updatedDate": "2026-09-11T10:28:09.204790362Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432, \u043c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u043b\u0438 \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440. \u0422\u0435, \u043a\u0442\u043e \u043f\u0440\u0438\u0441\u043c\u0430\u0442\u0440\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u043a \u043c\u043e\u0434\u0435\u043b\u0438, \u043c\u043e\u0433\u0443\u0442 \u0441\u043c\u0435\u043b\u043e \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u043d\u0430 \u0432\u0430\u0448 \u043e\u043f\u044b\u0442.",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-09-11T10:27:13Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 42.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10085,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "Yog0kiCzsFEEO7qWmzFB",
+        "globalUserId": "0/wDjjqwnrUQXK21DUGwVUdhgLOGEzu0BfR2/U7nPzs=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0415\u043b\u0435\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 1405699024,
+        "text": "\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u043b\u0438 \u043f\u0430\u0440\u0443 \u0434\u043d\u0435\u0439 \u043d\u0430\u0437\u0430\u0434, \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u043b\u0438, \u0441\u043d\u0438\u043c\u0430\u0435\u0442 \u0445\u043e\u0440\u043e\u0448\u043e, \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u0443\u0434\u043e\u0431\u043d\u043e\u0435, \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0443\u044e.",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0427\u0435\u0440\u043d\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-09-10T21:10:23Z",
+        "updatedDate": "2026-09-10T21:33:28.349972462Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432, \u043c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u043b\u0438 \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440. \u0422\u0435, \u043a\u0442\u043e \u043f\u0440\u0438\u0441\u043c\u0430\u0442\u0440\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u043a \u043c\u043e\u0434\u0435\u043b\u0438, \u043c\u043e\u0433\u0443\u0442 \u0441\u043c\u0435\u043b\u043e \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u043d\u0430 \u0432\u0430\u0448 \u043e\u043f\u044b\u0442.",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-09-10T21:31:47Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "photos": [
+            {
+                "id": 0,
+                "key": "2/5b6c5bfb-9add-41ff-9982-7bac603b54f0",
+                "isBlurred": false,
+                "isReady": true
+            },
+            {
+                "id": 0,
+                "key": "2/27da9c86-cfee-46ac-8989-a625aa878aff",
+                "isBlurred": false,
+                "isReady": true
+            }
+        ],
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 41.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10085,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "YIx0mq3gOmVVMUVCRBIe",
+        "globalUserId": "fMta+lkshcfpKQENxzqW2gGv24fFJfo0dfYSFmIZNSU=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u0435\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 1405699024,
+        "text": "\u0425\u043e\u0440\u043e\u0448\u0438\u0439 \u0432\u0438\u0434\u0435\u043e\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440 \u0437\u0430 \u0440\u0430\u0437\u0443\u043c\u043d\u044b\u0435 \u0434\u0435\u043d\u044c\u0433\u0438. \u0417\u0430\u043f\u0438\u0441\u044c \u0438\u0434\u0435\u0442 \u0431\u0435\u0437 \u0441\u0431\u043e\u0435\u0432, \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0430 \u044f\u0440\u043a\u0430\u044f, \u0432\u0441\u0451 \u0443\u0441\u0442\u0440\u0430\u0438\u0432\u0430\u0435\u0442",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0447\u0435\u0440\u043d\u044b\u0439",
+        "size": "",
+        "createdDate": "2026-09-10T14:10:38Z",
+        "updatedDate": "2026-09-10T14:20:38.948034688Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432, \u043c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u043b\u0438 \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440. \u0422\u0435, \u043a\u0442\u043e \u043f\u0440\u0438\u0441\u043c\u0430\u0442\u0440\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u043a \u043c\u043e\u0434\u0435\u043b\u0438, \u043c\u043e\u0433\u0443\u0442 \u0441\u043c\u0435\u043b\u043e \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u043d\u0430 \u0432\u0430\u0448 \u043e\u043f\u044b\u0442.",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-09-10T14:17:37Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 40.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10085,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "5oq6WnnYFom1Q730LQRz",
+        "globalUserId": "MMLWcgNfXwkBFl0SJ8O9Z6a37xrg4nloalzk/YBVNa+S",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043d\u0430\u0441\u0442\u0430\u0441\u0438\u044f",
+            "hasPhoto": false
+        },
+        "nmId": 1405699024,
+        "text": "\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u0441\u044f, \u043a\u043e\u043c\u043f\u0430\u043a\u0442\u043d\u044b\u0439, \u0443\u0434\u043e\u0431\u043d\u044b\u0439, \u0438\u043c\u0435\u043d\u043d\u043e \u0442\u0430\u043a\u043e\u0439 \u0438 \u0445\u043e\u0442\u0435\u043b\u0430. \u0411\u0443\u0434\u0435\u043c \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f!",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0447\u0435\u0440\u043d\u044b\u0439",
+        "size": "",
+        "createdDate": "2026-09-08T11:42:47Z",
+        "updatedDate": "2026-09-08T11:52:11.616908310Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432, \u043c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u043b\u0438 \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440. \u0422\u0435, \u043a\u0442\u043e \u043f\u0440\u0438\u0441\u043c\u0430\u0442\u0440\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u043a \u043c\u043e\u0434\u0435\u043b\u0438, \u043c\u043e\u0433\u0443\u0442 \u0441\u043c\u0435\u043b\u043e \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u043d\u0430 \u0432\u0430\u0448 \u043e\u043f\u044b\u0442.",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-09-08T11:50:49Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "photos": [
+            {
+                "id": 0,
+                "key": "1/510f0127-f278-46aa-890e-a644f669a399",
+                "isBlurred": false,
+                "isReady": true
+            },
+            {
+                "id": 0,
+                "key": "1/3325b722-45a5-4d6f-8101-b75131f2dbef",
+                "isBlurred": false,
+                "isReady": true
+            }
+        ],
+        "video": {
+            "id": "8/ac4f2057-225a-4699-b1d4-35f94e9e1cc2",
+            "durationSec": 11,
+            "isReady": true
+        },
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 39.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "khy2zUgy1cnAds6gkEFl",
+        "globalUserId": "nS16B3NJMVZ5LdN898KW5bzA677x8l3afHxOlN1f2Gg=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0421\u0435\u0440\u0433\u0435\u0439",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "",
+        "pros": "\u0412\u0441\u0451 \u0434\u043e\u0435\u0445\u0430\u043b\u043e \u0432 \u0441\u043e\u0445\u0440\u0430\u043d\u043d\u043e\u0441\u0442\u0438. \u0421 \u043f\u0435\u0440\u0432\u043e\u0433\u043e \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u0437\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043b\u043e, \u043d\u0438\u043a\u0430\u043a\u0438\u0445 \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u0435\u0439. \u042f \u0434\u043e\u0432\u043e\u043b\u0435\u043d!",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0411\u0435\u043b\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-06-10T11:32:04Z",
+        "updatedDate": "2026-08-25T17:35:00.110484904Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-06-10T12:23:48Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 38.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "CYXunxLfi4CXzs635DJR",
+        "globalUserId": "u86bfj01EJtfACrNE0kTJCKekIiLuT/K/1NUta8J298=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041a\u043e\u043d\u0441\u0442\u0430\u043d\u0442\u0438\u043d",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u041f\u043e\u043b\u044c\u0437\u0443\u044e\u0441\u044c \u0430\u043a\u0442\u0438\u0432\u043d\u043e, \u043d\u0438\u043a\u0430\u043a\u0438\u0445 \u0441\u0431\u043e\u0435\u0432 \u0432 \u0440\u0430\u0431\u043e\u0442\u0435 \u043d\u0435 \u0432\u043e\u0437\u043d\u0438\u043a\u0430\u043b\u043e. \u0412\u0441\u0435 \u043a\u0430\u043a \u0432 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0438, \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0443\u044e.",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0411\u0435\u043b\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-06-09T17:28:41Z",
+        "updatedDate": "2026-08-25T17:35:00.110483644Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-06-09T18:01:18Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 37.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10085,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "MtAJ3KJhadXzJwUxBXo1",
+        "globalUserId": "xaQ21/PmYNk2XUiwXPeN1gkyp9o/krOnDERYyTS0eVQ=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0421\u0435\u0440\u0433\u0435\u0439",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u041f\u0440\u0438\u0448\u043b\u043e \u0431\u044b\u0441\u0442\u0440\u043e, \u0432 \u0445\u043e\u0440\u043e\u0448\u0435\u0439 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0435. \u041f\u0440\u043e\u0432\u0435\u0440\u0438\u043b\u0438 \u0441\u0440\u0430\u0437\u0443, \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442, \u0441\u043f\u0430\u0441\u0438\u0431\u043e!",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0431\u0435\u043b\u044b\u0439",
+        "size": "",
+        "createdDate": "2026-06-09T12:15:40Z",
+        "updatedDate": "2026-08-25T17:35:00.110482184Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-06-09T14:27:34Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 36.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "XfNGXwGF3K2wJn1Xr8iA",
+        "globalUserId": "4kY402FHzgbEMsfM8N8PA5KKc6tEYZLw1jU5m0sunjhA",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "",
+        "pros": "\u041e\u0447\u0435\u043d\u044c \u043f\u0440\u0438\u044f\u0442\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f, \u0432\u0441\u0435 \u043a\u0430\u043a \u0437\u0430\u044f\u0432\u043b\u0435\u043d\u043e. \u0421\u043f\u0430\u0441\u0438\u0431\u043e!",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0411\u0435\u043b\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-06-07T09:01:43Z",
+        "updatedDate": "2026-08-25T17:35:00.110471067Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-06-07T10:54:21Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 35.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "la3E57UPAwKjnYk8XRKA",
+        "globalUserId": "5UqOUDUf4RaTR/vTRBhD4RKXoGOD9fDLnHDFjXa//nw=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0417\u0430\u043b\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u0423\u0434\u043e\u0431\u043d\u044b\u0439 \u0438 \u043f\u0440\u0430\u043a\u0442\u0438\u0447\u043d\u044b\u0439 , \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e \u0445\u043e\u0440\u043e\u0448\u0435\u0435",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0431\u0435\u043b\u044b\u0439",
+        "size": "",
+        "createdDate": "2026-05-27T05:04:53Z",
+        "updatedDate": "2026-08-25T17:35:00.110467929Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-27T05:08:43Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 34.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "childFeedbackId": "KzG7F1IXD65fq7aNkp5P",
+        "excludedFromRating": {
+            "isExcluded": true,
+            "reasons": [
+                "hasIncludedChild"
+            ]
+        }
+    },
+    {
+        "id": "CKIS2lskYgU5AoILcNKO",
+        "globalUserId": "3zK0XKZ+JZW2DN4ZvIo6l0ADz4rIeVDVngfLRy+83HY=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u042d\u043b\u044c\u0432\u0438\u0440\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u041f\u043e\u043a\u0443\u043f\u0430\u043b\u0430 \u043c\u0443\u0436\u0443 \u043d\u0430 \u043f\u043e\u0434\u0430\u0440\u043e\u043a, \u043e\u043d \u0434\u0430\u0432\u043d\u043e \u043a \u0442\u0430\u043a\u043e\u043c\u0443 \u043f\u0440\u0438\u0433\u043b\u044f\u0434\u044b\u0432\u0430\u043b\u0441\u044f. \u041f\u0440\u0438\u0448\u043b\u043e \u0431\u044b\u0441\u0442\u0440\u043e, \u0443\u043f\u0430\u043a\u043e\u0432\u0430\u043d\u043e \u043d\u0430\u0434\u0451\u0436\u043d\u043e. \u0421\u0440\u0430\u0437\u0443 \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u043b\u0438, \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u043e\u0442\u043b\u0438\u0447\u043d\u043e, \u0441\u043f\u0430\u0441\u0438\u0431\u043e!",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0411\u0435\u043b\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-05-26T10:46:34Z",
+        "updatedDate": "2026-09-08T14:21:06.075251203Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-26T11:57:41Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 1,
+            "minuses": 0
+        },
+        "rank": 33.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "PwxEYggDkqU55SYfgbJI",
+        "globalUserId": "yqni1p9r3iGOY6TMrl6ozgGvVqnX8KtPphY1yA9xGtI=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0418\u0440\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u0421\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u044e, \u0432 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0438 \u043f\u0440\u043e\u0441\u0442, \u0431\u0435\u0437 \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u0435\u0439",
+        "pros": "\u041a\u043e\u043c\u043f\u0430\u043a\u0442\u043d\u044b\u0439",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0411\u0435\u043b\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-05-25T19:15:29Z",
+        "updatedDate": "2026-08-25T17:35:00.110463814Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-25T19:18:42Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 32.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10085,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "KyDqTLfVxld2gj5IjIYd",
+        "globalUserId": "GbI4cuWTPj5IzY8CLPSuPJaAMHQD8S6Sa90IaoJJ4sc=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u042e\u043b\u0438\u044f",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u0425\u043e\u0440\u043e\u0448\u0435\u0435 \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0411\u0435\u043b\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-05-18T09:08:22Z",
+        "updatedDate": "2026-08-25T17:35:00.110459741Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-18T09:17:46Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 31.0,
+        "statusId": 16,
+        "bables": [
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10089
+            ],
+            "bad": []
+        },
+        "childFeedbackId": "JKpLfdeha9jl5PqBP0PT",
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "jFBt8sU29YOVjdehdV4Z",
+        "globalUserId": "z/MTkM9WTydg4pUV556VaLBoc73v4FTuUsxckWFupQs=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043d\u0430\u0441\u0442\u0430\u0441\u0438\u044f",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u041a\u0430\u043a \u043f\u043e \u043c\u043d\u0435 \u0434\u043e\u0441\u0442\u043e\u0439\u043d\u044b\u0439 \u0432\u0430\u0440\u0438\u0430\u043d\u0442, \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u043b \u0438 \u0437\u0430\u0431\u044b\u043b, \u0440\u0430\u0434\u0430 \u0447\u0442\u043e \u0432\u044b\u0431\u0440\u0430\u043b\u0430 \u0438\u043c\u0435\u043d\u043d\u043e \u0435\u0433\u043e",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0411\u0435\u043b\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-05-16T05:45:39Z",
+        "updatedDate": "2026-08-25T17:35:00.110455557Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-16T07:02:12Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 30.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0440\u0430\u0437\u043c\u0435\u0440",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10074,
+                10085,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "9k1XxaTn9E49BeNwqE4l",
+        "globalUserId": "wuNGNkmLHS2S7uPH3b3A2sJIJMP4cPBQ8BSFYrtyqg4=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0418\u0440\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u0420\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e,\u043f\u0440\u0438\u0435\u0445\u0430\u043b \u0446\u0435\u043b\u044b\u043c,\u043f\u043e\u043a\u0430 \u0432\u0441\u0451 \u0445\u043e\u0440\u043e\u0448\u043e",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0431\u0435\u043b\u044b\u0439",
+        "size": "",
+        "createdDate": "2026-05-15T19:42:59Z",
+        "updatedDate": "2026-08-25T17:35:00.110451777Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-15T20:00:18Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 29.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "childFeedbackId": "qXpW15c753c4itHpW7I6",
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "eAPEw6QaGAFzrXgd2cHJ",
+        "globalUserId": "b3HLpJUzTD61joCm5IJUvXACQ6R3zmJA65aVeWs2sSU=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0422\u0430\u0442\u044c\u044f\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u0423\u0436\u0435 \u043f\u043e\u0447\u0442\u0438 \u043c\u0435\u0441\u044f\u0446 \u043f\u043e\u043b\u044c\u0437\u0443\u044e\u0441\u044c \u0438\u043c, \u0438 \u043f\u043e\u043a\u0430 \u0432\u044b\u0437\u044b\u0432\u0430\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043f\u043e\u043b\u043e\u0436\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u044d\u043c\u043e\u0446\u0438\u0438",
+        "pros": "\u0425\u043e\u0440\u043e\u0448\u0435\u0435 \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-05-12T17:51:08Z",
+        "updatedDate": "2026-08-25T17:35:00.110446070Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-12T18:11:22Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 28.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "JeyTZ4zuBJchyvJMLhV2",
+        "globalUserId": "eym5xUzb7AIaMKqMEAuzj9Ag/InCPEBNPYWJYmc4ZK0=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043d\u0433\u0435\u043b\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "",
+        "pros": "\u0425\u043e\u0440\u043e\u0448\u0438\u0439",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-05-05T23:26:34Z",
+        "updatedDate": "2026-08-25T17:35:00.110439522Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-05T23:43:14Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 27.0,
+        "statusId": 16,
+        "bables": [
+            "\u0440\u0430\u0437\u043c\u0435\u0440",
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10074,
+                10066,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "qAFeEOzLqgfBvgbPRwvr",
+        "globalUserId": "G6s87tk4w1zUm5/7FhqOycNZ1UPqRAuJwopePfOzFuc=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 864824988,
+        "text": "\u041e\u0442\u043b\u0438\u0447\u043d\u043e \u0444\u0443\u043d\u043a\u0446\u0438\u043e\u043d\u0438\u0440\u0443\u0435\u0442, \u043f\u043e\u043a\u0430 \u043f\u043e\u043b\u044c\u0437\u0443\u044e\u0441\u044c \u0438\u043c \u043f\u0440\u043e\u0431\u043b\u0435\u043c \u043d\u0435 \u0432\u043e\u0437\u043d\u0438\u043a\u043b\u043e , \u0434\u043e\u0432\u043e\u043b\u044c\u043d\u0430 \u043f\u0440\u0438\u043e\u0431\u0440\u0435\u0442\u0435\u043d\u0438\u0435\u043c",
+        "pros": "\u0423\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-05-04T19:07:42Z",
+        "updatedDate": "2026-08-25T17:35:00.110437060Z",
+        "answer": {
+            "text": "\u0410\u043b\u0438\u043d\u0430, \u0437\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-05-04T21:02:38Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 26.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "fnClLGZgEmFYHG2VLuz9",
+        "globalUserId": "jB2awHk4D1kvk4odwqwZpHkXOhPfZM/DLDXiUyPCpLs=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0415\u043b\u0435\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u041f\u043e\u043b\u044c\u0437\u0443\u0435\u043c\u0441\u044f \u0443\u0436\u0435 \u0431\u043e\u043b\u044c\u0448\u0435 \u0434\u0432\u0443\u0445 \u043d\u0435\u0434\u0435\u043b\u044c, \u0432\u0441\u0451 \u0444\u0443\u043d\u043a\u0446\u0438\u043e\u043d\u0438\u0440\u0443\u0435\u0442, \u043a\u0430\u043a \u043d\u0430\u0434\u043e, \u043c\u044b \u0434\u043e\u0432\u043e\u043b\u044c\u043d\u044b. \u0421\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u0437\u0430\u044f\u0432\u043b\u0435\u043d\u043d\u044b\u043c \u0445\u0430\u0440\u0430\u043a\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043a\u0430\u043c.",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0427\u0435\u0440\u043d\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-04-19T09:37:04Z",
+        "updatedDate": "2026-08-25T17:35:00.111380685Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-04-19T10:53:02Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 1,
+            "minuses": 0
+        },
+        "rank": 25.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "X2pY9TdlqmIKaCVjyqwE",
+        "globalUserId": "uy7d8dE+R+PXwJOXiDb/4A2dEEH4TQ21fm72EGj6sr8=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0415\u043a\u0430\u0442\u0435\u0440\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u0421\u0434\u0435\u043b\u0430\u043d \u0434\u043e\u0431\u0440\u043e\u0442\u043d\u043e, \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u0443\u0434\u043e\u0431\u043d\u043e. \u0423\u043f\u0430\u043a\u043e\u0432\u0430\u043d\u043e \u043d\u0430\u0434\u0435\u0436\u043d\u043e, \u0441\u043f\u0430\u0441\u0438\u0431\u043e",
+        "pros": "\u041a\u043e\u043c\u043f\u0430\u043a\u0442\u043d\u044b\u0439, \u043d\u0435 \u0437\u0430\u043d\u0438\u043c\u0430\u0435\u0442 \u043c\u043d\u043e\u0433\u043e \u043c\u0435\u0441\u0442\u0430",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0427\u0435\u0440\u043d\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-04-18T07:41:16Z",
+        "updatedDate": "2026-08-25T17:35:00.111375306Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-04-18T08:05:29Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 1,
+            "minuses": 0
+        },
+        "rank": 24.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10089
+            ],
+            "bad": []
+        },
+        "childFeedbackId": "U2EB3LgiZqn7a5Qihgn5",
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "yZWeF8NnlEVgX9VPgZTy",
+        "globalUserId": "9zu7xtiF2FKdiJqh23qHba9BDEoGX28jpE8cj124ud0=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0421\u0435\u0440\u0433\u0435\u0439",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u041f\u043e\u043a\u0443\u043f\u0430\u043b \u0432\u0437\u0430\u043c\u0435\u043d \u0441\u0442\u0430\u0440\u043e\u0433\u043e, \u043a\u043e\u0442\u043e\u0440\u044b\u0439 \u0441\u043b\u043e\u043c\u0430\u043b\u0441\u044f. \u042d\u0442\u043e\u0442 \u043e\u043a\u0430\u0437\u0430\u043b\u0441\u044f \u0443\u0434\u043e\u0431\u043d\u0435\u0435 \u0438 \u043d\u0430\u0434\u0451\u0436\u043d\u0435\u0435. \u0420\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e, \u044d\u0442\u043e \u0441\u0430\u043c\u043e\u0435 \u0433\u043b\u0430\u0432\u043d\u043e\u0435. \u0421\u043f\u0430\u0441\u0438\u0431\u043e.",
+        "cons": "\u0412\u0441\u0451 \u0445\u043e\u0440\u043e\u0448\u043e",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "\u0427\u0435\u0440\u043d\u044b\u0439",
+        "size": "0",
+        "createdDate": "2026-04-02T05:55:35Z",
+        "updatedDate": "2026-08-25T17:35:00.111373456Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-04-02T07:12:43Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 23.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "8KddUf4JSDCekKZ3IY2q",
+        "globalUserId": "nztN12X1IEe9gup7AhSwhaiYwnQQXdXsO47p0fpufSY=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u0435\u043a\u0441\u0430\u043d\u0434\u0440\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0417\u0430\u043a\u0430\u0437\u044b\u0432\u0430\u043b\u0430 \u043c\u0443\u0436\u0443, \u043e\u043d \u0434\u0430\u0432\u043d\u043e \u0442\u0430\u043a\u043e\u0439 \u043f\u0440\u0438\u0441\u043c\u0430\u0442\u0440\u0438\u0432\u0430\u043b. \u041f\u0440\u0438\u0448\u0451\u043b \u0431\u044b\u0441\u0442\u0440\u043e, \u0432\u0441\u0435 \u0443\u043f\u0430\u043a\u043e\u0432\u0430\u043d\u043e \u043d\u0430\u0434\u0435\u0436\u043d\u043e. \u0421\u0440\u0430\u0437\u0443 \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u043b\u0438- \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u043e\u0442\u043b\u0438\u0447\u043d\u043e. \u0421\u043f\u0430\u0441\u0438\u0431\u043e!",
+        "cons": "\u041d\u0435\u0442",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-30T14:39:15Z",
+        "updatedDate": "2026-08-25T17:35:00.111371290Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-30T15:02:37Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 1
+        },
+        "rank": 22.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "C5lXRhlLIZTRTo2xzhoA",
+        "globalUserId": "tR4Azmu73eITXymmdyahUtpt18WcLsFmV7+96D5W2+g=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041d\u0430\u0442\u0430\u043b\u044c\u044f",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u041a\u043e\u043c\u043f\u0430\u043a\u0442\u043d\u044b\u0439, \u0443\u0434\u043e\u0431\u043d\u044b\u0439, \u0432\u0430\u0441 \u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-30T14:24:35Z",
+        "updatedDate": "2026-08-25T17:35:00.111367665Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-30T15:02:17Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 21.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "childFeedbackId": "v8DCs2U4ITEuzkoqFNBf",
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "6l3CsHxVClLV8Gf1lhwz",
+        "globalUserId": "929LEznYu7XseCsSha/Ctr7AUh8LhGDYFa8Z+FDPUxE=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041d\u0438\u043a\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u041f\u043e\u043b\u044c\u0437\u0443\u044e\u0441\u044c \u0430\u043a\u0442\u0438\u0432\u043d\u043e, \u043f\u043e \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0447\u0430\u0441\u043e\u0432 \u0432 \u0434\u0435\u043d\u044c. \u041d\u0435 \u0433\u0440\u0435\u0435\u0442\u0441\u044f, \u043d\u0435 \u0442\u0443\u043f\u0438\u0442, \u0432\u043d\u0435\u0448\u043d\u0438\u0439 \u0432\u0438\u0434 \u0430\u043a\u043a\u0443\u0440\u0430\u0442\u043d\u044b\u0439. \u0412\u043f\u0435\u0447\u0430\u0442\u043b\u0435\u043d\u0438\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u043f\u043e\u043b\u043e\u0436\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435.",
+        "pros": "",
+        "cons": "\u041d\u0435 \u0437\u0430\u043c\u0435\u0442\u0438\u043b\u0430.",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-29T17:09:42Z",
+        "updatedDate": "2026-08-25T17:35:00.111366501Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-29T17:27:25Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 1
+        },
+        "rank": 20.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e"
+        ],
+        "reasons": {
+            "good": [
+                10066
+            ],
+            "bad": []
+        },
+        "childFeedbackId": "6ulGlgKW8CvPTAKLV8vA",
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "V1YGFyqze5EJ5kfxUh1u",
+        "globalUserId": "OEGMXPTj12CmILSzZ4oZAboZEjj4AAsJLrLoK6B8gQ==",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0415\u043b\u0435\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u0425\u043e\u0440\u043e\u0448\u0435\u0435 \u0441\u043e\u043e\u0442\u043d\u043e\u0448\u0435\u043d\u0438\u0435 \u0446\u0435\u043d\u044b/\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0430. \u042f \u0434\u043e\u0432\u043e\u043b\u044c\u043d\u0430",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-29T15:20:30Z",
+        "updatedDate": "2026-08-25T17:35:00.111365292Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-29T16:03:51Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 19.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "whyYJoOqQ59v2rIxGLyo",
+        "globalUserId": "EP/JR193L2zRoCC98O0exJqTd+QDaKdJvX1aP8/rHS0=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u043b\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0414\u043e\u0441\u0442\u0430\u0432\u0438\u043b\u0438 \u0431\u044b\u0441\u0442\u0440\u043e, \u0443\u043f\u0430\u043a\u043e\u0432\u0430\u043d\u043e \u043d\u0430\u0434\u0435\u0436\u043d\u043e. \u041f\u0440\u0438 \u043f\u0435\u0440\u0432\u043e\u043c \u0436\u0435 \u0432\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0438 \u0437\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043b\u043e, \u043d\u0438\u043a\u0430\u043a\u0438\u0445 \u043f\u0440\u043e\u0431\u043b\u0435\u043c. \u041f\u043e\u043a\u0430 \u043d\u0435\u0434\u0435\u043b\u044e \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u044e, \u0432\u0441\u0435 \u043d\u043e\u0440\u043c. \u0421\u043f\u0430\u0441\u0438\u0431\u043e",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-29T11:51:50Z",
+        "updatedDate": "2026-08-25T17:35:00.111361894Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-29T12:22:35Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 18.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "TXgTm9bkCzdET8zzAhnL",
+        "globalUserId": "cO3+HvfkFv3YeTaJd979QCIptUK4n4MG49uWrBVPu9k=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0415\u043b\u0435\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0421\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u0442\u0441\u044f \u0441\u043e \u0441\u0432\u043e\u0435\u0439 \u0437\u0430\u0434\u0430\u0447\u0435\u0439 \u043e\u0442\u043b\u0438\u0447\u043d\u043e",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-29T04:27:18Z",
+        "updatedDate": "2026-08-25T17:35:00.111360423Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-29T06:36:40Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 17.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "WveL6j1jdm6Mn5eYX4Z0",
+        "globalUserId": "BcDwAf/04LY3st3Jwy2jhmYyVic2UTRC6aIAfiXxo5RN",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u042f\u0440\u043e\u0441\u043b\u0430\u0432",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u041d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0439 \u0440\u0430\u0431\u043e\u0447\u0438\u0439 \u0432\u0430\u0440\u0438\u0430\u043d\u0442. \u0421\u0434\u0435\u043b\u0430\u043d\u043e \u0430\u043a\u043a\u0443\u0440\u0430\u0442\u043d\u043e \u0432\u0441\u0435, \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u0441\u044f \u0441\u0440\u0430\u0437\u0443, \u0434\u0443\u043c\u0430\u044e \u0447\u0442\u043e \u043d\u0435 \u043f\u043e\u0434\u0432\u0435\u0434\u0451\u0442.",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-28T15:55:17Z",
+        "updatedDate": "2026-08-25T17:35:00.111357293Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-28T16:17:28Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 16.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "mLFEIQuhLXysYJbUANNN",
+        "globalUserId": "dVH1nadBlOSMX52nWYj3dvXeuqRB4b3i9fGdOC9RWQw=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043c\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u041c\u043d\u0435 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u0441\u044f , \u0431\u0443\u0434\u0443 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-28T14:02:29Z",
+        "updatedDate": "2026-08-25T17:35:00.111353767Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-28T14:31:50Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 15.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "6YjSOMaU7QcxtsqtRC1J",
+        "globalUserId": "HrafQvR0K43QArdFVXbOPqACeP84EHA/mvwhvCjJCKs=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041a\u0430\u043c\u0438\u043b\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0422\u043e\u0432\u0430\u0440 \u043f\u043e\u043b\u043d\u043e\u0441\u0442\u044c\u044e \u0441\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u044e, \u0432\u044b\u0433\u043b\u044f\u0434\u0438\u0442 \u043a\u0440\u0430\u0441\u0438\u0432\u043e, \u043f\u0440\u043e\u0431\u043b\u0435\u043c \u043d\u0438 \u043a\u0430\u043a\u0438\u0445 \u043d\u0435 \u0432\u043e\u0437\u043d\u0438\u043a\u043b\u043e.",
+        "cons": "\u0412\u0441\u0435 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-28T10:57:38Z",
+        "updatedDate": "2026-08-25T17:35:00.111352039Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-28T11:17:33Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 14.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "p2kvxWuCBwgtDIl7BYOP",
+        "globalUserId": "LNSZmtqSRATOrNptYkCDeCG7scZ5TnNznS4lVz522CM2",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u041a\u0430\u0447\u0435\u0441\u0442\u0432\u043e \u0445\u043e\u0440\u043e\u0448\u0435\u0435.\u041d\u0435 \u043f\u043e\u0436\u0430\u043b\u0435\u043b\u0430 \u0447\u0442\u043e \u043f\u0440\u0438\u043e\u0431\u0440\u0435\u043b\u0430",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-28T08:54:31Z",
+        "updatedDate": "2026-08-25T17:35:00.111350366Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-28T09:15:23Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 13.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "f9ciZVtXXExEvFWTRaQk",
+        "globalUserId": "vzYVw9Dz8pQVCWnOzAX3fQZoZLZ35Oqvk1m1zf/AO2k=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0418\u0440\u0438\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0412\u0441\u0435 \u043f\u0440\u0438\u0448\u043b\u043e \u0432 \u0446\u0435\u043b\u043e\u0441\u0442\u0438. \u041d\u0430 \u0432\u0438\u0434 \u0434\u043e\u0431\u0440\u043e\u0442\u043d\u043e \u0441\u0434\u0435\u043b\u0430\u043d\u043e, \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043b\u044e\u0444\u0442\u0438\u0442 \u0438 \u043d\u0435 \u0441\u043a\u0440\u0438\u043f\u0438\u0442. \u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u043b\u0430 \u0438 \u0441\u0440\u0430\u0437\u0443 \u0437\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043b\u043e.",
+        "cons": "\u041d\u0435\u0442",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-27T13:54:41Z",
+        "updatedDate": "2026-08-25T17:35:00.111344157Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-27T16:02:00Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 12.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "IpwdQKmQ6RzBWMnf8UdD",
+        "globalUserId": "Sb+6kdP5LvP/pBX1llNCynDXS6Q84tahUDRgxH0c4Q8=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041e\u043b\u044c\u0433\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0412 \u0446\u0435\u043b\u043e\u043c \u0432\u0441\u0435 \u0443\u0441\u0442\u0440\u043e\u0438\u043b\u043e. \u041f\u0440\u0435\u0442\u0435\u043d\u0437\u0438\u0439 \u043d\u0435\u0442",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-27T08:02:01Z",
+        "updatedDate": "2026-08-25T17:35:00.111335815Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-27T09:42:29Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 11.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "childFeedbackId": "d3HTZg55qi2Ldpv5C7Pi",
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "jbAJ7lw4PQUry19uMayD",
+        "globalUserId": "onAQxPNjzRUGmHUYqf1E4QaqtHF78y539uUSP8BA7hOW",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041c\u0430\u0440\u0438\u044f",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u0423\u043f\u0430\u043a\u043e\u0432\u0430\u043d\u043e \u0445\u043e\u0440\u043e\u0448\u043e, \u0434\u043e\u0441\u0442\u0430\u0432\u0438\u043b\u0438 \u0431\u044b\u0441\u0442\u0440\u043e. \u0422\u043e\u0432\u0430\u0440 \u0440\u0430\u0431\u043e\u0447\u0438\u0439",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-26T13:04:23Z",
+        "updatedDate": "2026-08-25T17:35:00.111326911Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-26T14:29:23Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 10.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "GYAntV0c2EpHIhfETh1y",
+        "globalUserId": "B4FIoLmvCRx9c7TOTXLe/Ja2BhaEH2Z6m96saDw/69Y=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041a\u0441\u0435\u043d\u0438\u044f",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0412 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0438 \u043f\u043e\u043a\u0430 \u043d\u0435\u0434\u0435\u043b\u044e, \u043f\u043e\u043b\u0435\u0442 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u044b\u0439. \u0414\u0430\u043b\u044c\u0448\u0435 \u0432\u0438\u0434\u043d\u043e \u0431\u0443\u0434\u0435\u0442",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-26T08:25:37Z",
+        "updatedDate": "2026-08-25T17:35:00.111325457Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-26T09:04:50Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 9.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "K5CFscPTmAzdyZESndWP",
+        "globalUserId": "8N6KSIc1+XDShdRWHfvMBD84U2Xklpa/IE6XKIP0IjHD",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0415\u043b\u0435\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u0425\u043e\u0440\u043e\u0448\u0435\u0435 \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e, \u043f\u043e\u043a\u0443\u043f\u043a\u043e\u0439 \u0434\u043e\u0432\u043e\u043b\u044c\u043d\u0430",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-25T16:39:56Z",
+        "updatedDate": "2026-08-25T17:35:00.111323942Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-25T16:56:15Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 8.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "X2AcwjwntviDMEbJkZC1",
+        "globalUserId": "N9G5tN62tW7EGSKSenJoHswoDYI0liDb4ufWiVGLM8M=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0418\u043d\u043d\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-25T07:36:51Z",
+        "updatedDate": "2026-08-25T17:35:00.111320418Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-25T08:18:22Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 7.0,
+        "statusId": 16,
+        "bables": [
+            "\u0440\u0430\u0437\u043c\u0435\u0440",
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10074,
+                10066,
+                10085,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "SqJR3YTM8qkWzHMWs7Xq",
+        "globalUserId": "qdSO3l0Z1LeQ2x33pbc/6i1FXr9lxAcv9PizpR/uaA8=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043b\u0435\u043a\u0441\u0430\u043d\u0434\u0440",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u0412\u0441\u0451 \u0432 \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0435, \u043a\u0430\u043a \u0432 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0438, \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u043b \u0438 \u0437\u0430\u0431\u044b\u043b. \u0420\u0430\u0431\u043e\u0442\u0430\u0435\u0442.",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-24T16:55:28Z",
+        "updatedDate": "2026-08-25T17:35:00.111315600Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-24T17:27:43Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 6.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10085,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "childFeedbackId": "2jv0vYMjz08V41dg7qy8",
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "RK8yRyDbT2Wx5bgR9deu",
+        "globalUserId": "Ih/fRc4LdsKHrR4y1nQf6VQ9SBpIHFNrMArf71LvqSxy",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "",
+        "pros": "\u041e\u0442\u043b\u0438\u0447\u043d\u044b\u0439 \u0442\u043e\u0432\u0430\u0440,\u0432\u0441\u0435 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c,\u0442\u043e\u0432\u0430\u0440\u043e\u043c \u0434\u043e\u0432\u043e\u043b\u0435\u043d",
+        "cons": "\u041c\u0438\u043d\u0443\u0441\u043e\u0432 \u043d\u0435\u0442",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-22T15:59:42Z",
+        "updatedDate": "2026-08-25T17:35:00.111311830Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-22T16:30:53Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 5.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "BEl3hk4FN84i7oaE7Lel",
+        "globalUserId": "OqhOAWRugp7XEL0c6UAFaRYqFrm3xp+w89UwhsSubOE=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041e\u043b\u0438\u0432\u0430",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u041f\u0440\u0438\u0435\u0445\u0430\u043b \u0432 \u0445\u043e\u0440\u043e\u0448\u0435\u0439 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0435, \u0441\u0434\u0435\u043b\u0430\u043d \u0434\u043e\u0431\u0440\u043e\u0442\u043d\u043e, \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0443\u044e.",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-21T16:38:20Z",
+        "updatedDate": "2026-08-25T17:35:00.111309538Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-21T17:08:03Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 4.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "CdvioVxec23xt1OyQnZF",
+        "globalUserId": "GaKpDLpss8PHBlx2N154YCAAbbaPq0IPA62OMfQdWSY=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0420\u0430\u0444\u0430\u044d\u043b\u044c",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u0425\u043e\u0440\u043e\u0448\u0438\u0439 \u0442\u043e\u0432\u0430\u0440, \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u044e \u0441\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u0435\u0442. \u041d\u0438\u0447\u0435\u0433\u043e \u043b\u0438\u0448\u043d\u0435\u0433\u043e, \u0432\u0441\u0435 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442.",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "",
+        "createdDate": "2026-03-21T08:11:48Z",
+        "updatedDate": "2026-08-25T17:35:00.111306073Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-21T08:35:16Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 3.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    },
+    {
+        "id": "gOIhxrssldaRPQCIFhHb",
+        "globalUserId": "tFdDJc4xHuZMdsYvIQekFmvnT15nBEQlPAiDBOmFXk4=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u041c\u0430\u0442\u0432\u0435\u0439",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u0421\u0432\u043e\u0438 \u0444\u0443\u043d\u043a\u0446\u0438\u0438 \u0432\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442, \u043d\u0430\u0440\u0435\u043a\u0430\u043d\u0438\u0439 \u043d\u0435 \u043e\u0431\u043d\u0430\u0440\u0443\u0436\u0438\u043b",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-19T12:14:07Z",
+        "updatedDate": "2026-08-25T17:35:00.111302113Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-19T12:27:17Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 1,
+            "minuses": 0
+        },
+        "rank": 2.0,
+        "statusId": 16,
+        "reasons": {
+            "good": [],
+            "bad": []
+        },
+        "childFeedbackId": "casTcLH5iKi3s2YKaUnu",
+        "excludedFromRating": {
+            "isExcluded": true,
+            "reasons": [
+                "hasIncludedChild"
+            ]
+        }
+    },
+    {
+        "id": "av5IB7beT88RGLdXNRAQ",
+        "globalUserId": "2c2fSusxLRnpJPPSmifNlIns6xTtP5kQpRzYG+BWIlc=",
+        "wbUserId": 0,
+        "wbUserDetails": {
+            "country": "ru",
+            "name": "\u0410\u043d\u0434\u0440\u0435\u0439",
+            "hasPhoto": false
+        },
+        "nmId": 862396883,
+        "text": "\u041a\u0430\u0447\u0435\u0441\u0442\u0432\u043e \u043f\u043e\u0440\u0430\u0434\u043e\u0432\u0430\u043b\u043e",
+        "pros": "",
+        "cons": "",
+        "matchingSize": "",
+        "matchingPhoto": "",
+        "matchingDescription": "",
+        "productValuation": 5,
+        "color": "",
+        "size": "0",
+        "createdDate": "2026-03-18T18:16:36Z",
+        "updatedDate": "2026-08-25T17:35:00.111298330Z",
+        "answer": {
+            "text": "\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435!\n\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043e\u0442\u0437\u044b\u0432! \u041c\u044b \u043e\u0447\u0435\u043d\u044c \u0440\u0430\u0434\u044b \u0447\u0442\u043e \u0432\u0430\u043c \u0432\u0441\u0451 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u043e\u0441\u044c \u0438 \u0432\u044b \u0441\u043c\u043e\u0433\u043b\u0438 \u043f\u043e \u0434\u043e\u0441\u0442\u043e\u0438\u043d\u0441\u0442\u0432\u0443 \u043e\u0446\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0448 \u0442\u043e\u0432\u0430\u0440!",
+            "state": "wbRu",
+            "lastUpdate": null,
+            "createDate": "2026-03-18T19:03:08Z",
+            "rejectReason": null,
+            "metadata": {
+                "editText": "",
+                "editRejectReason": 0
+            }
+        },
+        "video": null,
+        "votes": {
+            "pluses": 0,
+            "minuses": 0
+        },
+        "rank": 1.0,
+        "statusId": 16,
+        "bables": [
+            "\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u043e",
+            "\u0440\u0430\u0437\u043c\u0435\u0440",
+            "\u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u044f",
+            "\u043f\u0440\u043e\u0441\u0442\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0443\u0434\u043e\u0431\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c\u0441\u044f"
+        ],
+        "reasons": {
+            "good": [
+                10066,
+                10074,
+                10085,
+                10088,
+                10089
+            ],
+            "bad": []
+        },
+        "excludedFromRating": {
+            "isExcluded": false,
+            "reasons": []
+        }
+    }
+]

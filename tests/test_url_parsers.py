@@ -9,7 +9,6 @@ from shared.url_parsers import (
     extract_ozon_product_path,
 )
 
-
 # --- Wildberries ----------------------------------------------------------
 
 def test_extract_nm_id_happy_path() -> None:

@@ -46,7 +46,8 @@ def test_registry_create_unknown_raises_with_available() -> None:
 
 
 def test_registry_factory_is_called_each_time() -> None:
-    """create() must return a fresh instance on every call (factory semantics)."""
+    """create() must return a fresh instance on every
+    call (factory semantics)."""
     registry = MarketplaceRegistry()
     registry.register("fake", lambda: FakeAdapter("fresh"))
 

@@ -92,4 +92,8 @@ def extract_yandex_market_card_path(url: str) -> str:
 
     match = YANDEX_MARKET_CARD_RE.match(parsed.path.rstrip("/"))
 
+    # Cannot be None: extract_yandex_market_product_id raises on
+    # non-matching URLs (same regex).
+    assert match is not None
+
     return f"/card/{match.group('slug')}/{match.group('product_id')}"

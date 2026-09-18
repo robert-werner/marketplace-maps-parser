@@ -26,7 +26,6 @@ from infrastructure.transports.browser_json import (
     CloudflareChallengeError,
 )
 
-
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.
 _REAL_SLEEP = asyncio.sleep
@@ -210,16 +209,26 @@ def test_is_cloudflare_challenge_detects_html_enable_javascript():
     <div class="container">
         <div class="message">
             <div class="variant">
-                <h2 class="h2">Пожалуйста, включите JavaScript для продолжения</h2>
-                <span class="subtitle">Нам нужно убедиться, что вы не робот.</span>
+                <h2 class="h2">
+                    Пожалуйста, включите JavaScript
+                    для продолжения
+                </h2>
+                <span class="subtitle">
+                    Нам нужно убедиться, что вы не робот.
+                </span>
             </div>
             <div class="variant" lang="en">
                 <h2 class="h2">Please, enable JavaScript to continue</h2>
-                <span class="subtitle">We need to make sure that you are not a robot.</span>
+                <span class="subtitle">
+                    We need to make sure that you are not a robot.
+                </span>
             </div>
         </div>
         <div class="details">
-            <span class="details-text"><b>ID:</b> fab_chlg_20260914183121_01M2GK090SFR62ZB347M17WHM0</span>,
+            <span class="details-text">
+                <b>ID:</b>
+                fab_chlg_20260914183121_01M2GK090SFR62ZB347M17WHM0
+            </span>,
             <span class="details-text"><b>IP:</b> 85.95.182.24</span>,
         </div>
     </div>
@@ -295,7 +304,9 @@ class _FakePageChallengeResolving:
 
 
 @pytest.mark.asyncio
-async def test_fetch_via_navigation_waits_for_challenge_to_resolve(monkeypatch):
+async def test_fetch_via_navigation_waits_for_challenge_to_resolve(
+    monkeypatch,
+):
     """When Cloudflare returns the HTML challenge page, we should
     wait for the embedded JS to solve the challenge and redirect
     to the actual JSON. After the challenge resolves, the body
@@ -337,7 +348,8 @@ async def test_fetch_via_navigation_waits_for_challenge_to_resolve(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Challenge wait — challenge never resolves (timeout → CloudflareChallengeError)
+# Challenge wait — challenge never resolves
+# (timeout → CloudflareChallengeError)
 # ---------------------------------------------------------------------------
 
 
@@ -396,7 +408,6 @@ async def test_fetch_via_navigation_raises_when_challenge_never_resolves(
 
     # Patch _wait_for_challenge_completion to use a tiny max_wait
     # so the test doesn't loop forever
-    import asyncio as _asyncio
 
     async def fast_wait(*args, **kwargs):
         # Simulate the challenge timing out immediately
@@ -626,7 +637,9 @@ async def test_fetch_json_inside_page_uses_navigation_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fetch_json_inside_page_uses_legacy_fetch_when_configured(monkeypatch):
+async def test_fetch_json_inside_page_uses_legacy_fetch_when_configured(
+    monkeypatch,
+):
     """When ``fetch_strategy="fetch"``, ``_fetch_json_inside_page``
     should call the legacy ``_fetch_json_inside_page_via_fetch``.
     """

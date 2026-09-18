@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from domain.entities import ProductRef, Review
-
 
 HELPFUL_VOTES_RE = re.compile(
     r"Да\s+(\d+)\s+Нет\s+(\d+)"
@@ -150,5 +149,5 @@ def _parse_timestamp(value: Any) -> datetime | None:
 
     return datetime.fromtimestamp(
         timestamp,
-        tz=timezone.utc,
+        tz=UTC,
     )

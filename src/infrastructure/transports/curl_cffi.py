@@ -355,11 +355,13 @@ class CurlCffiTransport(OzonTransportMixin):
             seen_paths.add(current_path)
 
             payload = await retry_async(
-                lambda path=current_path: self._fetch_api_json(
+                lambda path=current_path, page_no=(
+                    processed_pages + 1
+                ): self._fetch_api_json(
                     endpoint_url=self._build_api_url(path),
                     label=(
                         f"Ozon curl_cffi page "
-                        f"{processed_pages + 1} ({path})"
+                        f"{page_no} ({path})"
                     ),
                 ),
                 attempts=retry_attempts,
@@ -457,7 +459,7 @@ class CurlCffiTransport(OzonTransportMixin):
         )
 
         try:
-            async for page_num, payload in (
+            async for _page_num, payload in (
                 self.iter_ozon_reviews_json(
                     product_path=product_path,
                     start_page=pagination_start_page,

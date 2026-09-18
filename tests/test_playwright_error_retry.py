@@ -24,8 +24,6 @@ is not importable in the test environment (CI without browser stack).
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any
 
 import pytest
 
@@ -33,7 +31,6 @@ from infrastructure.transports import browser_json as bj_module
 from infrastructure.transports.browser_json import (
     BrowserJsonTransport,
 )
-
 
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.
@@ -137,7 +134,10 @@ async def test_fetch_with_retry_retries_on_playwright_error(monkeypatch):
         monkeypatch.setattr(
             bj_module,
             "_retryable_errors",
-            lambda: (RuntimeError, TimeoutError, asyncio.TimeoutError, PlaywrightError),
+            lambda: (
+                RuntimeError, TimeoutError,
+                asyncio.TimeoutError, PlaywrightError,
+            ),
         )
 
     result = await transport._fetch_json_with_retry(
@@ -208,7 +208,10 @@ async def test_fetch_with_retry_exhausts_on_continuous_playwright_error(
         monkeypatch.setattr(
             bj_module,
             "_retryable_errors",
-            lambda: (RuntimeError, TimeoutError, asyncio.TimeoutError, PlaywrightError),
+            lambda: (
+                RuntimeError, TimeoutError,
+                asyncio.TimeoutError, PlaywrightError,
+            ),
         )
 
     with pytest.raises(PlaywrightError, match="always abort"):
@@ -256,7 +259,10 @@ async def test_goto_with_retry_succeeds_after_transient_abort(monkeypatch):
         monkeypatch.setattr(
             bj_module,
             "_retryable_errors",
-            lambda: (RuntimeError, TimeoutError, asyncio.TimeoutError, PlaywrightError),
+            lambda: (
+                RuntimeError, TimeoutError,
+                asyncio.TimeoutError, PlaywrightError,
+            ),
         )
 
     async def page_factory():
@@ -294,7 +300,10 @@ async def test_goto_with_retry_exhausts_attempts(monkeypatch):
         monkeypatch.setattr(
             bj_module,
             "_retryable_errors",
-            lambda: (RuntimeError, TimeoutError, asyncio.TimeoutError, PlaywrightError),
+            lambda: (
+                RuntimeError, TimeoutError,
+                asyncio.TimeoutError, PlaywrightError,
+            ),
         )
 
     async def page_factory():

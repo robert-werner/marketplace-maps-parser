@@ -56,10 +56,10 @@ def _import_invisible_playwright():
     """Lazy import of invisible-playwright (same pattern as
     browser_json.py). Wrapped with GPU-safe software-rendering
     prefs (see transports/gpu_safety.py)."""
-    from invisible_playwright.async_api import InvisiblePlaywright
-
-    from infrastructure.transports.gpu_safety import make_gpu_safe
-    return make_gpu_safe(InvisiblePlaywright)
+    from infrastructure.transports.browser_common import (
+        import_invisible_playwright,
+    )
+    return import_invisible_playwright()
 
 
 def _import_retry_async():
@@ -73,10 +73,10 @@ def _import_sleep_with_jitter():
 
 
 def _import_retryable_errors():
-    """Reuse the retryable-errors tuple from browser_json so all
-    transports share the same retry semantics for Playwright errors.
-    """
-    from infrastructure.transports.browser_json import (
+    """Reuse the retryable-errors factory from browser_common so all
+    transports share the same retry semantics for Playwright errors
+    (returns the callable; callers invoke it lazily)."""
+    from infrastructure.transports.browser_common import (
         _retryable_errors,
     )
     return _retryable_errors
@@ -830,7 +830,7 @@ class PublicPageTransport(OzonTransportMixin):
             seen_uuids: set[str] = set()
             idle_rounds = 0
 
-            for round_num in range(1, 1000):
+            for _round_num in range(1, 1000):
                 cards = await self._read_review_cards(review_locator)
 
                 new_cards = []
@@ -957,7 +957,7 @@ class PublicPageTransport(OzonTransportMixin):
         try:
             for attempt in range(1, pagination_attempts + 1):
                 try:
-                    async for page_num, payload in (
+                    async for _page_num, payload in (
                         self.iter_ozon_reviews_json(
                             product_path=product_path,
                             start_page=pagination_start_page,
@@ -1072,7 +1072,7 @@ class PublicPageTransport(OzonTransportMixin):
 
         Used by ``OzonAdapter.collect`` (single-page mode).
         """
-        async for current_page, payload in self.iter_ozon_reviews_json(
+        async for _current_page, payload in self.iter_ozon_reviews_json(
             product_path=product_path,
             start_page=page_number,
             max_pages=1,
@@ -1461,37 +1461,12 @@ class PublicPageTransport(OzonTransportMixin):
     )
 
     async def _install_resource_blocker(self, page) -> None:
-        if not self.block_assets:
-            return
-
-        async def _route(route):
-            try:
-                if (
-                    route.request.resource_type
-                    in self._BLOCKED_RESOURCE_TYPES
-                ):
-                    await route.abort()
-                else:
-                    await route.continue_()
-            except Exception:
-                pass
-
-        # Route ONLY the asset extensions, not "**/*": every routed
-        # request detours through this Python process, and routing
-        # all ~200 requests of a page costs more than the blocked
-        # assets save (measured 2026-09-16: ~10.5s/page with
-        # route("**/*") vs ~8s with pattern routes).
-        for pattern in (
-            "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.webp",
-            "**/*.gif", "**/*.avif", "**/*.woff", "**/*.woff2",
-            "**/*.ttf", "**/*.mp4",
-        ):
-            try:
-                # invisible-playwright's Page.route is a coroutine —
-                # calling it without await silently drops the route.
-                await page.route(pattern, _route)
-            except Exception:
-                pass
+        from infrastructure.transports.browser_common import (
+            install_resource_blocker,
+        )
+        await install_resource_blocker(
+            page, enabled=self.block_assets,
+        )
 
     # Wait until the cards' rating SVGs have hydrated instead of a
     # fixed 1.2s sleep: the star glyphs are the last thing to

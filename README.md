@@ -321,6 +321,29 @@ python -m marketplace_maps_parser \
 
 `products.txt` is one product URL per line (`#` comments allowed). `--products-sessions` (default 3) caps how many children run at once. `--max-reviews` applies per product.
 
+### Yandex.Market (`--marketplace yandex`)
+
+Streams reviews from the public reviews page (`/card/<slug>/<id>/reviews?page=N`) via a stealth invisible-playwright session. Measured facts (2026-09-18):
+
+- **Warmup + canonical slug** — the transport lands on the product card first (referer + cookies), captures the post-redirect URL and rebuilds the reviews URL from the CANONICAL slug: a wrong-slug card page redirects, but a wrong-slug `/reviews` just 404s («Нет такой страницы», non-retryable `YandexNotFoundError`).
+- **Three page states, classified by SSR data** — healthy (JSON-LD reviews / aggregate / DOM cards present), captcha (redirect markers OR the INLINE SmartCaptcha shell: a ~16 KB page with title «Вы не робот?», `captcha_smart` assets and a POST form to `/checkcaptcha` — served at the reviews URL itself, no redirect), and markerless soft-block (a big page with widgets but no review SSR data). Captcha markers are only trusted on pages WITHOUT SSR data — a healthy megabyte page legitimately mentions SmartCaptcha in its own scripts.
+- **Captcha escalation ladder** — (a) auto-wait ~6 s (the inline shell often resolves itself for a trusted fingerprint); (b) programmatic checkbox click (humanize=True drives a realistic cursor trajectory); (c) manual solving in the visible browser window (headed by default; the transport prints a prompt and polls up to 180 s, cookies are checkpointed right after); (d) cooldown 5 s → 30 s + `AdaptivePacer.record_block`. A captcha that survives it all restarts the browser on the NEXT proxy from `--proxy-list` with a fresh cookie jar (state — seen cards / page number — carries over).
+- **LD-rating lookahead** — the JSON-LD block paginates INDEPENDENTLY of the DOM (page 2's LD carries the ratings for four page-1 cards), so each batch is held back until the next page is read and its ratings are merged in. Live check: 10/10 reviews with ratings, 0 with labels glued into the text.
+- **Realistic profile** — `block_assets` is OFF by default for Yandex (a real browser loads images/fonts; SmartCaptcha weighs that), the same stealth init script as Ozon runs in every page, and the settle delay is jittered ±20 % per page.
+- Rating-only «оценки» (textless) are not exposed individually — only the aggregate counter (`last_total_count`); expect `collected < total` on every product.
+
+```bash
+python -m marketplace_maps_parser \
+    --marketplace yandex \
+    --url "https://market.yandex.ru/card/<slug>/<id>" \
+    --output yandex_reviews.jsonl \
+    --proxy-list proxies.txt \
+    --cookies yandex_cookies.json \
+    --save-cookies yandex_cookies.json
+```
+
+`--cookies` injects a logged-in/visited session (Playwright DevTools JSON or Netscape format — the same loader as Ozon); `--save-cookies` (default `yandex_cookies.json`) checkpoints the session after every healthy page, so a captcha solved once — manually or automatically — sticks for the cookie lifetime.
+
 ### Endpoint probes (`scripts/probe_ozon_endpoints.py`)
 
 Two hypotheses that decide the next big speedups, testable with your proxy/cookies:

@@ -217,11 +217,13 @@ class HybridTransport(OzonTransportMixin):
             curl_transport = self._get_curl_transport()
             # Manually iterate the curl_cffi iterator for one page
             # (max_pages=1) so we can catch the challenge error.
-            async for page_num, payload in curl_transport.iter_ozon_reviews_json(
-                product_path=product_path,
-                start_page=1,  # ignored when max_pages=1
-                max_pages=1,
-                retry_attempts=retry_attempts,
+            async for _page_num, payload in (
+                curl_transport.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=1,  # ignored when max_pages=1
+                    max_pages=1,
+                    retry_attempts=retry_attempts,
+                )
             ):
                 self._last_transport_used = "curl_cffi"
                 print(
@@ -247,11 +249,13 @@ class HybridTransport(OzonTransportMixin):
 
         # Fall back to Playwright.
         playwright_transport = self._get_playwright_transport()
-        async for page_num, payload in playwright_transport.iter_ozon_reviews_json(
-            product_path=product_path,
-            start_page=1,  # ignored when max_pages=1
-            max_pages=1,
-            retry_attempts=retry_attempts,
+        async for _page_num, payload in (
+            playwright_transport.iter_ozon_reviews_json(
+                product_path=product_path,
+                start_page=1,  # ignored when max_pages=1
+                max_pages=1,
+                retry_attempts=retry_attempts,
+            )
         ):
             self._last_transport_used = "playwright"
             print(
@@ -320,7 +324,7 @@ class HybridTransport(OzonTransportMixin):
         )
 
         try:
-            async for page_num, payload in (
+            async for _page_num, payload in (
                 self.iter_ozon_reviews_json(
                     product_path=product_path,
                     start_page=pagination_start_page,

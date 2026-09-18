@@ -10,212 +10,30 @@ from infrastructure.transports.base import (
     OZON_BASE_URL,
     OzonTransportMixin,
 )
+from infrastructure.transports.browser_common import (
+    _STEALTH_INIT_SCRIPT as _STEALTH_INIT_SCRIPT,
+)
+
+# Retry semantics and the stealth script are shared with the other
+# browser transports — see browser_common.py.
+from infrastructure.transports.browser_common import (
+    _get_retryable_errors as _get_retryable_errors,
+)
+from infrastructure.transports.browser_common import (
+    _retryable_errors as _retryable_errors,
+)
+from infrastructure.transports.browser_common import (
+    import_invisible_playwright,
+)
 
 
-def _import_invisible_playwright():
-    """Lazy import of invisible-playwright.
-
-    The library is heavy (it pulls in a patched Playwright + Chromium
-    binaries) and not available in every environment that imports
-    this module (e.g. unit tests of pure-Python helpers). Importing it
-    lazily inside the async generators that actually need a browser
-    lets the rest of the module — including the constructor and the
-    pure-Python ``_fetch_json_with_retry`` / static helpers — work
-    without the browser stack installed.
-
-    The class is wrapped with GPU-safe software-rendering prefs:
-    parallel browser sessions with hardware compositing can hang the
-    GPU and trip Windows TDR ("safe mode" driver). See
-    ``transports/gpu_safety.py``.
-    """
-    from invisible_playwright.async_api import InvisiblePlaywright
-
-    from infrastructure.transports.gpu_safety import make_gpu_safe
-    return make_gpu_safe(InvisiblePlaywright)
+def _import_invisible_playwright() -> type:
+    """Back-compat shim: the lazy factory moved to
+    browser_common.import_invisible_playwright (tests patch the
+    module attribute by this name)."""
+    return import_invisible_playwright()
 
 
-def _get_retryable_errors() -> tuple[type[BaseException], ...]:
-    """Return the tuple of exception types that should trigger a retry.
-
-    Built dynamically so we can include ``invisible_playwright``'s
-    ``Error`` class only when the library is installed. Always
-    includes ``RuntimeError`` and the standard ``TimeoutError`` /
-    ``asyncio.TimeoutError`` (in Python 3.11+ these are unified, but
-    we keep both for safety on 3.10).
-    """
-    import asyncio as _asyncio
-
-    types: list[type[BaseException]] = [
-        RuntimeError,
-        TimeoutError,
-        _asyncio.TimeoutError,
-    ]
-    try:
-        from invisible_playwright._pw._impl._errors import (
-            Error as PlaywrightError,
-        )
-        types.append(PlaywrightError)
-    except ImportError:
-        # invisible-playwright not installed — that's OK, the retry
-        # still works on RuntimeError and TimeoutError.
-        pass
-
-    return tuple(types)
-
-
-# Module-level cache so we don't re-import on every retry.
-_RETRYABLE_ERRORS: tuple[type[BaseException], ...] | None = None
-
-
-def _retryable_errors() -> tuple[type[BaseException], ...]:
-    global _RETRYABLE_ERRORS
-    if _RETRYABLE_ERRORS is None:
-        _RETRYABLE_ERRORS = _get_retryable_errors()
-    return _RETRYABLE_ERRORS
-
-
-# Stealth init script — patches the most common signals Cloudflare
-# uses to detect automated / headless browsers. Adapted from the
-# open-source playwright-stealth project (https://github.com/
-# Mattwmaster58/playwright_stealth) and tailored for Firefox.
-#
-# Applied to every fresh page via ``page.add_init_script`` so the
-# patches run before any page JS executes.
-_STEALTH_INIT_SCRIPT = """
-// Hide that we're a WebDriver-controlled browser.
-Object.defineProperty(navigator, 'webdriver', {
-    get: () => undefined,
-    configurable: true,
-});
-
-// Pretend we have the Chrome runtime object that real Chrome
-// browsers expose. Some bot detection scripts check for its
-// presence.
-if (!window.chrome) {
-    window.chrome = {
-        runtime: {},
-        app: {},
-        csi: () => {},
-        loadTimes: () => {},
-    };
-}
-
-// Override Notification.permission so it doesn't say "denied" —
-// real browsers say "default" until the user has interacted.
-if (window.Notification) {
-    Object.defineProperty(Notification, 'permission', {
-        get: () => 'default',
-        configurable: true,
-    });
-}
-
-// Pretend we have plugins (real browsers have at least PDF viewer).
-Object.defineProperty(navigator, 'plugins', {
-    get: () => [
-        {
-            name: 'PDF Viewer',
-            filename: 'internal-pdf-viewer',
-            description: 'Portable Document Format',
-            length: 1,
-        },
-        {
-            name: 'Chrome PDF Viewer',
-            filename: 'internal-pdf-viewer',
-            description: 'Portable Document Format',
-            length: 1,
-        },
-    ],
-    configurable: true,
-});
-
-// Pretend we have a non-zero set of mime types.
-Object.defineProperty(navigator, 'mimeTypes', {
-    get: () => [
-        {
-            type: 'application/pdf',
-            suffixes: 'pdf',
-            description: 'Portable Document Format',
-        },
-        {
-            type: 'text/pdf',
-            suffixes: 'pdf',
-            description: 'Portable Document Format',
-        },
-    ],
-    configurable: true,
-});
-
-// Make the navigator.languages look real.
-Object.defineProperty(navigator, 'languages', {
-    get: () => ['ru', 'ru-RU', 'en-US', 'en'],
-    configurable: true,
-});
-
-// Patch permissions query so it doesn't say "denied" for
-// notifications.
-const originalQuery = window.navigator.permissions
-    ? window.navigator.permissions.query
-    : null;
-if (originalQuery) {
-    window.navigator.permissions.query = (parameters) => (
-        parameters.name === 'notifications'
-            ? Promise.resolve({state: 'default'})
-            : originalQuery(parameters)
-    );
-}
-
-// Make window.outerWidth / outerHeight look non-zero (headless
-// browsers often report 0).
-if (window.outerWidth === 0 || window.outerHeight === 0) {
-    Object.defineProperty(window, 'outerWidth', {
-        get: () => window.innerWidth || 1280,
-        configurable: true,
-    });
-    Object.defineProperty(window, 'outerHeight', {
-        get: () => window.innerHeight + 85 || 720,
-        configurable: true,
-    });
-}
-
-// Webdriver test: some detection scripts check
-// ``window.navigator.webdriver === false`` explicitly. Set it.
-try {
-    delete Object.getPrototypeOf(navigator).webdriver;
-} catch (e) {
-    // Some builds don't allow delete on the prototype.
-}
-
-// Override the document title to hide the JUGGLER session
-// identifier that invisible-playwright's patched Firefox sets as
-// the initial window/tab title ("JUGGLER <uuid>"). The JUGGLER
-// title is a local UI element (not sent to servers), but it looks
-// suspicious on screenshots and to anyone watching the browser.
-// We set a neutral title immediately, before any page content
-// loads.
-try {
-    Object.defineProperty(document, 'title', {
-        get: () => document.querySelector('title')?.textContent || '',
-        set: (value) => {
-            let titleEl = document.querySelector('title');
-            if (!titleEl) {
-                titleEl = document.createElement('title');
-                document.head
-                    ? document.head.appendChild(titleEl)
-                    : null;
-            }
-            titleEl.textContent = value;
-        },
-        configurable: true,
-    });
-    // Set a neutral initial title for the blank page
-    if (!document.title || document.title.startsWith('JUGGLER')) {
-        document.title = '';
-    }
-} catch (e) {
-    // If we can't override, just blank it out
-    try { document.title = ''; } catch (e2) {}
-}
-"""
 
 
 class CloudflareChallengeError(RuntimeError):
@@ -813,7 +631,7 @@ class BrowserJsonTransport(OzonTransportMixin):
             previous_count = 0
             stable_rounds = 0
 
-            for round_number in range(1, max_rounds + 1):
+            for _round_number in range(1, max_rounds + 1):
                 cards = await self._read_review_cards(
                     review_locator,
                 )
@@ -1061,7 +879,7 @@ class BrowserJsonTransport(OzonTransportMixin):
         # ------------------ pagination ------------------
         pagination_yielded = 0
         try:
-            async for page_num, payload in self.iter_ozon_reviews_json(
+            async for _page_num, payload in self.iter_ozon_reviews_json(
                 product_path=product_path,
                 start_page=pagination_start_page,
                 max_pages=pagination_max_pages,

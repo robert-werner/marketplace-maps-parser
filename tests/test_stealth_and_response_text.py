@@ -24,10 +24,9 @@ from typing import Any
 import pytest
 
 from infrastructure.transports.browser_json import (
-    BrowserJsonTransport,
     _STEALTH_INIT_SCRIPT,
+    BrowserJsonTransport,
 )
-
 
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.
@@ -366,7 +365,10 @@ async def test_fetch_via_navigation_uses_response_text_first():
 
     page = _FakePageWithResponseText(
         response_body=raw_json,  # raw JSON via response.text()
-        evaluate_body="JSONRaw DataHeadersSaveCopyCollapse All...",  # garbage viewer text
+        # garbage viewer text
+        evaluate_body=(
+            "JSONRaw DataHeadersSaveCopyCollapse All..."
+        ),
         status=200,
         content_type="application/json",
     )
@@ -387,7 +389,7 @@ async def test_fetch_via_navigation_uses_response_text_first():
 
 
 @pytest.mark.asyncio
-async def test_fetch_via_navigation_falls_back_to_evaluate_when_response_text_empty():
+async def test_fetch_via_navigation_falls_back_to_evaluate_on_empty_text():
     """When ``response.text()`` returns empty (e.g. when the
     response object is for a redirect that was followed
     internally), fall back to ``page.evaluate`` to read the

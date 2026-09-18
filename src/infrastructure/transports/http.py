@@ -26,7 +26,7 @@ class HttpJsonTransport:
             headers=headers or {},
         )
 
-    async def __aenter__(self) -> "HttpJsonTransport":
+    async def __aenter__(self) -> HttpJsonTransport:
         await self._client.__aenter__()
         return self
 

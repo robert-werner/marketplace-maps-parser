@@ -10,11 +10,8 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
 
 from shared.logging import get_logger
-
-T = TypeVar("T")
 
 log = get_logger("shared.retry")
 
@@ -28,7 +25,7 @@ def _default_should_retry(
     return isinstance(exc, retry_on)
 
 
-async def retry_async(
+async def retry_async[T](
     factory: Callable[[], Awaitable[T]],
     *,
     attempts: int = 3,

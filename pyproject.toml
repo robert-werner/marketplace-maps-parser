@@ -3,7 +3,7 @@ name = "marketplace-maps-parser"
 version = "0.1.0"
 description = "Async review scraper for Russian e-commerce marketplaces (Ozon, Wildberries, Yandex Market — planned)."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 license = { text = "Proprietary" }
 authors = [
     { name = "Leonid Kolesnichenko", email = "xperience439@gmail.com" },
@@ -59,4 +59,12 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.14"
 strict = true
+ignore_missing_imports = true
+
+# invisible-core ships syntax mypy cannot parse (its prefs.py uses
+# Python as a data format); every browser transport imports the
+# package lazily at runtime only.
+[[tool.mypy.overrides]]
+module = ["invisible_core.*", "invisible_playwright.*"]
+follow_imports = "skip"
 ignore_missing_imports = true

@@ -22,16 +22,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 
 import pytest
 
 from infrastructure.transports.curl_cffi import (
-    CurlCffiTransport,
     _DEFAULT_HEADERS,
     _IMPERSONATE_TARGETS,
+    CurlCffiTransport,
 )
-
 
 # ---------------------------------------------------------------------------
 # Construction and defaults
@@ -226,7 +224,10 @@ class _FakeAsyncSession:
         self.closed = True
 
 
-def _patch_session(monkeypatch, transport: CurlCffiTransport, session: _FakeAsyncSession):
+def _patch_session(
+    monkeypatch, transport: CurlCffiTransport,
+    session: _FakeAsyncSession,
+):
     """Patch a transport to use a fake AsyncSession."""
     async def fake_ensure():
         transport._session = session
@@ -547,7 +548,7 @@ async def test_iter_all_ozon_reviews_max_reviews_cap(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     yielded = []
-    async for strategy, node in transport.iter_all_ozon_reviews(
+    async for _strategy, node in transport.iter_all_ozon_reviews(
         product_path="/product/foo-123",
         max_reviews=3,
         retry_attempts=1,
@@ -616,7 +617,7 @@ async def test_iter_ozon_reviews_json_max_pages_cap(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
 
     pages = []
-    async for page_num, payload in transport.iter_ozon_reviews_json(
+    async for page_num, _payload in transport.iter_ozon_reviews_json(
         product_path="/product/foo-123",
         max_pages=2,  # stop after 2 pages
         retry_attempts=1,

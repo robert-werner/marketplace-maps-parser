@@ -26,7 +26,6 @@ from infrastructure.transports.browser_json import (
     BrowserJsonTransport,
 )
 
-
 # ---------------------------------------------------------------------------
 # Static helper tests (no async, no browser)
 # ---------------------------------------------------------------------------
@@ -162,7 +161,9 @@ async def test_page_key_transition_with_zero_reviews_triggers_retry(
     """Reproduces the exact scenario the user reported:
 
     - Page 1 (page_key=A): 30 reviews, nextPage=URL(page=2, page_key=A)
-    - Page 2 (page_key=A): 30 reviews, nextPage=URL(page=3, page_key=B)  ← page_key transitions here
+    - Page 2 (page_key=A): 30 reviews,
+      nextPage=URL(page=3, page_key=B)
+      ← page_key transitions here
     - Page 3 (page_key=B, page=3): 0 reviews, nextPage=None  ← BUG previously
 
     After the fix, the iterator should retry with page=1 and the new
@@ -339,7 +340,9 @@ async def test_page_key_transition_with_zero_reviews_retry_also_empty(
 
     fetch_calls: list[str] = []
 
-    async def fake_fetch(self, *, page, internal_path, attempts=3, label="fetch"):
+    async def fake_fetch(
+        self, *, page, internal_path, attempts=3, label="fetch"
+    ):
         fetch_calls.append(internal_path)
         return payloads_by_path[internal_path]
 
@@ -422,7 +425,9 @@ async def test_no_page_key_in_url_no_reset_attempted(monkeypatch):
 
     fetch_calls: list[str] = []
 
-    async def fake_fetch(self, *, page, internal_path, attempts=3, label="fetch"):
+    async def fake_fetch(
+        self, *, page, internal_path, attempts=3, label="fetch"
+    ):
         fetch_calls.append(internal_path)
         return payloads_by_path[internal_path]
 
@@ -493,7 +498,9 @@ async def test_page_key_same_across_pages_no_reset_attempted(
 
     fetch_calls: list[str] = []
 
-    async def fake_fetch(self, *, page, internal_path, attempts=3, label="fetch"):
+    async def fake_fetch(
+        self, *, page, internal_path, attempts=3, label="fetch"
+    ):
         fetch_calls.append(internal_path)
         return payloads_by_path[internal_path]
 
@@ -619,7 +626,8 @@ async def test_nextpage_loop_guard_synthesizes_variant_b_pages(monkeypatch):
         # The synthesized page 2 of variant B (created by our loop guard)
         page2_b_synthesized: _reviews_payload(
             [f"b2-{i}" for i in range(30)],
-            next_path=page3_b,  # nextPage correctly points to page 3 with key B
+            # nextPage correctly points to page 3 with key B
+            next_path=page3_b,
         ),
         page3_b: _reviews_payload(
             [f"b3-{i}" for i in range(30)],
@@ -629,7 +637,9 @@ async def test_nextpage_loop_guard_synthesizes_variant_b_pages(monkeypatch):
 
     fetch_calls: list[str] = []
 
-    async def fake_fetch(self, *, page, internal_path, attempts=3, label="fetch"):
+    async def fake_fetch(
+        self, *, page, internal_path, attempts=3, label="fetch"
+    ):
         fetch_calls.append(internal_path)
         if internal_path not in payloads_by_path:
             raise RuntimeError(f"unexpected fetch: {internal_path}")

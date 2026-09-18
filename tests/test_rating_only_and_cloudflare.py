@@ -19,7 +19,6 @@ Two production concerns addressed in this commit:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import pytest
 
@@ -33,7 +32,6 @@ from infrastructure.transports.browser_json import (
     BrowserJsonTransport,
     CloudflareChallengeError,
 )
-
 
 PRODUCT = ProductRef(
     marketplace="ozon",

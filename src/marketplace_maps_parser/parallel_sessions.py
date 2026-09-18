@@ -211,13 +211,15 @@ async def run_parallel_sessions(args: Any) -> int:
         f"parallel-sessions: {len(chunks)} процессов по страницам "
         + ", ".join(
             f"[{s}..{s + n - 1}]"
-            for (s, n), _ in zip(chunks, part_paths)
+            for (s, n), _ in zip(
+                chunks, part_paths, strict=False
+            )
         )
     )
 
     tasks = []
     for (start, size), part_path, proxy_url in zip(
-        chunks, part_paths, proxies
+        chunks, part_paths, proxies, strict=False
     ):
         cmd = _child_command(
             args, part_path, start, size, proxy_url
@@ -242,7 +244,9 @@ async def run_parallel_sessions(args: Any) -> int:
         )
     procs = await asyncio.gather(*tasks)
 
-    for (start, size), proc in zip(chunks, procs):
+    for (start, size), proc in zip(
+        chunks, procs, strict=False
+    ):
         if proc.returncode not in (0, None):
             print(
                 f"WARNING: часть страниц {start}..{start + size - 1} "

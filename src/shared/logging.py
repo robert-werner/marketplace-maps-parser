@@ -41,9 +41,6 @@ def _configure() -> None:
 
     if fmt == "json":
         # Single-line JSON for log aggregators.
-        serializer = (
-            lambda record: _serialize_record(record)
-        )
         _loguru_logger.add(
             sys.stderr,
             level=level,
