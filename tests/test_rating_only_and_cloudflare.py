@@ -28,7 +28,7 @@ from infrastructure.marketplaces.ozon import (
     is_review_node,
     map_ozon_review_node,
 )
-from infrastructure.transports.browser_json import (
+from infrastructure.transports.browser_json.transport import (
     BrowserJsonTransport,
     CloudflareChallengeError,
 )

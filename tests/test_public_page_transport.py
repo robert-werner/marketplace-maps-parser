@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from infrastructure.transports import public_page as pp_module
-from infrastructure.transports.public_page import PublicPageTransport
+from src.infrastructure.transports.public_page import PublicPageTransport
 
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.

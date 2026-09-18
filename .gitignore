@@ -55,20 +55,25 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+# Proxy lists carry credentials (user:pass@host)
+proxies.txt
 
 # ----- Project runtime artifacts -----
 # Scraped data, debug dumps and other run outputs live in data/ and
 # are never committed.
 data/
 debug_*/
+debug_*.html
 *.jsonl
 *.log
+result.json
+*_reviews*.json
 
 # ----- Jupyter -----
 .ipynb_checkpoints/
 *.ipynb
 
 # Session cookie files (never commit!)
-cookies.json
-*_cookies.json
-ozon_cookies*.json
+# Broad pattern: cookies.json, ozon_cookies.json,
+# yandex_cookies_live.json, *_cookies.json …
+*cookies*.json

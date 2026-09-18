@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from infrastructure.transports.browser_json import (
+from infrastructure.transports.browser_json.transport import (
     _STEALTH_INIT_SCRIPT,
     BrowserJsonTransport,
 )
