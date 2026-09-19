@@ -4,12 +4,13 @@ walking the public reviews page.
 
 Flow (mirrors the hard-won Ozon lessons — see README):
 
-1. **Warmup** — land on the product card page first, pause like a
-   reader, then open the ``/reviews`` tab with the card page as the
-   HTTP referer. A cold referer-less hit on a deep link is the
-   classic bot signal. A stealth init script (the same one the Ozon
-   transports use) is injected into every page before any site JS
-   runs.
+1. **Warmup** — land on the product card page first, READ it
+   briefly (1-2 wheel nudges: a user who jumps to reviews
+   instantly is a thinner pattern), then open the ``/reviews``
+   tab with the card page as the HTTP referer. A cold referer-less
+   hit on a deep link is the classic bot signal. A stealth init
+   script (the same one the Ozon transports use) is injected into
+   every page before any site JS runs.
 2. **Captcha / soft-block handling** — Yandex serves SmartCaptcha
    as a redirect (``/showcaptcha``) OR INLINE at the reviews URL
    itself (measured 2026-09-18: a ~16 KB shell with title
@@ -31,8 +32,15 @@ Flow (mirrors the hard-won Ozon lessons — see README):
    :class:`YandexSoftBlockError` (the run stops but the already
    yielded batches stay valid).
 3. **Pagination** — the reviews list pages via ``?page=N`` (the
-   real page ships ``?page=2`` links; measured 2026-09-18). Per
-   page: one ``page.evaluate`` round-trip reads every card
+   real page ships ``?page=2`` links; measured 2026-09-18). Page
+   N+1 is reached by CLICKING the site's own pager link when one
+   is present — the navigation a real user makes, carrying the
+   page's natural referer and request context; the plain-goto
+   fallback chains referers (page N refers to page N-1's URL —
+   never the card for deep pages). Settle dwells are right-skewed
+   with occasional «зачитался» pauses, scroll strides vary with
+   reverse nudges — metronome-exact timing is its own fingerprint.
+   Per page: one ``page.evaluate`` round-trip reads every card
    (``data-auto`` markers) + the schema.org JSON-LD block
    (per-review ratings — the DOM stars are unreadable obfuscated
    CSS — and the aggregate counter); a scroll round wakes any
@@ -63,6 +71,7 @@ import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from shared.pacing import AdaptivePacer
 from shared.url_parsers import extract_yandex_market_card_path
@@ -288,6 +297,8 @@ class YandexBrowserTransport:
         auto_captcha_wait_s: float = 6.0,
         proxy_pool: Any | None = None,
         proxy_rotate_max_restarts: int = 3,
+        start_page: int = 1,
+        max_pages: int | None = None,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -308,6 +319,12 @@ class YandexBrowserTransport:
         self.auto_captcha_wait_s = auto_captcha_wait_s
         self.proxy_pool = proxy_pool
         self.proxy_rotate_max_restarts = proxy_rotate_max_restarts
+        #: Page-range bounds (--parallel-sessions splits, targeted
+        #: re-walks): the walk starts at ``start_page`` and stops
+        #: after ``max_pages`` productive pages even without an
+        #: empty page to end it.
+        self.start_page = max(1, start_page)
+        self.max_pages = max_pages
 
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
@@ -329,8 +346,9 @@ class YandexBrowserTransport:
         product_url: str,
     ) -> AsyncIterator[list[dict[str, Any]]]:
         """Yield batches of NEW review-card dicts, one batch per
-        reviews page (``?page=N``), until a page adds no new cards
-        or a captcha kills the run.
+        reviews page (``?page=N``), until a page adds no new cards,
+        the ``max_pages`` range runs out, or a captcha kills the
+        run.
 
         When a captcha survives the whole escalation ladder and a
         ``proxy_pool`` is available, the browser is RESTARTED with
@@ -344,7 +362,9 @@ class YandexBrowserTransport:
         self.debug_dir.mkdir(parents=True, exist_ok=True)
 
         restarts = 0
-        state: dict[str, Any] = {"seen": set(), "page_no": 1}
+        state: dict[str, Any] = {
+            "seen": set(), "page_no": self.start_page,
+        }
         while True:
             # A restart rotates the egress IP; cookies are NOT
             # carried over on rotation (see docstring). On the
@@ -457,11 +477,41 @@ class YandexBrowserTransport:
                     state["pending"] = []
 
                 while True:
+                    if (
+                        self.max_pages is not None
+                        and page_no - self.start_page
+                        >= self.max_pages
+                    ):
+                        # Range exhausted without an empty page:
+                        # flush the held-back batch — it only
+                        # forgoes the NEXT page's LD ratings,
+                        # which will never arrive.
+                        if pending:
+                            self._apply_rating_store(
+                                pending, rating_store,
+                            )
+                            pacer.record_success()
+                            yield pending
+                            state["pending"] = []
+                        return
                     url = (
                         f"{YANDEX_MARKET_BASE}{canonical}/reviews"
                         f"?page={page_no}"
                     )
-                    snapshot = await self._goto_reviews(page, url)
+                    # Referer chain: page N was «opened from» page
+                    # N-1 — every page coming from the CARD would
+                    # read as direct hits on deep links. Page 1 (and
+                    # a parallel session's cold start) keeps the
+                    # card referer.
+                    referer = (
+                        f"{YANDEX_MARKET_BASE}{canonical}/reviews"
+                        f"?page={page_no - 1}"
+                        if page_no > 1
+                        else self._last_card_url
+                    )
+                    snapshot = await self._goto_reviews(
+                        page, url, referer=referer, page_no=page_no,
+                    )
                     # The session just proved itself healthy —
                     # checkpoint the (possibly captcha-warmed) cookies NOW,
                     # not at exit: an interrupted run must keep
@@ -582,6 +632,21 @@ class YandexBrowserTransport:
             f"{YANDEX_MARKET_BASE}{canonical}"
         )
 
+        # A brief read of the card: 1-2 wheel nudges with short
+        # pauses. A user who lands on a product and INSTANTLY jumps
+        # to reviews is a thinner pattern than one who scrolls a
+        # little first.
+        for _ in range(random.randint(1, 2)):
+            try:
+                await page.mouse.wheel(
+                    0, random.randint(350, 1100),
+                )
+                await page.wait_for_timeout(
+                    random.randint(350, 900),
+                )
+            except Exception:
+                pass
+
         pause_s = (
             random.uniform(0.8, 2.2)
             if not self._first_warmup_done
@@ -595,32 +660,56 @@ class YandexBrowserTransport:
         self,
         page: Any,
         url: str,
+        *,
+        referer: str | None,
+        page_no: int,
     ) -> dict[str, Any]:
         """Navigate to the reviews URL until a HEALTHY page loads.
 
-        Returns the snapshot of the first healthy read. Raises
-        :class:`YandexCaptchaError` / :class:`YandexSoftBlockError`
-        when the attempt budget runs out (see the module docstring
-        for the escalation ladder).
+        The FIRST navigation prefers clicking the site's own link
+        (:meth:`_click_reviews_link`) — the request then carries
+        the page's natural referer and context; retries (and a
+        missing link) fall back to a plain goto with the chained
+        referer. Returns the snapshot of the first healthy read.
+        Raises :class:`YandexCaptchaError` /
+        :class:`YandexSoftBlockError` when the attempt budget runs
+        out (see the module docstring for the escalation ladder).
         """
         attempts = 0
         cooldown_s = 5.0
         snapshot: dict[str, Any] = {}
+        tried_click = False
 
         while True:
-            await page.goto(
-                url,
-                timeout=self.timeout_ms,
-                referer=self._last_card_url,
-            )
-            # Human-varied settle, ±20%: a metronome-exact settle
-            # on every page is its own fingerprint.
+            if not tried_click:
+                tried_click = True
+                if not await self._click_reviews_link(
+                    page, page_no,
+                ):
+                    await page.goto(
+                        url,
+                        timeout=self.timeout_ms,
+                        referer=referer,
+                    )
+            else:
+                # A challenged page has no pager left to click —
+                # retries goto directly.
+                await page.goto(
+                    url,
+                    timeout=self.timeout_ms,
+                    referer=referer,
+                )
+            # Human dwell, right-skewed: a tight ±20% band around
+            # the base settle is a metronome of its own; most pages
+            # read faster, some much slower («зачитался»).
             settle = self.settle_ms
             if settle > 0:
-                settle = int(
-                    settle * random.uniform(0.8, 1.2)
+                factor = random.uniform(0.6, 1.8)
+                if random.random() < 0.15:
+                    factor += random.uniform(0.8, 2.2)
+                await page.wait_for_timeout(
+                    int(settle * factor),
                 )
-                await page.wait_for_timeout(max(0, settle))
 
             snapshot = await self._read_cards(page)
             page_url = str(getattr(page, "url", "") or "")
@@ -713,6 +802,90 @@ class YandexBrowserTransport:
             )
             await asyncio.sleep(delay_s)
             cooldown_s = min(30.0, cooldown_s * 2)
+
+    async def _click_reviews_link(
+        self,
+        page: Any,
+        page_no: int,
+    ) -> bool:
+        """Click the site's own way into page ``page_no``:
+
+        - page 1 — the card's «Отзывы» link (``a[href*="/reviews"]``);
+        - page N>1 — the pager link whose ``page`` query param is
+          EXACTLY N (``page=2`` must not match the ``page=20``
+          link).
+
+        False (the caller gots with the chained referer) when the
+        link is missing or the click does not navigate in time."""
+        if page_no <= 1:
+            return await self._click_site_link(
+                page,
+                href_substr="/reviews",
+                expect_substr="/reviews",
+            )
+        return await self._click_site_link(
+            page,
+            href_substr="page=",
+            expect_substr=f"page={page_no}",
+            exact_param=("page", str(page_no)),
+        )
+
+    async def _click_site_link(
+        self,
+        page: Any,
+        *,
+        href_substr: str,
+        expect_substr: str,
+        exact_param: tuple[str, str] | None = None,
+        timeout_ms: int = 10_000,
+    ) -> bool:
+        """Click the first visible ``a[href*=…]`` link and wait for
+        the URL to reach ``expect_substr``.
+
+        ``exact_param`` additionally requires the link's own query
+        to carry ``(key, value)`` exactly. Any failure — no link,
+        hidden link, click error, no navigation within the timeout
+        — returns False so the caller can fall back to goto."""
+        try:
+            links = page.locator(
+                f'a[href*="{href_substr}"]',
+            )
+            for i in range(await links.count()):
+                link = links.nth(i)
+                href = (
+                    await link.get_attribute("href") or ""
+                )
+                if exact_param is not None:
+                    key, value = exact_param
+                    _, _, _, query, _ = urlsplit(href)
+                    if (
+                        dict(parse_qsl(query)).get(key)
+                        != value
+                    ):
+                        continue
+                try:
+                    if not await link.is_visible():
+                        continue
+                except Exception:
+                    pass
+                await link.click(timeout=3_000)
+                deadline = (
+                    asyncio.get_event_loop().time()
+                    + timeout_ms / 1000
+                )
+                while (
+                    asyncio.get_event_loop().time() < deadline
+                ):
+                    url = str(
+                        getattr(page, "url", "") or "",
+                    )
+                    if expect_substr in url:
+                        return True
+                    await page.wait_for_timeout(400)
+                return False
+        except Exception:
+            return False
+        return False
 
     async def _wait_auto(
         self,
@@ -1047,15 +1220,29 @@ class YandexBrowserTransport:
         return own
 
     async def _scroll_once(self, page: Any) -> None:
+        step = self.scroll_step
+        if step > 0:
+            # Variable stride with an occasional reverse nudge:
+            # a metronome-exact 1600px down-wheel every round is
+            # its own fingerprint.
+            delta = random.randint(
+                int(step * 0.5), int(step * 1.4),
+            )
+            if random.random() < 0.15:
+                delta = -random.randint(120, 420)
+        else:
+            delta = step
         try:
-            await page.mouse.wheel(0, self.scroll_step)
+            await page.mouse.wheel(0, delta)
         except Exception:
             pass
         if self.scroll_pause_ms > 0:
+            pause = int(
+                self.scroll_pause_ms
+                * random.uniform(0.5, 1.6)
+            )
             try:
-                await page.wait_for_timeout(
-                    self.scroll_pause_ms,
-                )
+                await page.wait_for_timeout(pause)
             except Exception:
                 pass
 

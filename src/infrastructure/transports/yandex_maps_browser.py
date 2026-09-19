@@ -40,6 +40,13 @@ Flow (measured 2026-09-18 against a live org page):
    rankings × 600, merged by ``reviewId`` until the union reaches
    ``params.count``. The UI-walk fallback covers the same windows
    minus the aspect × ranking combinations.
+6. **Stream concurrency** — the direct path walks several
+   (ranking, aspect) windows at once (``api_concurrency`` worker
+   tasks, default 3); each stream keeps its own
+   ``api_pacing_seconds`` cadence, so the server sees several
+   slow scrollers rather than one fast bot. A ``pageSize=100``
+   probe (the response's ``params.limit`` echoes the value the
+   server actually applied) halves the page count when accepted.
 """
 from __future__ import annotations
 
@@ -362,6 +369,42 @@ def find_aspects(node: Any) -> list[dict[str, Any]]:
     return []
 
 
+def build_api_streams(
+    aspects: list[dict[str, Any]],
+    *,
+    walk_extra_streams: bool,
+    dup_streak_stop: int,
+) -> list[tuple[str, str | None]]:
+    """The (ranking, aspectId) windows to walk, priority-ordered:
+    the four global rankings first, then every aspect biggest-first
+    (bigger windows reach the site total sooner). ``aspects`` must
+    already be sorted by count descending.
+
+    An aspect with ≤600 reviews fits ENTIRELY into a single window
+    — under a full drain (``dup_streak_stop=0``) one ranking
+    collects it fully and the other five would only re-serve the
+    same reviews; with the dup guard active every ranking still
+    pays off (the guard trims the overlap instead)."""
+    streams: list[tuple[str, str | None]] = [
+        (ranking, None) for ranking in _GLOBAL_RANKINGS
+    ]
+    if not walk_extra_streams:
+        return streams
+    for aspect in aspects:
+        aspect_id = str(aspect["id"])
+        count = int(aspect.get("count") or 0)
+        if (
+            dup_streak_stop == 0
+            and 0 < count <= _WINDOW_SIZE
+        ):
+            streams.append(("by_relevance_org", aspect_id))
+            continue
+        streams += [
+            (ranking, aspect_id) for ranking in _ASPECT_RANKINGS
+        ]
+    return streams
+
+
 class YandexMapsBrowserTransport:
     """Streams batches of raw review dicts for one Maps org."""
 
@@ -381,6 +424,7 @@ class YandexMapsBrowserTransport:
         dup_streak_stop: int = 300,
         use_direct_api: bool = True,
         api_pacing_seconds: float = 0.8,
+        api_concurrency: int = 3,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -405,6 +449,10 @@ class YandexMapsBrowserTransport:
         self.use_direct_api = use_direct_api
         #: Pause between direct API requests (politeness).
         self.api_pacing_seconds = api_pacing_seconds
+        #: How many (ranking, aspect) streams the direct API walks
+        #: CONCURRENTLY (bounded worker pool; each stream keeps its
+        #: own pacing). 1 = the strictly serial walk.
+        self.api_concurrency = api_concurrency
         #: Filled while iterating (the CLI prints them in the
         #: summary).
         self.last_total_count: int | None = None
@@ -683,9 +731,13 @@ class YandexMapsBrowserTransport:
 
         Signs requests locally (see :func:`sign_maps_query`) and
         walks every (ranking, aspectId) window until the union
-        reaches the site total. Raises :class:`_DirectApiUnavailable`
-        when the recipe stops validating (site update) so the caller
-        can fall back to the UI walk."""
+        reaches the site total. Streams run CONCURRENTLY —
+        ``api_concurrency`` workers pull windows off a shared
+        queue, each keeping its own ``api_pacing_seconds`` cadence
+        (the server sees several slow scrollers, not one fast
+        bot). Raises :class:`_DirectApiUnavailable` when the recipe
+        stops validating (site update) so the caller can fall
+        back to the UI walk."""
         if not await self._ensure_api_template(page, captured):
             raise _DirectApiUnavailable(
                 "сайт не выпустил XHR для шаблона параметров"
@@ -705,6 +757,52 @@ class YandexMapsBrowserTransport:
             total = self.last_total_count
             return total is not None and len(seen) >= total
 
+        def parse_payload(out: Any) -> dict[str, Any]:
+            payload = (
+                out.get("payload")
+                if isinstance(out, dict)
+                else None
+            )
+            if not isinstance(payload, dict):
+                status = (
+                    out.get("status")
+                    if isinstance(out, dict)
+                    else None
+                )
+                raise _DirectApiUnavailable(
+                    f"не-JSON ответ (status={status})"
+                )
+            return payload
+
+        def take_new_cards(
+            data: dict[str, Any],
+        ) -> list[dict[str, Any]]:
+            new_cards: list[dict[str, Any]] = []
+            for card in data.get("reviews") or []:
+                review_id = card.get("reviewId")
+                if review_id and review_id in seen:
+                    continue
+                if review_id:
+                    seen.add(review_id)
+                new_cards.append(card)
+            return new_cards
+
+        async def fetchonce(
+            ranking: str,
+            aspect_id: str | None,
+            page_no: int,
+        ) -> Any:
+            params = dict(
+                base,
+                page=page_no,
+                ranking=ranking,
+                csrfToken=token,
+            )
+            if aspect_id:
+                params["aspectId"] = aspect_id
+            url = f"{API_URL}?{sign_maps_query(params)}"
+            return await page.evaluate(_API_FETCH_JS, url)
+
         async def call_api(
             ranking: str,
             aspect_id: str | None,
@@ -713,61 +811,98 @@ class YandexMapsBrowserTransport:
             """One signed request → ``data`` dict,
             ``end_of_window`` sentinel, or raises."""
             nonlocal token
-
-            async def fetchonce() -> Any:
-                params = dict(
-                    base,
-                    page=page_no,
-                    ranking=ranking,
-                    csrfToken=token,
+            # Up to 3 round-trips: one plain, one after a csrfToken
+            # rotation (the server hands the next token over in the
+            # payload — mirrors module 79409), one Validation retry:
+            # under concurrency a token read just before a sibling
+            # worker's rotation is stale through no fault of the
+            # recipe.
+            validation = ""
+            for _attempt in range(3):
+                payload = parse_payload(
+                    await fetchonce(ranking, aspect_id, page_no),
                 )
-                if aspect_id:
-                    params["aspectId"] = aspect_id
-                url = f"{API_URL}?{sign_maps_query(params)}"
-                out = await page.evaluate(_API_FETCH_JS, url)
-                return out
-
-            out = await fetchonce()
-            status = out.get("status") if isinstance(out, dict) else None
-            payload = (
-                out.get("payload") if isinstance(out, dict) else None
-            )
-            if not isinstance(payload, dict):
+                fresh = payload.get("csrfToken")
+                if (
+                    isinstance(fresh, str)
+                    and fresh
+                    and fresh != token
+                ):
+                    token = fresh
+                    continue
+                if payload.get("type") == "captcha":
+                    raise YandexCaptchaError(
+                        "Я.Карты: капча на прямой API-запрос"
+                    )
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    message = str(error.get("message", ""))
+                    if "Validation" in message:
+                        validation = message
+                        continue
+                    # «Internal error» past the 600-review window.
+                    return end_of_window
+                return payload.get("data") or {}
+            if validation:
                 raise _DirectApiUnavailable(
-                    f"не-JSON ответ (status={status})"
+                    f"сервер отверг параметры: {validation[:80]}"
                 )
-            # Token rotation: the wrapper retries once with the
-            # fresh token (mirrors module 79409).
+            raise _DirectApiUnavailable(
+                "ротация csrfToken не сошлась за 3 попытки"
+            )
+
+        batches: asyncio.Queue[
+            list[dict[str, Any]] | BaseException | None
+        ] = asyncio.Queue()
+
+        async def probe_page_size() -> None:
+            """Doubling pageSize (50 → 100) halves the request
+            count. The response's ``params.limit`` echoes the value
+            the server ACTUALLY applied, so the probe is
+            self-verifying; any error just reverts — a failed probe
+            must not break the direct path. The probe request IS
+            page 1 of the first stream: its reviews are emitted,
+            not wasted."""
+            nonlocal token
+            original = base.get("pageSize", "50")
+            try:
+                base["pageSize"] = "100"
+                payload = parse_payload(
+                    await fetchonce(_GLOBAL_RANKINGS[0], None, 1),
+                )
+            except _DirectApiUnavailable:
+                base["pageSize"] = original
+                return
+            fresh = payload.get("csrfToken")
             if (
-                "csrfToken" in payload
-                and payload["csrfToken"]
-                and payload["csrfToken"] != token
+                isinstance(fresh, str)
+                and fresh
+                and fresh != token
             ):
-                token = payload["csrfToken"]
-                out = await fetchonce()
-                payload = (
-                    out.get("payload")
-                    if isinstance(out, dict)
-                    else None
+                token = fresh
+            data = payload.get("data")
+            if payload.get("type") == "captcha" or not isinstance(
+                data, dict
+            ):
+                base["pageSize"] = original
+                return
+            params = data.get("params") or {}
+            self._update_totals(params, {})
+            new_cards = take_new_cards(data)
+            if new_cards:
+                await batches.put(new_cards)
+            if params.get("limit") == 100:
+                print(
+                    "Я.Карты: сервер принял pageSize=100 — "
+                    "вдвое меньше запросов на страницу потока"
                 )
-                if not isinstance(payload, dict):
-                    raise _DirectApiUnavailable(
-                        "не-JSON ответ после ротации токена"
-                    )
-            if payload.get("type") == "captcha":
-                raise YandexCaptchaError(
-                    "Я.Карты: капча на прямой API-запрос"
-                )
-            error = payload.get("error")
-            if isinstance(error, dict):
-                message = str(error.get("message", ""))
-                if "Validation" in message:
-                    raise _DirectApiUnavailable(
-                        f"сервер отверг параметры: {message[:80]}"
-                    )
-                # «Internal error» past the 600-review window.
-                return end_of_window
-            return payload.get("data") or {}
+                return
+            base["pageSize"] = original
+            print(
+                "Я.Карты: pageSize=100 не принят "
+                f"(limit={params.get('limit')}) — "
+                f"остаёмся на {original}"
+            )
 
         # Aspects come straight from the state blob — no chip
         # clicking. Biggest first: bigger windows, earlier stop.
@@ -775,36 +910,21 @@ class YandexMapsBrowserTransport:
         aspects.sort(
             key=lambda a: int(a.get("count") or 0), reverse=True,
         )
+        streams = build_api_streams(
+            aspects,
+            walk_extra_streams=self.walk_extra_streams,
+            dup_streak_stop=self.dup_streak_stop,
+        )
+        work: asyncio.Queue[tuple[str, str | None]] = (
+            asyncio.Queue()
+        )
+        for stream in streams:
+            work.put_nowait(stream)
 
-        streams: list[tuple[str, str | None]] = [
-            (ranking, None) for ranking in _GLOBAL_RANKINGS
-        ]
-        if self.walk_extra_streams:
-            for aspect in aspects:
-                aid = str(aspect["id"])
-                count = int(aspect.get("count") or 0)
-                # An aspect with ≤600 reviews fits ENTIRELY into a
-                # single window — one ranking collects it fully and
-                # the other five would only re-serve the same
-                # reviews. Matters for the full-drain runs
-                # (--dup-streak-stop 0 walks every page to the
-                # window edge).
-                if (
-                    self.dup_streak_stop == 0
-                    and 0 < count <= _WINDOW_SIZE
-                ):
-                    streams.append(
-                        ("by_relevance_org", aid),
-                    )
-                    continue
-                streams += [
-                    (ranking, aid)
-                    for ranking in _ASPECT_RANKINGS
-                ]
-
-        for ranking, aspect_id in streams:
-            if total_reached():
-                break
+        async def walk_stream(
+            ranking: str,
+            aspect_id: str | None,
+        ) -> None:
             label = ranking + (
                 f" · аспект {aspect_id}" if aspect_id else ""
             )
@@ -826,18 +946,11 @@ class YandexMapsBrowserTransport:
                     is_aspect=aspect_id is not None,
                 )
                 page_cards = data.get("reviews") or []
-                new_cards: list[dict[str, Any]] = []
-                for card in page_cards:
-                    review_id = card.get("reviewId")
-                    if review_id and review_id in seen:
-                        continue
-                    if review_id:
-                        seen.add(review_id)
-                    new_cards.append(card)
+                new_cards = take_new_cards(data)
                 if new_cards:
                     dup_run = 0
                     stream_new += len(new_cards)
-                    yield new_cards
+                    await batches.put(new_cards)
                     if total_reached():
                         break
                 else:
@@ -847,11 +960,56 @@ class YandexMapsBrowserTransport:
                         and dup_run >= self.dup_streak_stop
                     ):
                         break
+                # Every break above skips this — no sleep past a
+                # stream's last useful page.
                 await asyncio.sleep(self.api_pacing_seconds)
             print(
                 f"Я.Карты: прямой поток {label}: "
                 f"+{stream_new} (уникальных: {len(seen)})"
             )
+
+        async def worker() -> None:
+            while not total_reached():
+                try:
+                    ranking, aspect_id = work.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                await walk_stream(ranking, aspect_id)
+
+        workers = [
+            asyncio.create_task(worker())
+            for _ in range(
+                min(max(1, self.api_concurrency), len(streams)),
+            )
+        ]
+
+        async def pump() -> None:
+            # return_exceptions: every worker's outcome is
+            # consumed here, so a late sibling failure never turns
+            # into an unretrieved-task-exception warning.
+            results = await asyncio.gather(
+                *workers, return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, BaseException):
+                    await batches.put(result)
+                    return
+            await batches.put(None)
+
+        pump_task = asyncio.create_task(pump())
+        try:
+            await probe_page_size()
+            while True:
+                item = await batches.get()
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            pump_task.cancel()
+            for task in workers:
+                task.cancel()
 
     async def _next_proxy(self) -> dict[str, str] | None:
         """Pull the next proxy from the pool (async-aware)."""
@@ -1035,6 +1193,7 @@ class YandexMapsBrowserTransport:
 __all__ = [
     "YandexMapsBrowserTransport",
     "aspect_chip_size",
+    "build_api_streams",
     "djb2_xor32",
     "find_aspects",
     "find_org_name",

@@ -16,6 +16,7 @@ Two output formats (``--format``):
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -166,6 +167,135 @@ async def _run_unified_json(
         **diagnostics,
     )
     return count
+
+
+async def _iter_parallel_reviews(
+    adapters: list[Any],
+    url: str,
+) -> AsyncIterator[Any]:
+    """Fan the review streams of N adapters (one browser session
+    each, disjoint page ranges) into a single queue.
+
+    A session that dies (captcha / soft-block past its proxy
+    rotations) keeps its already-yielded reviews and the rest
+    continue; the error is re-raised only when EVERY session died
+    without yielding anything — the run then lands in diagnostics
+    as an error instead of an empty success."""
+    from infrastructure.transports.yandex_browser import (
+        YandexCaptchaError,
+    )
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    failures: list[BaseException] = []
+    yielded = 0
+
+    async def pump(adapter: Any) -> None:
+        try:
+            async for review in adapter.iter_reviews(url):
+                await queue.put(review)
+        except YandexCaptchaError as exc:
+            failures.append(exc)
+            print(f"[warning] Я.Маркет: сессия остановилась: {exc}")
+
+    tasks = [
+        asyncio.create_task(pump(adapter))
+        for adapter in adapters
+    ]
+
+    async def finisher() -> None:
+        # return_exceptions: a late sibling failure must not turn
+        # into an unretrieved-task-exception warning.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await queue.put(None)
+
+    finisher_task = asyncio.create_task(finisher())
+    try:
+        while True:
+            review = await queue.get()
+            if review is None:
+                break
+            yielded += 1
+            yield review
+        if not yielded and len(failures) == len(adapters):
+            raise failures[0]
+    finally:
+        finisher_task.cancel()
+        for task in tasks:
+            task.cancel()
+
+
+class _ParallelYandexSessions:
+    """Adapter stand-in for ``--parallel-sessions`` (yandex): N
+    one-range browser sessions fanned into a single review stream.
+
+    Exposes the aggregate ``last_*`` totals so both output formats
+    and the summary print work unchanged."""
+
+    def __init__(self, adapters: list[Any]) -> None:
+        self._adapters = adapters
+        self.last_total_count: int | None = None
+        self.last_average_rating: float | None = None
+        self.last_product_title: str | None = None
+
+    async def iter_reviews(self, url: str) -> AsyncIterator[Any]:
+        async for review in _iter_parallel_reviews(
+            self._adapters, url,
+        ):
+            # Refresh the totals on every review (the same pattern
+            # as the single-session adapter: they must survive an
+            # early --max-reviews break).
+            counts = [
+                adapter.last_total_count
+                for adapter in self._adapters
+                if adapter.last_total_count is not None
+            ]
+            self.last_total_count = (
+                max(counts) if counts else None
+            )
+            ratings = [
+                adapter.last_average_rating
+                for adapter in self._adapters
+                if adapter.last_average_rating is not None
+            ]
+            self.last_average_rating = (
+                ratings[0] if ratings else None
+            )
+            titles = [
+                adapter.last_product_title
+                for adapter in self._adapters
+                if adapter.last_product_title
+            ]
+            self.last_product_title = (
+                titles[0] if titles else None
+            )
+            yield review
+
+
+async def _draw_session_proxies(
+    pool: Any,
+    count: int,
+) -> list[dict[str, str]]:
+    """Pin one proxy per parallel session from the pool.
+
+    Stops early when the pool runs dry — the leftover sessions
+    then run direct (the caller warns about the shared IP)."""
+    proxies: list[dict[str, str]] = []
+    if pool is None:
+        return proxies
+    for _ in range(count):
+        try:
+            next_async = getattr(pool, "next_async", None)
+            proxy = (
+                await next_async()
+                if next_async is not None
+                else pool.next()
+            )
+        except Exception:
+            proxy = None
+        if proxy is None:
+            break
+        proxies.append(proxy)
+    return proxies
 
 
 def _load_existing_reviews(
@@ -745,22 +875,94 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
 
     debug_dir = args.debug_dir or "debug_yandex"
 
-    transport = YandexBrowserTransport(
-        timeout_ms=args.timeout_ms,
-        settle_ms=args.settle_ms,
-        debug_dir=debug_dir,
-        proxy=proxy,
-        proxy_pool=proxy_pool,
-        cookies=cookies,
-        humanize=not args.no_humanize,
-        # NOTE: block_assets stays at the transport default (False)
-        # — a real browser loads images/fonts and SmartCaptcha weighs
-        # that; --no-block-assets is an Ozon-side flag.
-        cookies_path=(
-            args.save_cookies or "yandex_cookies.json"
-        ),
+    parallel = max(
+        1, getattr(args, "parallel_sessions", 1) or 1,
     )
-    adapter = YandexMarketAdapter(browser_transport=transport)
+    if parallel > 1:
+        # In-process page-range sessions (the wall-time multiplier
+        # measured for Ozon child processes applies to independent
+        # browser launches too): one stealth browser per disjoint
+        # [start, start+max_pages) chunk, one pinned proxy each.
+        if not args.max_pages:
+            raise SystemExit(
+                "--parallel-sessions (yandex) требует --max-pages: "
+                "общее число страниц (~отзывы/10) делится между "
+                "сессиями"
+            )
+        from marketplace_maps_parser.parallel_sessions import (
+            split_page_range,
+        )
+
+        chunks = split_page_range(
+            args.start_page or 1, args.max_pages, parallel,
+        )
+        session_proxies = await _draw_session_proxies(
+            proxy_pool, len(chunks),
+        )
+        if not session_proxies and not proxy:
+            print(
+                "WARNING: --parallel-sessions без отдельных proxy — "
+                "все сессии пойдут с одного IP, риск капчи растёт"
+            )
+        save_path = args.save_cookies or "yandex_cookies.json"
+        session_adapters = []
+        for i, (start, size) in enumerate(chunks):
+            # Distinct pool proxies when available; the single
+            # --proxy is shared by everyone (the Ozon precedent:
+            # works, but the sessions share one IP).
+            session_proxy = (
+                session_proxies[i % len(session_proxies)]
+                if session_proxies
+                else proxy
+            )
+            session_transport = YandexBrowserTransport(
+                timeout_ms=args.timeout_ms,
+                settle_ms=args.settle_ms,
+                debug_dir=debug_dir,
+                proxy=session_proxy,
+                cookies=cookies,
+                humanize=not args.no_humanize,
+                # Only session 0 checkpoints the cookie jar — N
+                # sessions writing one file would clobber it.
+                cookies_path=(
+                    save_path if i == 0 else None
+                ),
+                start_page=start,
+                max_pages=size,
+            )
+            session_adapters.append(
+                YandexMarketAdapter(
+                    browser_transport=session_transport,
+                ),
+            )
+            print(
+                f"Я.Маркет: сессия {i + 1}/{len(chunks)} — "
+                f"страницы {start}..{start + size - 1}, proxy: "
+                + (
+                    session_proxy.get("server", "?")
+                    if session_proxy
+                    else "напрямую"
+                )
+            )
+        adapter = _ParallelYandexSessions(session_adapters)
+    else:
+        transport = YandexBrowserTransport(
+            timeout_ms=args.timeout_ms,
+            settle_ms=args.settle_ms,
+            debug_dir=debug_dir,
+            proxy=proxy,
+            proxy_pool=proxy_pool,
+            cookies=cookies,
+            humanize=not args.no_humanize,
+            # NOTE: block_assets stays at the transport default
+            # (False) — a real browser loads images/fonts and
+            # SmartCaptcha weighs that; --no-block-assets is an
+            # Ozon-side flag.
+            cookies_path=(
+                args.save_cookies or "yandex_cookies.json"
+            ),
+        )
+        adapter = YandexMarketAdapter(browser_transport=transport)
 
     if args.format == "json":
         return await _run_unified_json(
@@ -888,6 +1090,14 @@ async def _collect_yandex_maps(args: argparse.Namespace) -> int:
         # Review-count dup guard shared with the Ozon streams; 0 =
         # full drain of every window (slowest, most complete).
         dup_streak_stop=getattr(args, "dup_streak_stop", 300),
+        # Direct-API speed knobs: concurrent streams + per-stream
+        # pacing (defaults match the CLI flags).
+        api_pacing_seconds=getattr(
+            args, "maps_api_pacing", 0.8,
+        ),
+        api_concurrency=getattr(
+            args, "maps_api_concurrency", 3,
+        ),
     )
     adapter = YandexMapsAdapter(browser_transport=transport)
 

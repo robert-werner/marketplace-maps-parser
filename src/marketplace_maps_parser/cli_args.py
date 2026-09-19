@@ -317,14 +317,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1,
         help=(
-            "Run N collection PROCESSES with disjoint --start-page/"
-            "--max-pages chunks (one proxy from --proxy-list per "
-            "process), then merge with review_id dedup. Requires "
-            "--max-pages. NOTE (measured): naked ?page=N caps at "
-            "~5 productive pages per session even with cookies, so "
-            "for ONE product this only parallelizes the first "
-            "~5 pages — the deep widget flow stays sequential. Best "
-            "for running many products in parallel."
+            "Run N collection sessions with disjoint --start-page/"
+            "--max-pages chunks, then merge with review_id dedup. "
+            "Requires --max-pages. Ozon: N child PROCESSES (one "
+            "proxy from --proxy-list per process). NOTE "
+            "(measured): naked ?page=N caps at ~5 productive "
+            "pages per Ozon session even with cookies, so for ONE "
+            "Ozon product this only parallelizes the first ~5 "
+            "pages — the deep widget flow stays sequential. "
+            "Yandex.Market: N in-process browser sessions walking "
+            "disjoint ?page=N ranges (~10 reviews/page; one "
+            "pinned proxy per session from --proxy-list — "
+            "without proxies all sessions share one IP and the "
+            "captcha risk multiplies)."
         ),
     )
     parser.add_argument(
@@ -428,6 +433,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "serving known ground. 0 disables the early stop "
             "(Ozon pagination; yandex_maps direct API — 0 drains "
             "every window fully, slowest and most complete)."
+        ),
+    )
+    parser.add_argument(
+        "--maps-api-concurrency",
+        type=int,
+        default=3,
+        help=(
+            "yandex_maps direct API: how many review streams "
+            "(ranking × aspect windows) walk CONCURRENTLY "
+            "(default: 3). Each stream keeps its own request "
+            "pacing, so the server sees several slow scrollers "
+            "rather than one fast bot; 1 restores the strictly "
+            "serial walk."
+        ),
+    )
+    parser.add_argument(
+        "--maps-api-pacing",
+        type=float,
+        default=0.8,
+        help=(
+            "yandex_maps direct API: pause between requests "
+            "within ONE stream, seconds (default: 0.8). Lower = "
+            "faster but less polite."
         ),
     )
     parser.add_argument(

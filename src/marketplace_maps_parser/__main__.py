@@ -73,7 +73,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Собрано отзывов: {count}")
             return 0
 
-        if getattr(args, "parallel_sessions", 1) > 1:
+        # Ozon: page-range CHILD PROCESSES (public_page chunks).
+        # Yandex handles --parallel-sessions in-process inside its
+        # collector (independent browser launches per range).
+        if (
+            args.marketplace == "ozon"
+            and getattr(args, "parallel_sessions", 1) > 1
+        ):
             from marketplace_maps_parser.parallel_sessions import (
                 run_parallel_sessions,
             )
