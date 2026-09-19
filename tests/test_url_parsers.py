@@ -192,3 +192,80 @@ def test_extract_2gis_firm_path_stips_tab_and_query() -> None:
     assert extract_2gis_firm_path(
         FIRM_URL + "/tab/reviews?x=1",
     ) == "/moscow/firm/70000001063192616"
+
+
+# --- Marketplace detection ------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://market.yandex.ru/card/smartfon-x/12345678",
+            "yandex",
+        ),
+        (
+            "https://www.market.yandex.ru/product/naushniki/99"
+            "/reviews",
+            "yandex",
+        ),
+        (
+            "https://yandex.ru/maps/org/pochta-rossii/1120018525/"
+            "reviews/",
+            "yandex_maps",
+        ),
+        (
+            "https://maps.yandex.ru/org/kofeynya/1132076225",
+            "yandex_maps",
+        ),
+        (
+            "https://www.ozon.ru/product/smartfon-telefon"
+            "-1234567890/",
+            "ozon",
+        ),
+        (
+            "https://m.ozon.ru/product/naushniki-10987654321",
+            "ozon",
+        ),
+        (
+            "https://2gis.ru/moscow/firm/70000001063192616"
+            "/tab/reviews",
+            "2gis",
+        ),
+        (
+            "https://www.wildberries.ru/catalog/831948063"
+            "/detail.aspx",
+            "wildberries",
+        ),
+        (
+            "https://m.wildberries.ru/catalog/831948063"
+            "/detail.aspx",
+            "wildberries",
+        ),
+    ],
+)
+def test_detect_marketplace(url: str, expected: str) -> None:
+    from shared.url_parsers import detect_marketplace
+
+    assert detect_marketplace(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # Foreign service with a look-alike path.
+        "https://example.com/catalog/831948063/detail.aspx",
+        # Right domain, wrong path.
+        "https://market.yandex.ru/search?text=phone",
+        "https://yandex.ru/maps/moskovskaya-oblast",
+        "https://www.ozon.ru/category/telefony/",
+        "https://2gis.ru/moscow",
+        "https://www.wildberries.ru/catalog/831948063",
+        # Not a URL at all.
+        "just a string",
+        "",
+    ],
+)
+def test_detect_marketplace_unknown(url: str) -> None:
+    from shared.url_parsers import detect_marketplace
+
+    assert detect_marketplace(url) is None

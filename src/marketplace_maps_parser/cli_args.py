@@ -26,8 +26,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "yandex_maps",
             "2gis",
         ),
-        required=True,
-        help="Target marketplace.",
+        default=None,
+        help=(
+            "Target marketplace. OPTIONAL when --url is given: "
+            "detected from the URL (market.yandex.ru -> yandex, "
+            "yandex.ru/maps -> yandex_maps, ozon.ru -> ozon, "
+            "wildberries.ru -> wildberries, 2gis.ru -> 2gis). "
+            "Required with --products-file (ozon only)."
+        ),
     )
     parser.add_argument(
         "--format",
@@ -105,6 +111,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Ozon pagination: cap number of pages. "
             "Default: unlimited."
+        ),
+    )
+    parser.add_argument(
+        "--dup-pages-stop",
+        type=int,
+        default=3,
+        help=(
+            "Yandex.Market: stop the walk after this many "
+            "consecutive pages that add zero NEW reviews (past "
+            "the last page Yandex re-serves old ground instead "
+            "of an empty page). 0 disables the stop. "
+            "Default: 3."
         ),
     )
     parser.add_argument(
@@ -319,14 +337,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Run N collection sessions with disjoint --start-page/"
             "--max-pages chunks, then merge with review_id dedup. "
-            "Requires --max-pages. Ozon: N child PROCESSES (one "
+            "Ozon: requires --max-pages; N child PROCESSES (one "
             "proxy from --proxy-list per process). NOTE "
             "(measured): naked ?page=N caps at ~5 productive "
             "pages per Ozon session even with cookies, so for ONE "
             "Ozon product this only parallelizes the first ~5 "
             "pages — the deep widget flow stays sequential. "
-            "Yandex.Market: N in-process browser sessions walking "
-            "disjoint ?page=N ranges (~10 reviews/page; one "
+            "Yandex.Market: --max-pages OPTIONAL — a single probe "
+            "session reads the review counter first and sizes the "
+            "ranges automatically; N in-process browser sessions "
+            "walk disjoint ?page=N ranges (~10 reviews/page; one "
             "pinned proxy per session from --proxy-list — "
             "without proxies all sessions share one IP and the "
             "captcha risk multiplies)."
@@ -491,6 +511,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if parsed.url and parsed.products_file:
         parser.error("--url and --products-file are mutually exclusive")
+    if parsed.marketplace is None:
+        if parsed.url:
+            from shared.url_parsers import detect_marketplace
+
+            detected = detect_marketplace(parsed.url)
+            if detected is None:
+                parser.error(
+                    f"cannot detect the marketplace from the URL "
+                    f"{parsed.url!r} — pass --marketplace explicitly"
+                )
+            parsed.marketplace = detected
+            print(
+                f"Маркетплейс определён по ссылке: {detected}"
+            )
+        else:
+            # --products-file with no --url: nothing to detect from.
+            parser.error(
+                "--products-file requires an explicit "
+                "--marketplace ozon"
+            )
     if (
         parsed.products_file
         and parsed.marketplace != "ozon"

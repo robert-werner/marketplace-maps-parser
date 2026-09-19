@@ -31,6 +31,31 @@ from pathlib import Path
 from typing import Any
 
 
+def estimate_review_pages(
+    total_reviews: int,
+    sessions: int,
+    *,
+    per_page: int = 10,
+) -> int:
+    """Estimate the ``?page=N`` range covering ``total_reviews``.
+
+    ``ceil(total/per_page)`` plus one margin page per session. The
+    margin leans on the walk's duplicate-streak stop: a session
+    that runs past the real end costs at most a few duplicate
+    pages and stops, while an UNDERestimate would silently drop
+    tail reviews (a session's ``max_pages`` bound ends it with
+    cards still uncollected).
+
+    Yandex.Market measured 2026-09-18: ~10 DOM cards per reviews
+    page; the Show-More expansion can only pull pages FORWARD
+    (more per page), never fewer.
+    """
+    if total_reviews <= 0:
+        return 0
+    pages = -(-total_reviews // per_page)
+    return pages + max(1, sessions)
+
+
 def split_page_range(
     start_page: int,
     max_pages: int,

@@ -43,15 +43,41 @@ Flow (mirrors the hard-won Ozon lessons — see README):
    Per page: one ``page.evaluate`` round-trip reads every card
    (``data-auto`` markers) + the schema.org JSON-LD block
    (per-review ratings — the DOM stars are unreadable obfuscated
-   CSS — and the aggregate counter); a scroll round wakes any
-   lazy-appended cards before the next page.
+   CSS — and the aggregate counter); within a page the list is
+   EXPANDED by Show-More clicks and realistic downward scrolls
+   (wheel strides wake the intersection-observer lazy loads; a
+   read per round absorbs whatever arrived, deduplicated by the
+   per-card ``seen`` key so re-reads are free), until
+   ``scroll_max_idle_rounds`` rounds add zero new cards or the
+   wheel sits at the document bottom with nothing arriving.
+   Stray tabs popped by Show-More / pager clicks (ads,
+   ``target=_blank`` wrappers) are closed immediately — the
+   visible window keeps only the walk page. END OF LIST: past
+   the last page Yandex re-serves old ground instead of an empty
+   page, so the walk stops after ``dup_pages_stop`` consecutive
+   pages that add ZERO new cards — TOTAL-AWARE: while the JSON-LD
+   counter says reviews remain (the expansion often PRELOADS the
+   upcoming windows — measured 2026-09-19: a stop at 110 of 250
+   with fresh cards still beyond), the budget extends by the
+   remaining pages, capped at ``_DUP_PAGES_MAX_EXTENSION`` so an
+   unattainable counter (textless «оценки») cannot grind forever.
+   ``0`` disables the stop (walk until a truly empty page
+   or ``max_pages``).
 4. **Own vs feed cards** — the reviews page mixes the product's
-   own reviews with a cross-product feed. Since 2026-09-18 EVERY
-   card carries the ``ugc-element-offer-info`` chip, so the chip
-   is no longer a discriminator. The JSON-LD block describes ONLY
-   the open product, so a DOM card is OWN when it matches a
-   JSON-LD review by (author, ISO-date), or (fallback) carries a
-   full-text body with a year in its date. Feed cards are dropped.
+   own reviews with a cross-product feed (the scroll expansion
+   reaches it). The ``ugc-element-offer-info`` chip's
+   ``data-zone-data.oskuId`` is the discriminator: own cards carry
+   the open product's id, feed cards a foreign one (on a live
+   507-card walk the filter found zero foreign cards — kept as a
+   guard). Cards without a readable oskuId fall back to the legacy
+   heuristics: a JSON-LD match by (author, ISO-date) — JSON-LD
+   describes ONLY the open product — or (loosely) a uuid / body /
+   author+date. NOTE on counters (measured 2026-09-19): the JSON-LD
+   ``reviewCount`` (250) counts a NARROWER scope than the walked
+   list (507 stable cards, all own-osku, on-topic) — the list
+   paginates the wider model corpus while the counter appears
+   scoped to the current offer/sku, so ``collected > counter`` is
+   normal and NOT a leak.
 5. **Cookies** — injected before the first navigation and saved to
    ``cookies_path`` after EVERY healthy page (checkpoint), so an
    interrupted run keeps the captcha-warmed session.
@@ -263,6 +289,24 @@ _READ_CARDS_JS = """
         let uuid = root.getAttribute('id') || '';
         const m = uuid.match(/(\\d+)/);
         if (m) uuid = m[1];
+        // The offer-info chip's data-zone-data carries oskuId — the
+        // product the review belongs to. Own cards match the open
+        // product; cross-product FEED cards carry a foreign oskuId
+        // (the Python filter drops them — see _filter_own_cards).
+        let offerId = null;
+        const chip = root.querySelector(
+            '[data-auto="ugc-element-offer-info"]');
+        if (chip) {
+            const zone = chip.getAttribute('data-zone-data');
+            if (zone) {
+                try {
+                    const z = JSON.parse(zone);
+                    if (z && z.oskuId != null) {
+                        offerId = String(z.oskuId);
+                    }
+                } catch (e) {}
+            }
+        }
         const photos = [];
         root.querySelectorAll(
             '[data-auto="thumbnail"] img',
@@ -282,12 +326,23 @@ _READ_CARDS_JS = """
             text: body,
             pros: get('[data-auto="review-pro"]'),
             cons: get('[data-auto="review-contra"]'),
+            offer_id: offerId,
             photos: photos.slice(0, 8),
         });
     });
 
     out.body_len = document.body
         ? document.body.innerHTML.length : 0;
+
+    // Scroll metrics for the expansion loop: when the wheel is at
+    // the document bottom and a round added no new cards, there is
+    // nothing left to lazy-load on this page.
+    out.scroll_y = window.scrollY || 0;
+    out.scroll_bottom_gap = Math.max(
+        0,
+        (document.documentElement.scrollHeight || 0)
+        - ((window.scrollY || 0) + (window.innerHeight || 0)),
+    );
 
     return out;
 }
@@ -297,6 +352,36 @@ _SHOW_MORE_SELECTORS = (
     "[data-auto='showMore']",
     "[data-auto='show-more']",
     "button:has-text('Показать ещё')",
+)
+
+# Expansion loop bounds (see _iter_with_browser): the idle counter
+# ends the loop normally; the round cap only guards against a
+# pathological DOM that always yields one more card.
+_EXPAND_ROUNDS_HARD_CAP = 200
+
+# "At the document bottom" tolerance, px: a review card is a few
+# hundred px tall, so a gap smaller than this means the next lazy
+# chunk (if any) is already on screen.
+_BOTTOM_GAP_EPSILON_PX = 200
+
+# Total-aware duplicate tolerance. While the site's counter says
+# reviews remain, a dupe streak may just mean the in-page expansion
+# PRELOADED the upcoming windows (or the pager re-served them —
+# measured 2026-09-19: a run stopped at 110 of 250 after three
+# all-dup pages, with fresh cards still beyond). Allow enough dupe
+# pages to cover the remainder — CAPPED, because the counter also
+# counts textless rating-only «оценки» the list never shows, so it
+# is often unattainable and must not grind the walk forever.
+_DUP_PAGES_MAX_EXTENSION = 25
+
+# DOM cards per ?page=N (measured 2026-09-18) — mirrors
+# parallel_sessions.estimate_review_pages' per_page.
+_CARDS_PER_PAGE = 10
+
+# /card/<slug>/<id> (slug optional) — the current product's id,
+# matched against each card's offer-info oskuId.
+_CANONICAL_CARD_ID_RE = re.compile(
+    r"^/card/(?:[^/]+/)?(\d+)",
 )
 
 
@@ -328,6 +413,7 @@ class YandexBrowserTransport:
         proxy_rotate_max_restarts: int = 3,
         start_page: int = 1,
         max_pages: int | None = None,
+        dup_pages_stop: int = 3,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -354,6 +440,13 @@ class YandexBrowserTransport:
         #: empty page to end it.
         self.start_page = max(1, start_page)
         self.max_pages = max_pages
+        #: Stop after this many consecutive pages that yielded ZERO
+        #: new cards (the pager wraps and re-serves old ground past
+        #: the last page — an empty page never comes). One all-dup
+        #: page is normal (Show-More preloads the next page's SSR
+        #: cards); a streak means the end. 0 = walk to the bitter
+        #: end (empty page / max_pages) — the old, slow behaviour.
+        self.dup_pages_stop = max(0, int(dup_pages_stop))
 
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
@@ -365,6 +458,9 @@ class YandexBrowserTransport:
         self._first_warmup_done = False
         self._last_card_url: str | None = None
         self._pacer: AdaptivePacer | None = None
+        #: Product id of the walk's canonical card path — the
+        #: offer-id (oskuId) filter's reference (set after warmup).
+        self._current_product_id: str | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -393,6 +489,7 @@ class YandexBrowserTransport:
         restarts = 0
         state: dict[str, Any] = {
             "seen": set(), "page_no": self.start_page,
+            "dup_pages": 0,
         }
         while True:
             # A restart rotates the egress IP; cookies are NOT
@@ -436,6 +533,66 @@ class YandexBrowserTransport:
             return self.proxy_pool.next()
         except Exception:
             return None
+
+    async def fetch_total_count(
+        self,
+        product_url: str,
+    ) -> int | None:
+        """One-shot probe of the review counter — no walk, no cards.
+
+        Warms up on the card page, opens reviews page 1 and reads
+        the JSON-LD ``aggregateRating.reviewCount`` through the
+        SAME captcha ladder as the walk (:meth:`_goto_reviews`).
+        The CLI uses this to size ``--parallel-sessions`` page
+        ranges before launching the sessions. Returns ``None``
+        when the healthy page carries no counter; raises the
+        ladder's errors when the page stays challenged.
+        """
+        card_path = extract_yandex_market_card_path(product_url)
+        browser_cls = _import_invisible_playwright()
+
+        proxy = self.proxy
+        if proxy is None and self.proxy_pool is not None:
+            proxy = await self._next_proxy()
+
+        async with browser_cls(
+            proxy=proxy,
+            seed=self.seed,
+            humanize=self.humanize,
+        ) as browser:
+            page = await browser.new_page()
+            try:
+                if self.cookies:
+                    try:
+                        await page.context.add_cookies(self.cookies)
+                    except Exception as exc:
+                        print(
+                            "Я.Маркет: не удалось внедрить cookies: "
+                            f"{exc}"
+                        )
+                await self._install_stealth(page)
+                await self._install_resource_blocker(page)
+
+                canonical = await self._warmup(page, card_path)
+                self._set_current_product(canonical)
+                url = (
+                    f"{YANDEX_MARKET_BASE}{canonical}/reviews?page=1"
+                )
+                snapshot = await self._goto_reviews(
+                    page,
+                    url,
+                    referer=self._last_card_url,
+                    page_no=1,
+                )
+                await self._save_cookies(page)
+                self._update_totals(snapshot)
+                return self.last_total_count
+            finally:
+                await self._save_cookies(page)
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     async def _iter_with_browser(
         self,
@@ -483,9 +640,11 @@ class YandexBrowserTransport:
 
             try:
                 canonical = await self._warmup(page, card_path)
+                self._set_current_product(canonical)
 
                 seen: set[str] = state["seen"]
                 page_no: int = state["page_no"]
+                dup_pages: int = state.get("dup_pages", 0)
                 first_dump_done = state.get("first_dump_done", False)
                 # Cards of page N-1 held back until page N is read:
                 # the JSON-LD block paginates independently of the
@@ -547,58 +706,86 @@ class YandexBrowserTransport:
                     # them.
                     await self._save_cookies(page)
 
-                    # Within one page: read initial cards, then
-                    # click "Show more" buttons to expand the list.
-                    # NO infinite scrolling — only targeted clicks
-                    # for review expansion and pagination.
+                    # Within one page: read the initial cards, then
+                    # EXPAND the list — Show-More clicks AND
+                    # realistic downward scrolls (wheel events wake
+                    # the intersection-observer lazy loads; one
+                    # evaluate read per round absorbs whatever
+                    # arrived). The loop runs while cards keep
+                    # ARRIVING; re-reads are free because
+                    # _absorb_new_cards drops every card already
+                    # claimed by an earlier round or page (the
+                    # per-card seen-key dedup).
                     page_cards: list[dict[str, Any]] = []
-                    
+
                     if not first_dump_done:
+                        # The healthy snapshot skips page.content()
+                        # (see _read_cards) — fetch it only for the
+                        # one-time debug dump.
+                        await self._fill_html(page, snapshot)
                         self._dump_html(
                             "reviews_page", snapshot["html"],
                         )
                         first_dump_done = True
                     self._update_totals(snapshot)
 
-                    # Initial read
-                    fresh = [
-                        card
-                        for card in snapshot["cards"]
-                        if self._card_key(card) not in seen
-                    ]
-                    for card in fresh:
-                        seen.add(self._card_key(card))
-                    page_cards.extend(fresh)
+                    # Initial read: absorb the not-yet-seen cards.
+                    self._absorb_new_cards(
+                        snapshot.get("cards") or [],
+                        seen,
+                        page_cards,
+                    )
 
-                    # Click "Show more" buttons to expand reviews
-                    # on this page (up to scroll_max_idle_rounds attempts)
-                    show_more_rounds = 0
-                    for _round in range(
-                        max(1, self.scroll_max_idle_rounds - 1),
+                    # Expansion rounds: a Show-More click when the
+                    # AB variant paginates with a button, otherwise
+                    # 1-3 realistic scroll strides (the first round
+                    # takes one stride — on a page with no lazy
+                    # loading it just checks the bottom and stops).
+                    # A page with ZERO cards has nothing to expand —
+                    # the empty-page check below ends the walk.
+                    idle_rounds = 0
+                    rounds = 0
+                    idle_limit = max(1, self.scroll_max_idle_rounds)
+                    while (
+                        snapshot.get("cards")
+                        and idle_rounds < idle_limit
+                        and rounds < _EXPAND_ROUNDS_HARD_CAP
                     ):
-                        # Try clicking "Show more" button first
+                        rounds += 1
                         clicked = await self._click_show_more(page)
                         if clicked:
-                            show_more_rounds += 1
                             await page.wait_for_timeout(
                                 random.randint(800, 1500)
                             )
-                            snapshot = await self._read_cards(page)
-                            
-                            fresh = [
-                                card
-                                for card in snapshot["cards"]
-                                if self._card_key(card) not in seen
-                            ]
-                            for card in fresh:
-                                seen.add(self._card_key(card))
-                            page_cards.extend(fresh)
-                            
-                            if not fresh:
-                                # Button clicked but no new cards - no more "Show more" on this page
-                                break
                         else:
-                            # No "Show more" button found - done expanding this page
+                            strides = (
+                                1 if rounds == 1
+                                else random.randint(2, 3)
+                            )
+                            for _stride in range(strides):
+                                await self._scroll_once(page)
+                        snapshot = await self._read_cards(page)
+                        fresh = self._absorb_new_cards(
+                            snapshot.get("cards") or [],
+                            seen,
+                            page_cards,
+                        )
+                        if fresh:
+                            # Cards are still arriving — keep
+                            # expanding this page.
+                            idle_rounds = 0
+                            continue
+                        if clicked:
+                            # The button no longer expands anything
+                            # — no more Show-More on this page.
+                            break
+                        idle_rounds += 1
+                        if (
+                            snapshot.get("scroll_bottom_gap") or 0
+                        ) <= _BOTTOM_GAP_EPSILON_PX:
+                            # At the document bottom with nothing
+                            # new arriving: nothing left to
+                            # lazy-load — skip the idle budget.
                             break
 
                     # Accumulate this page's LD ratings, then let
@@ -608,12 +795,26 @@ class YandexBrowserTransport:
                         snapshot.get("ld_reviews") or [],
                     )
 
-                    # Check if there are ANY cards on the page (regardless of whether they're new)
+                    # Check if there are ANY cards on the page
+                    # (regardless of whether they're new)
                     total_cards_on_page = len(snapshot.get("cards") or [])
-                    
-                    # Stop only if the page has NO cards at all (empty page = end of list)
+
+                    # Stop when the page has NO cards at all (empty
+                    # page = end of list) OR when dup_pages_stop pages
+                    # in a row added zero new cards: past the last
+                    # page Yandex re-serves old ground instead of an
+                    # empty page, so without the streak counter the
+                    # walk grinds through duplicate pages forever.
                     if total_cards_on_page == 0:
                         print(f"Я.Маркет: страница {page_no} пуста, конец списка")
+                        # Debug-first: the walk-ending empty page is
+                        # worth a postmortem dump (the healthy read
+                        # skipped page.content()).
+                        await self._fill_html(page, snapshot)
+                        self._dump_html(
+                            f"empty_page_{page_no}",
+                            snapshot["html"],
+                        )
                         if pending:
                             self._apply_rating_store(
                                 pending, rating_store,
@@ -622,14 +823,118 @@ class YandexBrowserTransport:
                             yield pending
                             state["pending"] = []
                         return
-                    
-                    # If we have cards but no NEW cards, still continue to next page
-                    # (they might be duplicates, but next page might have new ones)
-                    if not page_cards and total_cards_on_page > 0:
-                        print(
-                            f"Я.Маркет: страница {page_no} содержит {total_cards_on_page} "
-                            f"отзывов, но все уже собраны (дубликаты), продолжаем"
-                        )
+
+                    if page_cards:
+                        dup_pages = 0
+                    else:
+                        dup_pages += 1
+                        # Total-aware tolerance: while the counter
+                        # says reviews remain, extend the dupe
+                        # budget enough to walk over the preloaded
+                        # / re-served windows (capped — see
+                        # _DUP_PAGES_MAX_EXTENSION).
+                        total = self.last_total_count
+                        if total and len(seen) < total:
+                            remaining_pages = -(
+                                -(
+                                    total - len(seen)
+                                ) // _CARDS_PER_PAGE
+                            )
+                            effective_stop = (
+                                self.dup_pages_stop
+                                + min(
+                                    remaining_pages,
+                                    _DUP_PAGES_MAX_EXTENSION,
+                                )
+                            )
+                        else:
+                            effective_stop = self.dup_pages_stop
+                        if (
+                            self.dup_pages_stop > 0
+                            and dup_pages >= effective_stop
+                        ):
+                            verdict = (
+                                f"; по счётчику сайта "
+                                f"{len(seen)}/{total} — остаток, "
+                                f"вероятно, безтекстовые оценки "
+                                f"либо пейджер больше не отдаёт"
+                                if total and len(seen) < total
+                                else ""
+                            )
+                            print(
+                                f"Я.Маркет: {dup_pages} страниц подряд "
+                                f"без новых отзывов (последняя — "
+                                f"{page_no}) — конец списка; всего "
+                                f"уникальных карточек: {len(seen)}"
+                                f"{verdict}"
+                            )
+                            if pending:
+                                self._apply_rating_store(
+                                    pending, rating_store,
+                                )
+                                pacer.record_success()
+                                yield pending
+                                state["pending"] = []
+                            return
+                        if dup_pages == 1:
+                            # One line per streak, not per page —
+                            # the old per-page spam is what made the
+                            # run look stuck.
+                            if self.dup_pages_stop > 0 and total:
+                                if len(seen) < total:
+                                    print(
+                                        f"Я.Маркет: страница "
+                                        f"{page_no}: "
+                                        f"{total_cards_on_page} "
+                                        f"отзывов, все уже собраны; "
+                                        f"по счётчику сайта "
+                                        f"{len(seen)}/{total} — "
+                                        f"иду дальше, лимит "
+                                        f"{effective_stop} таких "
+                                        f"страниц подряд"
+                                    )
+                                else:
+                                    print(
+                                        f"Я.Маркет: страница "
+                                        f"{page_no}: "
+                                        f"{total_cards_on_page} "
+                                        f"отзывов, все уже собраны "
+                                        f"(счётчик сайта "
+                                        f"{len(seen)}/{total}); "
+                                        f"остановка после "
+                                        f"{self.dup_pages_stop} "
+                                        f"таких страниц подряд"
+                                    )
+                            elif self.dup_pages_stop > 0:
+                                print(
+                                    f"Я.Маркет: страница {page_no}: "
+                                    f"{total_cards_on_page} отзывов, "
+                                    f"все уже собраны; остановка после "
+                                    f"{self.dup_pages_stop} таких "
+                                    f"страниц подряд"
+                                )
+                            else:
+                                print(
+                                    f"Я.Маркет: страница {page_no}: "
+                                    f"{total_cards_on_page} отзывов, "
+                                    f"все уже собраны (дубликаты), "
+                                    f"продолжаем"
+                                )
+                        elif (
+                            dup_pages % 5 == 0
+                            and self.dup_pages_stop > 0
+                        ):
+                            # Progress line on long (extended)
+                            # streaks so the run never looks stuck.
+                            counter = (
+                                f"/{total}" if total else ""
+                            )
+                            print(
+                                f"Я.Маркет: страница {page_no}: "
+                                f"дубликаты ({dup_pages} подряд); "
+                                f"собрано {len(seen)}{counter}, "
+                                f"лимит {effective_stop}"
+                            )
 
                     if pending:
                         self._apply_rating_store(
@@ -642,6 +947,7 @@ class YandexBrowserTransport:
                     state["pending"] = pending
                     page_no += 1
                     state["page_no"] = page_no
+                    state["dup_pages"] = dup_pages
                     state["first_dump_done"] = first_dump_done
                     await pacer.wait()
             finally:
@@ -813,6 +1119,13 @@ class YandexBrowserTransport:
             kind = self._classify(
                 page_url, snapshot,
             )
+            if kind != _PAGE_HEALTHY and not snapshot.get("html"):
+                # A page without SSR data can only be told apart
+                # (captcha shell vs 404 vs soft-block) by its
+                # markup — ONLY challenged pages pay for the
+                # multi-megabyte page.content() serialization.
+                await self._fill_html(page, snapshot)
+                kind = self._classify(page_url, snapshot)
 
             if kind == _PAGE_HEALTHY:
                 return snapshot
@@ -966,6 +1279,9 @@ class YandexBrowserTransport:
                 except Exception:
                     pass
                 await link.click(timeout=3_000)
+                # A pager link occasionally rides a target=_blank
+                # wrapper — close any tab it popped.
+                await self._close_stray_tabs(page)
                 deadline = (
                     asyncio.get_event_loop().time()
                     + timeout_ms / 1000
@@ -1191,17 +1507,33 @@ class YandexBrowserTransport:
     # Card reading and scroll
     # ------------------------------------------------------------------
 
-    async def _read_cards(self, page: Any) -> dict[str, Any]:
+    async def _read_cards(
+        self,
+        page: Any,
+        *,
+        include_html: bool = False,
+    ) -> dict[str, Any]:
         """Single evaluate round-trip + JSON-LD rating merge +
-        own/feed card split."""
+        own/feed card split.
+
+        ``include_html=False`` (the default) skips ``page.content()``:
+        serializing a multi-megabyte healthy page just to classify
+        it as healthy is pure overhead on the hot path (the same
+        lesson as Ozon's one-evaluate-per-page read). The snapshot
+        then carries ``html=None``; callers that need the markup
+        (challenged-page classification, debug dumps) fill it via
+        :meth:`_fill_html`.
+        """
         try:
             raw = await page.evaluate(_READ_CARDS_JS)
         except Exception:
             raw = None
-        try:
-            html = await page.content()
-        except Exception:
-            html = ""
+        html = ""
+        if include_html:
+            try:
+                html = await page.content()
+            except Exception:
+                html = ""
 
         if not isinstance(raw, dict):
             raw = {}
@@ -1218,7 +1550,11 @@ class YandexBrowserTransport:
         ]
 
         self._merge_ld_ratings(cards, ld_reviews)
-        cards = self._filter_own_cards(cards, ld_reviews)
+        cards = self._filter_own_cards(
+            cards,
+            ld_reviews,
+            getattr(self, "_current_product_id", None),
+        )
 
         if not cards and ld_reviews:
             # Layout-drift fallback: the DOM selectors found
@@ -1243,9 +1579,47 @@ class YandexBrowserTransport:
             "ld_reviews": ld_reviews,
             "total_count": raw.get("total_count"),
             "average_rating": raw.get("average_rating"),
+            "product_name": raw.get("product_name"),
             "body_len": raw.get("body_len") or len(html),
-            "html": html,
+            "scroll_bottom_gap": raw.get("scroll_bottom_gap"),
+            "html": html or None,
         }
+
+    async def _fill_html(
+        self,
+        page: Any,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Fetch the page markup into a snapshot that was read
+        without it (:meth:`_read_cards` skips ``page.content()`` on
+        the hot path — only challenged pages and debug dumps pay
+        for the serialization)."""
+        try:
+            html = await page.content()
+        except Exception:
+            html = ""
+        snapshot["html"] = html or None
+        if html and not snapshot.get("body_len"):
+            snapshot["body_len"] = len(html)
+
+    @staticmethod
+    def _absorb_new_cards(
+        cards: list[dict[str, Any]],
+        seen: set[str],
+        sink: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Append the not-yet-seen ``cards`` to ``sink``, claim
+        their keys in ``seen`` (ONE key computation per card) and
+        return the freshly absorbed ones."""
+        fresh: list[dict[str, Any]] = []
+        for card in cards:
+            key = YandexBrowserTransport._card_key(card)
+            if key in seen:
+                continue
+            seen.add(key)
+            fresh.append(card)
+        sink.extend(fresh)
+        return fresh
 
     @staticmethod
     def _merge_rating_store(
@@ -1321,14 +1695,31 @@ class YandexBrowserTransport:
             if key in ratings:
                 card["rating"] = ratings[key]
 
+    def _set_current_product(self, canonical: str) -> None:
+        """Remember the walk's product id (from the canonical card
+        path) — the reference for the offer-id feed filter."""
+        match = _CANONICAL_CARD_ID_RE.match(canonical or "")
+        self._current_product_id = (
+            match.group(1) if match else None
+        )
+
     @staticmethod
     def _filter_own_cards(
         cards: list[dict[str, Any]],
         ld_reviews: list[dict[str, Any]],
+        product_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Drop cross-product feed cards and seller responses.
 
-        A card is OWN when:
+        The PRIMARY discriminator (measured 2026-09-19) is the
+        offer-info chip's ``oskuId`` (``data-zone-data`` on
+        ``ugc-element-offer-info``): own cards carry the open
+        product's id, cross-product FEED cards a foreign one — the
+        scroll expansion reaches the feed section, and without this
+        rule a run collected 504 cards for a 250-review product.
+        Card without a readable oskuId fall back to the legacy
+        heuristics:
+
         1. It matches a JSON-LD review by (author, ISO-date) — JSON-LD
            describes ONLY the open product's reviews
         2. OR it has UUID (DOM review ID) — these are always product-specific
@@ -1336,10 +1727,6 @@ class YandexBrowserTransport:
         4. OR it has author + any date string — real review pattern
 
         EXCLUDE seller responses (official answers from the store).
-        
-        CRITICAL FIX: Accept reviews by default unless clearly not own,
-        because JSON-LD is incomplete (only first 10-20 reviews) and
-        dates without year ("26 июня") don't parse to ISO.
         """
         from infrastructure.marketplaces.yandex import (
             parse_yandex_date,
@@ -1356,12 +1743,22 @@ class YandexBrowserTransport:
             # Skip seller responses / official answers
             author = str(card.get("author") or "").lower()
             if any(marker in author for marker in (
-                "официальный ответ", "ответ продавца", 
+                "официальный ответ", "ответ продавца",
                 "ответ магазина", "представитель",
             )):
                 continue
 
-            # Match by JSON-LD key (strongest signal)
+            # Offer-id rule: a readable oskuId is authoritative —
+            # the open product's id means OWN, any other id means
+            # a cross-product feed card.
+            offer_id = str(card.get("offer_id") or "")
+            if offer_id and product_id:
+                if offer_id != product_id:
+                    continue
+                own.append(card)
+                continue
+
+            # Match by JSON-LD key (strongest legacy signal)
             created = parse_yandex_date(card.get("date"))
             iso = created.date().isoformat() if created else ""
             key = f"{card.get('author') or ''}|{iso}"
@@ -1466,17 +1863,42 @@ class YandexBrowserTransport:
 
     async def _click_show_more(self, page: Any) -> bool:
         """Some AB variants paginate with a button instead of
-        lazy-append; click it if present."""
+        lazy-append; click it if present.
+
+        A click sometimes pops a STRAY TAB (an ad or a
+        ``target=_blank`` wrapper riding the button) — they are
+        closed right away (see :meth:`_close_stray_tabs`) so the
+        visible window keeps only the walk page."""
         for selector in _SHOW_MORE_SELECTORS:
             try:
                 locator = page.locator(selector)
                 if await locator.count():
                     await locator.first.click()
                     await page.wait_for_timeout(800)
+                    await self._close_stray_tabs(page)
                     return True
             except Exception:
                 continue
         return False
+
+    async def _close_stray_tabs(self, page: Any) -> None:
+        """Close every tab of the context EXCEPT the walk page.
+
+        Show-More / pager clicks occasionally open extra tabs (ads,
+        ``target=_blank`` wrappers); they clutter the visible
+        browser window (the human solving a captcha sees them) and
+        waste resources. Best-effort: any failure is ignored."""
+        try:
+            tabs = list(page.context.pages)
+        except Exception:
+            return
+        for tab in tabs:
+            if tab is page:
+                continue
+            try:
+                await tab.close()
+            except Exception:
+                pass
 
     @staticmethod
     def _card_key(card: dict[str, Any]) -> str:

@@ -841,6 +841,60 @@ def _build_single_proxy(
     return proxy
 
 
+async def _probe_yandex_page_count(
+    args: argparse.Namespace,
+    *,
+    parallel: int,
+    proxy: dict[str, str] | None,
+    cookies: list[dict[str, Any]] | None,
+    debug_dir: str,
+) -> int | None:
+    """Measure the product's review counter with ONE probe session
+    and translate it into a page-range size for ``--parallel-
+    sessions`` (so ``--max-pages`` is optional for Yandex.Market).
+
+    Returns ``None`` when the counter cannot be read (a captcha
+    that outlives the ladder, a page without JSON-LD counters) —
+    the caller then downgrades to a single session instead of
+    guessing a range."""
+    from infrastructure.transports.yandex_browser import (
+        YandexBrowserTransport,
+    )
+    from marketplace_maps_parser.parallel_sessions import (
+        estimate_review_pages,
+    )
+
+    print("Я.Маркет: замеряю счётчик отзывов перед сессиями…")
+    probe = YandexBrowserTransport(
+        timeout_ms=args.timeout_ms,
+        settle_ms=args.settle_ms,
+        debug_dir=debug_dir,
+        proxy=proxy,
+        # NOT the pool on purpose: the probe must not consume a
+        # proxy pinned for one of the sessions.
+        cookies=cookies,
+        humanize=not args.no_humanize,
+        cookies_path=(args.save_cookies or "yandex_cookies.json"),
+    )
+    try:
+        total = await probe.fetch_total_count(args.url)
+    except Exception as exc:
+        print(f"[warning] Я.Маркет: замер не удался: {exc}")
+        return None
+    if not total:
+        print(
+            "[warning] Я.Маркет: счётчик отзывов на странице "
+            "не найден"
+        )
+        return None
+    pages = estimate_review_pages(total, parallel)
+    print(
+        f"Я.Маркет: счётчик отзывов: {total} ≈ {pages} страниц "
+        f"(по ~10 отзывов на страницу + запас на сессию)"
+    )
+    return pages
+
+
 async def _collect_yandex(args: argparse.Namespace) -> int:
     """Collect Yandex.Market reviews into the output JSONL."""
     from infrastructure.marketplaces.yandex import (
@@ -882,23 +936,38 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
     parallel = max(
         1, getattr(args, "parallel_sessions", 1) or 1,
     )
+    pages_total: int | None = args.max_pages
+    if parallel > 1 and not pages_total:
+        # Probe the review counter FIRST (one quick session), then
+        # size the parallel ranges from it — --max-pages becomes
+        # optional. A failed probe downgrades to a single session
+        # (its walk handles the captcha ladder + proxy rotation
+        # itself) instead of guessing a range.
+        pages_total = await _probe_yandex_page_count(
+            args,
+            parallel=parallel,
+            proxy=proxy,
+            cookies=cookies,
+            debug_dir=debug_dir,
+        )
+        if not pages_total:
+            print(
+                "[warning] Я.Маркет: размер диапазона страниц "
+                "неизвестен — запускаю одну сессию без "
+                "--parallel-sessions"
+            )
+            parallel = 1
     if parallel > 1:
         # In-process page-range sessions (the wall-time multiplier
         # measured for Ozon child processes applies to independent
         # browser launches too): one stealth browser per disjoint
         # [start, start+max_pages) chunk, one pinned proxy each.
-        if not args.max_pages:
-            raise SystemExit(
-                "--parallel-sessions (yandex) требует --max-pages: "
-                "общее число страниц (~отзывы/10) делится между "
-                "сессиями"
-            )
         from marketplace_maps_parser.parallel_sessions import (
             split_page_range,
         )
 
         chunks = split_page_range(
-            args.start_page or 1, args.max_pages, parallel,
+            args.start_page or 1, pages_total, parallel,
         )
         session_proxies = await _draw_session_proxies(
             proxy_pool, len(chunks),
@@ -933,6 +1002,9 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
                 ),
                 start_page=start,
                 max_pages=size,
+                dup_pages_stop=getattr(
+                    args, "dup_pages_stop", 3,
+                ),
             )
             session_adapters.append(
                 YandexMarketAdapter(
@@ -958,6 +1030,7 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
             proxy_pool=proxy_pool,
             cookies=cookies,
             humanize=not args.no_humanize,
+            dup_pages_stop=getattr(args, "dup_pages_stop", 3),
             # NOTE: block_assets stays at the transport default
             # (False) — a real browser loads images/fonts and
             # SmartCaptcha weighs that; --no-block-assets is an

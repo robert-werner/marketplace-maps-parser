@@ -15,15 +15,14 @@ the per-marketplace collectors live in
 here for backward compatibility (tests import ``parse_args`` and
 ``_load_existing_reviews`` from this module).
 
-Usage::
+Usage (--marketplace is optional when --url is given — it is
+detected from the URL's domain + path)::
 
     python -m marketplace_maps_parser \
-        --marketplace ozon \
         --url "https://www.ozon.ru/product/..." \
         --output ozon_reviews.jsonl
 
     python -m marketplace_maps_parser \
-        --marketplace yandex \
         --url "https://market.yandex.ru/card/<slug>/<id>" \
         --output yandex_reviews.jsonl \
         --cookies yandex_cookies.json

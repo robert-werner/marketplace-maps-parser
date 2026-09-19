@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 from urllib.parse import urlparse
 
 WB_URL_RE = re.compile(
@@ -177,8 +178,8 @@ def extract_2gis_branch_id(url: str) -> int:
 def extract_2gis_firm_path(url: str) -> str:
     """/<city>/firm/<branch_id> — canonical firm path.
 
-    Strips the /tab/reviews sub-route (and any query) so callers
-    can append their own sub-routes.
+    Strips the /tab/reviews sub-route (and any query) so callers can
+    append their own sub-routes.
     """
     parsed = urlparse(url)
 
@@ -192,3 +193,57 @@ def extract_2gis_firm_path(url: str) -> str:
 
     city = parsed.path.strip("/").split("/")[0]
     return f"/{city}/firm/{match.group('branch_id')}"
+
+
+# marketplace name -> (domain roots, the full URL validator).
+# The validator is the marketplace's own extractor (domain
+# whitelist + path regex), so a look-alike URL of a foreign
+# service is never accepted: the host must belong to the source
+# AND the path must parse.
+_MARKETPLACE_PROBES: tuple[tuple[str, tuple[str, ...], Any], ...] = (
+    (
+        "yandex",
+        ("market.yandex.ru",),
+        extract_yandex_market_product_id,
+    ),
+    (
+        "yandex_maps",
+        ("yandex.ru", "maps.yandex.ru"),
+        extract_yandex_maps_org_id,
+    ),
+    ("ozon", ("ozon.ru",), extract_ozon_product_id),
+    ("2gis", ("2gis.ru",), extract_2gis_branch_id),
+    ("wildberries", ("wildberries.ru",), extract_nm_id),
+)
+
+
+def detect_marketplace(url: str) -> str | None:
+    """Determine the marketplace from a product/organization URL.
+
+    Returns the CLI name (``"ozon"`` / ``"wildberries"`` /
+    ``"yandex"`` / ``"yandex_maps"`` / ``"2gis"``) or ``None``
+    when the URL belongs to no known source. ``www.``/``m.``
+    subdomains are accepted; the path is validated by the source's
+    own extractor, so ``market.yandex.ru`` never misreads as
+    Yandex.Maps and vice versa::
+
+        detect_marketplace("https://market.yandex.ru/card/x/1")
+        'yandex'
+        detect_marketplace("https://yandex.ru/maps/org/x/2/")
+        'yandex_maps'
+    """
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    for name, domains, probe in _MARKETPLACE_PROBES:
+        if not any(
+            host == domain or host.endswith(f".{domain}")
+            for domain in domains
+        ):
+            continue
+        try:
+            probe(url)
+        except ValueError:
+            continue
+        return name
+    return None

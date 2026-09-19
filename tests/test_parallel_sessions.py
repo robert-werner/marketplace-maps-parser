@@ -13,6 +13,7 @@ import pytest
 from infrastructure.transports.public_page import PublicPageTransport
 from marketplace_maps_parser.parallel_sessions import (
     _product_child_command,
+    estimate_review_pages,
     merge_jsonl_dedup,
     read_products_file,
     run_products_parallel,
@@ -46,6 +47,28 @@ def test_split_invalid():
         split_page_range(1, 10, 0)
     with pytest.raises(ValueError):
         split_page_range(1, 0, 2)
+
+
+# ---------------------------------------------------------------------------
+# estimate_review_pages
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_pages_ceil_plus_session_margin():
+    # 47 отзывов ~ 5 страниц, +1 запасная на каждую из 3 сессий.
+    assert estimate_review_pages(47, 3) == 8
+    # Ровные границы: без запаса 3 страницы, с запасом 5.
+    assert estimate_review_pages(30, 2) == 5
+
+
+def test_estimate_pages_zero_and_negative():
+    assert estimate_review_pages(0, 3) == 0
+    assert estimate_review_pages(-5, 2) == 0
+
+
+def test_estimate_pages_margin_never_below_one_per_session():
+    # Даже 1 отзыв на 4 сессии: 1 страница + 4 запасных.
+    assert estimate_review_pages(1, 4) == 5
 
 
 # ---------------------------------------------------------------------------

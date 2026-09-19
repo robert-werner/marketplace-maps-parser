@@ -45,6 +45,9 @@ class _FakeMouse:
     def __init__(self, page: "_FakePage") -> None:
         self._page = page
 
+    async def move(self, x: int, y: int) -> None:
+        return None
+
     async def wheel(self, x: int, y: int) -> None:
         self._page.wheel_events.append(
             (self._page.current_page, y),
@@ -130,6 +133,14 @@ class _FakePage:
             f"{YANDEX_MARKET_BASE}/card/smartfon-x/12345678"
             f"/reviews?page={max(self.current_page, 1)}"
         )
+
+    @property
+    def viewport_size(self) -> dict[str, int]:
+        return {"width": 1280, "height": 720}
+
+    @property
+    def frames(self) -> list[Any]:
+        return []
 
     @property
     def mouse(self) -> _FakeMouse:
@@ -483,4 +494,78 @@ def test_warmup_reads_the_card_first(
         if page_no == 0
     ]
     assert card_scrolls  # the warmup scrolled the CARD page
-    assert all(350 <= d <= 1100 for d in card_scrolls)
+    # Forward reading scrolls in the humane envelope; the reading
+    # simulation also throws in occasional short REVERSE nudges
+    # (a user scrolling back up a line — an antibot signal
+    # _simulate_reading_behavior adds on purpose).
+    forward = [d for d in card_scrolls if d > 0]
+    reverse = [d for d in card_scrolls if d < 0]
+    assert forward
+    assert all(350 <= d <= 1100 for d in forward)
+    assert all(-200 <= d < 0 for d in reverse)
+
+
+# ----------------------------------------------------------------------
+# The counter probe that sizes the parallel page budget
+# ----------------------------------------------------------------------
+
+
+def _probe_args() -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        url=PRODUCT_URL,
+        timeout_ms=1_000,
+        settle_ms=0,
+        no_humanize=True,
+        save_cookies=None,
+    )
+
+
+async def test_probe_sizes_page_budget_from_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """47 reviews ~ 5 pages + 1 margin page per session (3) = 8."""
+    from marketplace_maps_parser import collectors
+
+    async def fake_probe(self: Any, url: str) -> int:
+        return 47
+
+    monkeypatch.setattr(
+        YandexBrowserTransport, "fetch_total_count", fake_probe,
+    )
+
+    pages = await collectors._probe_yandex_page_count(
+        _probe_args(),
+        parallel=3,
+        proxy=None,
+        cookies=None,
+        debug_dir="debug_test_probe",
+    )
+    assert pages == 8
+
+
+async def test_probe_failure_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A probe killed by a captcha must return None so the caller
+    downgrades to a single session instead of guessing a range."""
+    from marketplace_maps_parser import collectors
+
+    async def raising_probe(self: Any, url: str) -> int:
+        raise YandexCaptchaError("капча пережила лестницу")
+
+    monkeypatch.setattr(
+        YandexBrowserTransport,
+        "fetch_total_count",
+        raising_probe,
+    )
+
+    pages = await collectors._probe_yandex_page_count(
+        _probe_args(),
+        parallel=2,
+        proxy=None,
+        cookies=None,
+        debug_dir="debug_test_probe",
+    )
+    assert pages is None

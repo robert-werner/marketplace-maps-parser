@@ -86,12 +86,13 @@ Rules:
 
 ## Usage
 
+`--marketplace` is OPTIONAL when `--url` is given — the source is detected from the URL's domain + path (`market.yandex.ru` → yandex, `yandex.ru/maps` → yandex_maps, `ozon.ru` → ozon, `wildberries.ru` → wildberries, `2gis.ru` → 2gis). Pass it explicitly to override; `--products-file` still requires `--marketplace ozon`.
+
 ### CLI
 
 ```bash
 # Ozon reviews via auto strategy (DEFAULT — pagination + scroll fallback)
 uv run python -m marketplace_maps_parser \
-  --marketplace ozon \
   --url "https://www.ozon.ru/product/ip-telefon-yealink-sip-t30-voip-ofisnyy-680123890" \
   --output ozon_reviews.jsonl
 
@@ -363,6 +364,11 @@ Streams reviews from the public reviews page (`/card/<slug>/<id>/reviews?page=N`
 - **Three page states, classified by SSR data** — healthy (JSON-LD reviews / aggregate / DOM cards present), captcha (redirect markers OR the INLINE SmartCaptcha shell: a ~16 KB page with title «Вы не робот?», `captcha_smart` assets and a POST form to `/checkcaptcha` — served at the reviews URL itself, no redirect), and markerless soft-block (a big page with widgets but no review SSR data). Captcha markers are only trusted on pages WITHOUT SSR data — a healthy megabyte page legitimately mentions SmartCaptcha in its own scripts.
 - **Captcha escalation ladder** — (a) auto-wait ~6 s (the inline shell often resolves itself for a trusted fingerprint); (b) programmatic checkbox click (humanize=True drives a realistic cursor trajectory); (c) manual solving in the visible browser window (headed by default; the transport prints a prompt and polls up to 180 s, cookies are checkpointed right after); (d) cooldown 5 s → 30 s + `AdaptivePacer.record_block`. A captcha that survives it all restarts the browser on the NEXT proxy from `--proxy-list` with a fresh cookie jar (state — seen cards / page number — carries over).
 - **LD-rating lookahead** — the JSON-LD block paginates INDEPENDENTLY of the DOM (page 2's LD carries the ratings for four page-1 cards), so each batch is held back until the next page is read and its ratings are merged in. Live check: 10/10 reviews with ratings, 0 with labels glued into the text.
+- **In-page expansion: Show-More + scroll** — the list on each page is expanded by clicking «Показать ещё» when the AB variant paginates with a button, and by realistic wheel strides otherwise (intersection-observer lazy loads wake on scroll; 1 stride probes, 2-3 travel). One `page.evaluate` read per round absorbs whatever arrived, deduplicated by the per-card `seen` key (`uuid` → composite author|date|rating|text) — re-reading the loaded list is free. The loop ends after `scroll_max_idle_rounds` (default 5) rounds with zero new cards, EARLY when the wheel sits at the document bottom with nothing arriving, and never runs on an empty page.
+- **End of list = duplicate streak (total-aware)** — past the last page Yandex re-serves already-collected ground instead of an empty page, so the walk stops after `--dup-pages-stop` (default 3) consecutive pages that add ZERO new cards. TOTAL-AWARE: while the JSON-LD counter says reviews remain, the budget extends by the remaining pages (measured 2026-09-19: a run stopped at 110 of 250 — the scroll expansion had PRELOADED the next windows, fresh cards sat beyond the all-dup streak), capped at 25 extra pages because the counter also counts textless rating-only «оценки» the list never shows. `0` restores the old walk-to-empty-page behaviour.
+- **Own vs feed cards (oskuId)** — the reviews page mixes the product's own reviews with a cross-product feed, and the scroll expansion REACHES the feed. The `ugc-element-offer-info` chip's `data-zone-data.oskuId` is the discriminator: the open product's id → own, a foreign id → dropped; chip-less cards fall back to the legacy heuristics (JSON-LD (author, date) match, uuid, body, author+date). On a live 507-card walk the filter caught ZERO foreign cards — it stays as a guard.
+- **`collected > total_count` is normal (counter scope)** — measured 2026-09-19: the JSON-LD `aggregateRating.reviewCount` (250, sku `5754166185`) counts a NARROWER scope than the walked list — a stable corpus of 507 own-osku, on-topic cards (501/504 overlap across independent runs, live growth +3–6/day). The list paginates the wider MODEL corpus (all offers of the product) while the counter appears scoped to the current offer/sku. Do not treat `collected > total_count` as a leak; the total-aware dup tolerance simply falls back to its base budget once collected passes the counter.
+- **Counter probe → parallel sessions** — `--parallel-sessions N` no longer requires `--max-pages`: ONE quick probe session (`fetch_total_count`) reads the JSON-LD `reviewCount` through the same captcha ladder, the page range is sized at ~10 reviews/page plus a per-session margin (overshoot past the real end is capped by the dup-streak stop), and a failed probe downgrades to a single session instead of guessing.
 - **Realistic profile** — `block_assets` is OFF by default for Yandex (a real browser loads images/fonts; SmartCaptcha weighs that), the same stealth init script as Ozon runs in every page, and the settle delay is jittered ±20 % per page.
 - Rating-only «оценки» (textless) are not exposed individually — only the aggregate counter (`last_total_count`); expect `collected < total` on every product.
 
@@ -374,6 +380,15 @@ python -m marketplace_maps_parser \
     --proxy-list proxies.txt \
     --cookies yandex_cookies.json \
     --save-cookies yandex_cookies.json
+
+# Parallel: the counter is probed first, the page range is sized
+# automatically (--max-pages optional), one proxy per session.
+python -m marketplace_maps_parser \
+    --marketplace yandex \
+    --url "https://market.yandex.ru/card/<slug>/<id>" \
+    --output yandex_reviews.jsonl \
+    --parallel-sessions 3 \
+    --proxy-list proxies.txt
 ```
 
 `--cookies` injects a logged-in/visited session (Playwright DevTools JSON or Netscape format — the same loader as Ozon); `--save-cookies` (default `yandex_cookies.json`) checkpoints the session after every healthy page, so a captcha solved once — manually or automatically — sticks for the cookie lifetime.
