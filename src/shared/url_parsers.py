@@ -13,8 +13,9 @@ OZON_ID_RE = re.compile(r"-(?P<product_id>\d+)$")
 
 # market.yandex.ru/card/<slug>/<product_id>[/reviews|/spec|...]
 # Legacy layout: market.yandex.ru/product/<slug>/<product_id>/...
+# Short format: market.yandex.ru/product/<product_id> (no slug)
 YANDEX_MARKET_CARD_RE = re.compile(
-    r"^/(?:card|product)/(?P<slug>[^/]+)/(?P<product_id>\d+)"
+    r"^/(?:card|product)/(?:(?P<slug>[^/]+)/)?(?P<product_id>\d+)"
     r"(?P<tail>/.*)?$",
 )
 

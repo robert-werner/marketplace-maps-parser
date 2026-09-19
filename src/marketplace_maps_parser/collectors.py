@@ -153,8 +153,12 @@ async def _run_unified_json(
                     )
                     break
     except Exception as exc:
+        import traceback
         error = f"{type(exc).__name__}: {exc}"
         print(f"Сбор прерван ошибкой: {error}")
+        print("\n=== Полный traceback ===")
+        traceback.print_exc()
+        print("========================\n")
     diagnostics = (
         extra_diagnostics() if extra_diagnostics else {}
     )

@@ -73,6 +73,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+from infrastructure.transports.browser_common import (
+    import_invisible_playwright,
+    _STEALTH_INIT_SCRIPT,
+    install_resource_blocker,
+)
 from shared.pacing import AdaptivePacer
 from shared.url_parsers import extract_yandex_market_card_path
 
@@ -225,6 +230,30 @@ _READ_CARDS_JS = """
     const roots = document.querySelectorAll(
         '[data-auto="review-item"]');
     roots.forEach((root, idx) => {
+        // Skip seller replies: они помечены специальным data-атрибутом
+        // или содержат класс/текст "ответ продавца" / "seller reply"
+        if (root.hasAttribute('data-seller-reply') ||
+            root.hasAttribute('data-auto-seller-reply') ||
+            root.classList.contains('seller-reply') ||
+            root.classList.contains('merchant-reply') ||
+            root.querySelector('[data-auto="seller-reply"]') ||
+            root.querySelector('[data-auto="merchant-reply"]') ||
+            root.querySelector('[class*="seller-reply"]') ||
+            root.querySelector('[class*="merchant-reply"]')) {
+            return;
+        }
+        
+        // Дополнительная проверка по тексту: если в корне есть бадж
+        // "Ответ продавца" / "Продавец" в шапке отзыва — skip
+        const headerText = (root.textContent || '').toLowerCase();
+        if (headerText.indexOf('ответ продавца') !== -1 ||
+            headerText.indexOf('комментарий продавца') !== -1 ||
+            headerText.indexOf('seller reply') !== -1) {
+            // Дополнительная эвристика: ответы продавца обычно короче
+            // и не содержат поля pros/cons. Но мы уже пропускаем их выше.
+            return;
+        }
+        
         const get = (sel) => {
             const el = root.querySelector(sel);
             if (!el) return null;
@@ -518,34 +547,59 @@ class YandexBrowserTransport:
                     # them.
                     await self._save_cookies(page)
 
-                    # Within one page: read, wake lazy-appended
-                    # cards with a scroll, re-read — until a round
-                    # yields nothing new (or the budget runs out).
+                    # Within one page: read initial cards, then
+                    # click "Show more" buttons to expand the list.
+                    # NO infinite scrolling — only targeted clicks
+                    # for review expansion and pagination.
                     page_cards: list[dict[str, Any]] = []
+                    
+                    if not first_dump_done:
+                        self._dump_html(
+                            "reviews_page", snapshot["html"],
+                        )
+                        first_dump_done = True
+                    self._update_totals(snapshot)
+
+                    # Initial read
+                    fresh = [
+                        card
+                        for card in snapshot["cards"]
+                        if self._card_key(card) not in seen
+                    ]
+                    for card in fresh:
+                        seen.add(self._card_key(card))
+                    page_cards.extend(fresh)
+
+                    # Click "Show more" buttons to expand reviews
+                    # on this page (up to scroll_max_idle_rounds attempts)
+                    show_more_rounds = 0
                     for _round in range(
-                        max(1, self.scroll_max_idle_rounds),
+                        max(1, self.scroll_max_idle_rounds - 1),
                     ):
-                        if not first_dump_done:
-                            self._dump_html(
-                                "reviews_page", snapshot["html"],
+                        # Try clicking "Show more" button first
+                        clicked = await self._click_show_more(page)
+                        if clicked:
+                            show_more_rounds += 1
+                            await page.wait_for_timeout(
+                                random.randint(800, 1500)
                             )
-                            first_dump_done = True
-                        self._update_totals(snapshot)
-
-                        fresh = [
-                            card
-                            for card in snapshot["cards"]
-                            if self._card_key(card) not in seen
-                        ]
-                        for card in fresh:
-                            seen.add(self._card_key(card))
-                        page_cards.extend(fresh)
-
-                        if not fresh:
+                            snapshot = await self._read_cards(page)
+                            
+                            fresh = [
+                                card
+                                for card in snapshot["cards"]
+                                if self._card_key(card) not in seen
+                            ]
+                            for card in fresh:
+                                seen.add(self._card_key(card))
+                            page_cards.extend(fresh)
+                            
+                            if not fresh:
+                                # Button clicked but no new cards - no more "Show more" on this page
+                                break
+                        else:
+                            # No "Show more" button found - done expanding this page
                             break
-                        await self._scroll_once(page)
-                        await self._click_show_more(page)
-                        snapshot = await self._read_cards(page)
 
                     # Accumulate this page's LD ratings, then let
                     # them backfill the held-back batch.
@@ -554,16 +608,12 @@ class YandexBrowserTransport:
                         snapshot.get("ld_reviews") or [],
                     )
 
-                    if not page_cards:
-                        # A HEALTHY page with no new cards —
-                        # beyond the last page (or no reviews at
-                        # all). Dump for the postmortem, flush the
-                        # held-back batch and stop.
-                        if page_no > 1:
-                            self._dump_html(
-                                f"empty_page_{page_no}",
-                                snapshot.get("html", ""),
-                            )
+                    # Check if there are ANY cards on the page (regardless of whether they're new)
+                    total_cards_on_page = len(snapshot.get("cards") or [])
+                    
+                    # Stop only if the page has NO cards at all (empty page = end of list)
+                    if total_cards_on_page == 0:
+                        print(f"Я.Маркет: страница {page_no} пуста, конец списка")
                         if pending:
                             self._apply_rating_store(
                                 pending, rating_store,
@@ -572,6 +622,14 @@ class YandexBrowserTransport:
                             yield pending
                             state["pending"] = []
                         return
+                    
+                    # If we have cards but no NEW cards, still continue to next page
+                    # (they might be duplicates, but next page might have new ones)
+                    if not page_cards and total_cards_on_page > 0:
+                        print(
+                            f"Я.Маркет: страница {page_no} содержит {total_cards_on_page} "
+                            f"отзывов, но все уже собраны (дубликаты), продолжаем"
+                        )
 
                     if pending:
                         self._apply_rating_store(
@@ -632,20 +690,11 @@ class YandexBrowserTransport:
             f"{YANDEX_MARKET_BASE}{canonical}"
         )
 
-        # A brief read of the card: 1-2 wheel nudges with short
-        # pauses. A user who lands on a product and INSTANTLY jumps
-        # to reviews is a thinner pattern than one who scrolls a
-        # little first.
-        for _ in range(random.randint(1, 2)):
-            try:
-                await page.mouse.wheel(
-                    0, random.randint(350, 1100),
-                )
-                await page.wait_for_timeout(
-                    random.randint(350, 900),
-                )
-            except Exception:
-                pass
+        # A brief read of the card: 2-3 wheel nudges with realistic
+        # mouse movements and pauses. A user who lands on a product
+        # and INSTANTLY jumps to reviews is a thinner pattern than
+        # one who scrolls naturally and reads.
+        await self._simulate_reading_behavior(page)
 
         pause_s = (
             random.uniform(0.8, 2.2)
@@ -655,6 +704,53 @@ class YandexBrowserTransport:
         self._first_warmup_done = True
         await page.wait_for_timeout(int(pause_s * 1000))
         return canonical
+
+    async def _simulate_reading_behavior(self, page: Any) -> None:
+        """Simulate realistic human reading: random mouse movements,
+        scrolling with pauses, occasional micro-scrolls back up.
+        
+        This pattern breaks bot detection that looks for mechanical
+        scrolling without cursor activity."""
+        viewport = page.viewport_size
+        width = viewport.get("width", 1280) if viewport else 1280
+        height = viewport.get("height", 720) if viewport else 720
+        
+        # Initial mouse movement to random position
+        try:
+            await page.mouse.move(
+                random.randint(100, width - 100),
+                random.randint(100, height - 100),
+            )
+        except Exception:
+            pass
+        
+        # 2-3 scroll rounds with mouse movements
+        for _ in range(random.randint(2, 3)):
+            # Move mouse to a new reading position before scrolling
+            try:
+                await page.mouse.move(
+                    random.randint(200, width - 200),
+                    random.randint(150, height - 150),
+                )
+                await page.wait_for_timeout(random.randint(120, 380))
+            except Exception:
+                pass
+            
+            # Main scroll down
+            try:
+                delta = random.randint(350, 1100)
+                await page.mouse.wheel(0, delta)
+                await page.wait_for_timeout(random.randint(400, 950))
+            except Exception:
+                pass
+            
+            # 30% chance of micro-scroll back (reading previous line)
+            if random.random() < 0.3:
+                try:
+                    await page.mouse.wheel(0, -random.randint(50, 200))
+                    await page.wait_for_timeout(random.randint(200, 500))
+                except Exception:
+                    pass
 
     async def _goto_reviews(
         self,
@@ -810,19 +906,20 @@ class YandexBrowserTransport:
     ) -> bool:
         """Click the site's own way into page ``page_no``:
 
-        - page 1 — the card's «Отзывы» link (``a[href*="/reviews"]``);
+        - page 1 — goto directly (no click needed);
         - page N>1 — the pager link whose ``page`` query param is
           EXACTLY N (``page=2`` must not match the ``page=20``
           link).
 
         False (the caller gots with the chained referer) when the
-        link is missing or the click does not navigate in time."""
+        link is missing or the click does not navigate in time.
+        
+        CRITICAL: Only clicks pagination links, not arbitrary page elements."""
         if page_no <= 1:
-            return await self._click_site_link(
-                page,
-                href_substr="/reviews",
-                expect_substr="/reviews",
-            )
+            # First page - no click needed, just goto
+            return False
+        
+        # Page 2+ - click only pagination links with exact page number
         return await self._click_site_link(
             page,
             href_substr="page=",
@@ -908,13 +1005,16 @@ class YandexBrowserTransport:
                 return snapshot
         return None
 
-    # SmartCaptcha checkbox selectors, most specific first. The
-    # checkbox may live in an iframe (advanced shells) — try the
-    # main frame, then any iframe.
+    # SmartCaptcha checkbox selectors — ONLY for actual captcha frames.
+    # These selectors are tried ONLY inside iframes or when captcha
+    # markers are present in the page HTML to avoid clicking random
+    # checkboxes (filters, settings, etc).
     _CAPTCHA_CHECKBOX_SELECTORS = (
         "input[type=checkbox]",
         ".Checkbox",
         "[class*=Checkbox]",
+        "[class*=Captcha] input",
+        "[class*=captcha] input",
         "label",
     )
 
@@ -929,11 +1029,32 @@ class YandexBrowserTransport:
         realistic human trajectory — exactly what SmartCaptcha's
         behavioural model wants to see. Returns True when a click
         landed (the caller re-checks page health afterwards).
+        
+        SAFETY: Only clicks checkboxes in iframes OR when explicit
+        captcha markers are present in page HTML. This prevents
+        accidentally clicking filters, sort options, etc.
         """
-        frames = [page]
+        # First, check if this is actually a captcha page
+        try:
+            html = await page.content()
+        except Exception:
+            html = ""
+        
+        has_captcha_markers = any(
+            marker in html.lower()
+            for marker in (
+                "smartcaptcha", "captcha_smart", "showcaptcha",
+                "checkcaptcha", "подтвердите, что вы не робот",
+                "докажите, что вы не робот",
+            )
+        )
+        
+        # Try iframes first (captcha often lives there)
+        frames = []
         try:
             extra = page.frames or []
             if extra:
+                # ONLY try frames, not the main page yet
                 frames.extend(extra)
         except Exception:
             pass
@@ -948,12 +1069,32 @@ class YandexBrowserTransport:
                         continue
                     await locator.click(timeout=5_000)
                     print(
-                        "Я.Маркет: чекбокс капчи кликнут "
+                        "Я.Маркет: чекбокс капчи кликнут в iframe "
                         "(humanize-траектория)"
                     )
                     return True
                 except Exception:
                     continue
+        
+        # If no iframe checkbox worked AND we have explicit captcha
+        # markers, try the main page (inline captcha)
+        if has_captcha_markers:
+            for selector in self._CAPTCHA_CHECKBOX_SELECTORS:
+                try:
+                    locator = page.locator(selector).first
+                    if not await locator.count():
+                        continue
+                    if not await locator.is_visible():
+                        continue
+                    await locator.click(timeout=5_000)
+                    print(
+                        "Я.Маркет: чекбокс капчи кликнут на главной странице "
+                        "(humanize-траектория)"
+                    )
+                    return True
+                except Exception:
+                    continue
+        
         return False
 
     async def _wait_manual(
@@ -1185,13 +1326,20 @@ class YandexBrowserTransport:
         cards: list[dict[str, Any]],
         ld_reviews: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Drop cross-product feed cards (see module docstring #4).
+        """Drop cross-product feed cards and seller responses.
 
-        A card is OWN when it matches a JSON-LD review by
-        (author, ISO-date) — the JSON-LD block describes only the
-        open product. Unmatched cards survive only with a real body
-        (text/pros/cons) AND a year in their date; the feed ships
-        textless cards with yearless dates («26 июня»).
+        A card is OWN when:
+        1. It matches a JSON-LD review by (author, ISO-date) — JSON-LD
+           describes ONLY the open product's reviews
+        2. OR it has UUID (DOM review ID) — these are always product-specific
+        3. OR it has content (text/pros/cons) — accept most reviews by default
+        4. OR it has author + any date string — real review pattern
+
+        EXCLUDE seller responses (official answers from the store).
+        
+        CRITICAL FIX: Accept reviews by default unless clearly not own,
+        because JSON-LD is incomplete (only first 10-20 reviews) and
+        dates without year ("26 июня") don't parse to ISO.
         """
         from infrastructure.marketplaces.yandex import (
             parse_yandex_date,
@@ -1205,42 +1353,112 @@ class YandexBrowserTransport:
 
         own: list[dict[str, Any]] = []
         for card in cards:
+            # Skip seller responses / official answers
+            author = str(card.get("author") or "").lower()
+            if any(marker in author for marker in (
+                "официальный ответ", "ответ продавца", 
+                "ответ магазина", "представитель",
+            )):
+                continue
+
+            # Match by JSON-LD key (strongest signal)
             created = parse_yandex_date(card.get("date"))
             iso = created.date().isoformat() if created else ""
             key = f"{card.get('author') or ''}|{iso}"
             if key in ld_keys:
                 own.append(card)
                 continue
-            has_body = any(
+
+            # Cards with UUID are always product-specific
+            uuid = card.get("uuid")
+            if uuid and str(uuid).strip():
+                own.append(card)
+                continue
+
+            # ACCEPT if has any meaningful content
+            has_content = any(
                 card.get(field)
                 for field in ("text", "pros", "cons")
             )
-            if has_body and created is not None:
+            if has_content:
                 own.append(card)
+                continue
+            
+            # ACCEPT if has author + date string (even unparseable)
+            has_author = bool(card.get("author"))
+            has_date_string = bool(card.get("date"))
+            if has_author and has_date_string:
+                own.append(card)
+                continue
+            
+            # ACCEPT if has rating (indicates real review interaction)
+            if card.get("rating") is not None:
+                own.append(card)
+
         return own
 
     async def _scroll_once(self, page: Any) -> None:
+        """Realistic scroll with variable speed, micro-pauses,
+        occasional reverse nudges and smooth acceleration.
+        
+        Yandex's SmartCaptcha tracks scroll velocity patterns:
+        - Instant 1600px jumps = bot
+        - Smooth acceleration/deceleration = human
+        - Occasional reverse scrolls = engaged user
+        - Micro-pauses mid-scroll = reading
+        """
         step = self.scroll_step
         if step > 0:
-            # Variable stride with an occasional reverse nudge:
-            # a metronome-exact 1600px down-wheel every round is
-            # its own fingerprint.
+            # Variable stride with occasional reverse nudge
             delta = random.randint(
                 int(step * 0.5), int(step * 1.4),
             )
+            
+            # 15% chance of reverse scroll (user scrolled too far)
             if random.random() < 0.15:
                 delta = -random.randint(120, 420)
+            
+            # Split large scrolls into 2-4 smaller steps with
+            # micro-pauses (simulates reading while scrolling)
+            if abs(delta) > 600:
+                num_steps = random.randint(2, 4)
+                step_size = delta / num_steps
+                for i in range(num_steps):
+                    try:
+                        # Add jitter to each micro-step
+                        jittered_step = int(
+                            step_size * random.uniform(0.8, 1.2)
+                        )
+                        await page.mouse.wheel(0, jittered_step)
+                        # Micro-pause between steps (20-80ms)
+                        if i < num_steps - 1:
+                            await page.wait_for_timeout(
+                                random.randint(20, 80)
+                            )
+                    except Exception:
+                        pass
+            else:
+                # Small scroll in one go
+                try:
+                    await page.mouse.wheel(0, delta)
+                except Exception:
+                    pass
         else:
             delta = step
-        try:
-            await page.mouse.wheel(0, delta)
-        except Exception:
-            pass
+            try:
+                await page.mouse.wheel(0, delta)
+            except Exception:
+                pass
+        
+        # Main pause after scroll (variable, right-skewed)
         if self.scroll_pause_ms > 0:
             pause = int(
                 self.scroll_pause_ms
                 * random.uniform(0.5, 1.6)
             )
+            # 10% chance of longer "reading" pause
+            if random.random() < 0.10:
+                pause = int(pause * random.uniform(1.8, 3.2))
             try:
                 await page.wait_for_timeout(pause)
             except Exception:
