@@ -56,6 +56,7 @@ class YandexMapsTransportProtocol(Protocol):
     last_total_count: int | None
     last_average_rating: float | None
     last_rating_count: int | None
+    last_product_title: str | None
 
     def iter_review_batches(
         self,
@@ -91,6 +92,8 @@ class YandexMapsAdapter(MarketplaceAdapter):
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
         self.last_rating_count: int | None = None
+        #: Org name for the unified output's ``product_title``.
+        self.last_product_title: str | None = None
 
     async def collect(self, org_url: str) -> ReviewPage:
         """Not implemented: the Maps flow is streaming-only (the
@@ -132,6 +135,9 @@ class YandexMapsAdapter(MarketplaceAdapter):
             )
             self.last_rating_count = (
                 self.transport.last_rating_count
+            )
+            self.last_product_title = (
+                self.transport.last_product_title
             )
             for card in batch:
                 review = self._map_review(card, product)

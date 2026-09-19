@@ -2,16 +2,31 @@
 """Collectors: one per marketplace (extracted from ``__main__.py``).
 
 Each ``_collect_*`` coroutine wires the marketplace adapter to its
-transport, streams reviews into the output JSONL (with resume /
-dedup support) and returns the number of reviews written. The
-heavy transports are imported lazily so ``--help`` stays fast.
+transport, streams reviews into the output (with resume / dedup
+support) and returns the number of reviews written. The heavy
+transports are imported lazily so ``--help`` stays fast.
+
+Two output formats (``--format``):
+
+- ``json`` (default) — the unified document: one ``reviews`` array
+  with the shared field set + ``diagnostics`` (errors land there,
+  never as review records — see ``shared/unified_format.py``);
+- ``jsonl`` — the legacy one-record-per-line stream.
 """
 from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
+
+from domain.entities import Review
+from shared.unified_format import (
+    build_unified_document,
+    build_unified_review,
+    unified_review_id,
+)
 
 
 def _review_to_record(review: Any) -> dict[str, Any]:
@@ -28,6 +43,129 @@ def _review_to_record(review: Any) -> dict[str, Any]:
         "seller_answer": review.seller_answer,
         "raw": review.raw,
     }
+
+
+class _UnifiedRun:
+    """Accumulates unified review records for ``--format json``.
+
+    Resume support re-reads the existing document and keeps its
+    records; dedup keys come from ``raw`` (``reviewId`` / ``id`` /
+    ``uuid`` — the unified schema itself has no ``review_id``
+    field)."""
+
+    def __init__(self, output: Path, *, resume: bool) -> None:
+        self.output = output
+        self.records: list[dict[str, Any]] = []
+        self.seen: set[str] = set()
+        if resume and output.exists():
+            try:
+                document = json.loads(
+                    output.read_text(encoding="utf-8"),
+                )
+            except (OSError, json.JSONDecodeError):
+                document = None
+            for record in (
+                document.get("reviews") or []
+                if isinstance(document, dict)
+                else []
+            ):
+                if not isinstance(record, dict):
+                    continue
+                review_id = unified_review_id(record)
+                if review_id:
+                    self.seen.add(review_id)
+                self.records.append(record)
+            if self.seen:
+                print(
+                    f"Resume: {len(self.seen)} отзывов уже в "
+                    f"{output.name}, будут пропущены."
+                )
+
+    def add(self, review: Review) -> bool:
+        record = build_unified_review(review)
+        review_id = unified_review_id(record)
+        if review_id and review_id in self.seen:
+            return False
+        if review_id:
+            self.seen.add(review_id)
+        self.records.append(record)
+        return True
+
+    def finish(
+        self,
+        *,
+        product_title: str | None,
+        error: str | None,
+        collected: int,
+        **diagnostics: Any,
+    ) -> None:
+        # One run = one product/org: stamp the title (known only
+        # after the first payload arrives) onto every record.
+        for record in self.records:
+            record["product_title"] = product_title
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        document = build_unified_document(
+            self.records,
+            error=error,
+            collected=collected,
+            **diagnostics,
+        )
+        self.output.write_text(
+            json.dumps(
+                document,
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+
+
+async def _run_unified_json(
+    args: argparse.Namespace,
+    *,
+    adapter: Any,
+    make_iterator: Callable[[], AsyncIterator[Review]],
+    extra_diagnostics: Callable[[], dict[str, Any]] | None = None,
+) -> int:
+    """Stream reviews into the unified JSON document.
+
+    A failed run (captcha, block, transport error) keeps the
+    reviews collected before the failure and lands the reason in
+    ``diagnostics`` — a captcha is NEVER emitted as a review."""
+    run = _UnifiedRun(Path(args.output), resume=args.resume)
+    count = 0
+    error: str | None = None
+    try:
+        async for review in make_iterator():
+            if run.add(review):
+                count += 1
+                if count % 100 == 0:
+                    print(f"Собрано отзывов: {count}")
+                if (
+                    args.max_reviews is not None
+                    and count >= args.max_reviews
+                ):
+                    print(
+                        f"Достигнут лимит --max-reviews: "
+                        f"{args.max_reviews}"
+                    )
+                    break
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        print(f"Сбор прерван ошибкой: {error}")
+    diagnostics = (
+        extra_diagnostics() if extra_diagnostics else {}
+    )
+    run.finish(
+        product_title=getattr(
+            adapter, "last_product_title", None,
+        ),
+        error=error,
+        collected=count,
+        **diagnostics,
+    )
+    return count
 
 
 def _load_existing_reviews(
@@ -258,6 +396,52 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
             "эквивалентна pagination (scroll не поддерживается)"
         )
         effective_strategy = "pagination"
+
+    if args.format == "json":
+        try:
+            return await _run_unified_json(
+                args,
+                adapter=adapter,
+                make_iterator=lambda: adapter.iter_all_reviews(
+                    product_url=args.url,
+                    strategy=effective_strategy,
+                    max_reviews=args.max_reviews,
+                    pagination_max_pages=args.max_pages,
+                    pagination_start_page=args.start_page,
+                    page_delay_seconds=args.page_delay_seconds,
+                    scroll_pause_seconds=args.scroll_pause_seconds,
+                    retry_attempts=args.retry_attempts,
+                    extra_streams=not args.no_extra_streams,
+                    parallel_streams=getattr(
+                        args, "parallel_streams", False,
+                    ),
+                    filter_streams=getattr(
+                        args, "filter_streams", False,
+                    ),
+                    dup_streak_stop=getattr(
+                        args, "dup_streak_stop", 300,
+                    ),
+                ),
+                extra_diagnostics=lambda: {
+                    "total_count": (
+                        (adapter.last_rating_summary or {}).get(
+                            "reviews_count",
+                        )
+                    ),
+                    "average_score": (
+                        (adapter.last_rating_summary or {}).get(
+                            "average_score",
+                        )
+                    ),
+                },
+            )
+        finally:
+            close = getattr(transport, "close", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:
+                    pass
 
     try:
         with output.open(file_mode, encoding="utf-8") as file:
@@ -578,6 +762,19 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
     )
     adapter = YandexMarketAdapter(browser_transport=transport)
 
+    if args.format == "json":
+        return await _run_unified_json(
+            args,
+            adapter=adapter,
+            make_iterator=lambda: adapter.iter_reviews(
+                args.url,
+            ),
+            extra_diagnostics=lambda: {
+                "total_count": adapter.last_total_count,
+                "average_rating": adapter.last_average_rating,
+            },
+        )
+
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -693,6 +890,20 @@ async def _collect_yandex_maps(args: argparse.Namespace) -> int:
         dup_streak_stop=getattr(args, "dup_streak_stop", 300),
     )
     adapter = YandexMapsAdapter(browser_transport=transport)
+
+    if args.format == "json":
+        return await _run_unified_json(
+            args,
+            adapter=adapter,
+            make_iterator=lambda: adapter.iter_reviews(
+                args.url,
+            ),
+            extra_diagnostics=lambda: {
+                "total_count": adapter.last_total_count,
+                "average_rating": adapter.last_average_rating,
+                "rating_count": adapter.last_rating_count,
+            },
+        )
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -812,6 +1023,19 @@ async def _collect_2gis(args: argparse.Namespace) -> int:
     )
     adapter = TwoGisAdapter(browser_transport=transport)
 
+    if args.format == "json":
+        return await _run_unified_json(
+            args,
+            adapter=adapter,
+            make_iterator=lambda: adapter.iter_reviews(
+                args.url,
+            ),
+            extra_diagnostics=lambda: {
+                "total_count": adapter.last_total_count,
+                "average_rating": adapter.last_average_rating,
+            },
+        )
+
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -879,10 +1103,47 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
     from infrastructure.marketplaces.wildberries import (
         WildberriesAdapter,
     )
-    from infrastructure.transports.http import HttpJsonTransport
+    from infrastructure.transports.wb_browser import (
+        WildberriesBrowserTransport,
+    )
 
-    async with HttpJsonTransport() as transport:
+    # WB blocks every non-browser client cold (card/feedbacks APIs
+    # → 403, the main site → 498 — even for curl_cffi with chrome
+    # TLS impersonation, measured 2026-09-19), so the flow runs in
+    # an invisible-playwright page and calls the JSON APIs from the
+    # page context (the site's own cookies + fingerprint).
+    proxy = _build_single_proxy(args) if args.proxy else None
+
+    async with WildberriesBrowserTransport(
+        product_url=args.url,
+        timeout_ms=args.timeout_ms,
+        settle_ms=args.settle_ms,
+        proxy=proxy,
+        humanize=not args.no_humanize,
+    ) as transport:
         adapter = WildberriesAdapter(transport)
+
+        if args.format == "json":
+            wb_diags: dict[str, Any] = {}
+
+            async def _wb_iterator() -> (
+                AsyncIterator[Review]
+            ):
+                page = await adapter.collect(args.url)
+                wb_diags["total_count"] = page.total_count
+                wb_diags["average_rating"] = (
+                    page.average_rating
+                )
+                for review in page.reviews:
+                    yield review
+
+            return await _run_unified_json(
+                args,
+                adapter=adapter,
+                make_iterator=_wb_iterator,
+                extra_diagnostics=lambda: dict(wb_diags),
+            )
+
         page = await adapter.collect(args.url)
 
     output = Path(args.output)

@@ -27,6 +27,9 @@ class WildberriesAdapter(MarketplaceAdapter):
         transport: WildberriesHttpTransport,
     ) -> None:
         self.transport = transport
+        #: Product title for the unified output's ``product_title``
+        #: (brand + name from the card detail API).
+        self.last_product_title: str | None = None
 
     async def collect(self, product_url: str) -> ReviewPage:
         nm_id = extract_nm_id(product_url)
@@ -50,6 +53,18 @@ class WildberriesAdapter(MarketplaceAdapter):
 
         if not imt_id:
             raise ValueError(f"У WB отсутствует root: {product_url}")
+
+        self.last_product_title = (
+            " ".join(
+                part
+                for part in (
+                    product.get("brand"),
+                    product.get("name"),
+                )
+                if isinstance(part, str) and part.strip()
+            )
+            or None
+        )
 
         raw = await self.transport.get_json(
             f"https://feedbacks1.wb.ru/feedbacks/v1/{imt_id}",

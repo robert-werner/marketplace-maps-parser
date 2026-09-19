@@ -235,6 +235,29 @@ def find_review_results(
     return None
 
 
+def find_org_name(node: Any) -> str | None:
+    """Org name from the state blob — the dict that carries
+    ``ratingData`` is the organization object. Its title lives in
+    ``title`` (measured on the post office) or ``name`` /
+    ``shortTitle`` depending on the build."""
+    if isinstance(node, dict):
+        if isinstance(node.get("ratingData"), dict):
+            for key in ("title", "name", "shortTitle"):
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        for value in node.values():
+            found = find_org_name(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = find_org_name(value)
+            if found:
+                return found
+    return None
+
+
 def find_rating_data(node: Any) -> dict[str, Any] | None:
     """Locate the org aggregate ``ratingData`` dict in the state."""
     if isinstance(node, dict):
@@ -389,6 +412,8 @@ class YandexMapsBrowserTransport:
         #: Total assessments incl. rating-only (ratingCount) — Maps,
         #: like Ozon, never lists those individually.
         self.last_rating_count: int | None = None
+        #: Org name (the unified output's ``product_title``).
+        self.last_product_title: str | None = None
 
     async def iter_review_batches(
         self,
@@ -458,6 +483,9 @@ class YandexMapsBrowserTransport:
                 results.get("params") or {},
                 find_rating_data(state) or {},
             )
+            org_name = find_org_name(state)
+            if org_name:
+                self.last_product_title = org_name
             await self._save_cookies(page)
 
             seen: set[str] = {
@@ -1009,6 +1037,7 @@ __all__ = [
     "aspect_chip_size",
     "djb2_xor32",
     "find_aspects",
+    "find_org_name",
     "find_rating_data",
     "find_review_results",
     "sign_maps_query",

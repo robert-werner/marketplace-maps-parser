@@ -178,6 +178,7 @@ _READ_CARDS_JS = """
         ld_reviews: [],
         total_count: null,
         average_rating: null,
+        product_name: null,
     };
 
     for (const s of document.querySelectorAll(
@@ -188,6 +189,9 @@ _READ_CARDS_JS = """
         const items = Array.isArray(data) ? data : [data];
         for (const item of items) {
             if (!item || item['@type'] !== 'Product') continue;
+            if (item.name && !out.product_name) {
+                out.product_name = item.name;
+            }
             const agg = item.aggregateRating || {};
             if (agg.reviewCount != null) {
                 out.total_count = agg.reviewCount;
@@ -307,6 +311,9 @@ class YandexBrowserTransport:
 
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
+        #: Product name from the JSON-LD ``Product`` block (the
+        #: unified output's ``product_title``).
+        self.last_product_name: str | None = None
         self.captcha_hits = 0
 
         self._first_warmup_done = False
@@ -1087,6 +1094,9 @@ class YandexBrowserTransport:
         avg = _parse_float(snapshot.get("average_rating"))
         if avg is not None:
             self.last_average_rating = avg
+        name = snapshot.get("product_name")
+        if isinstance(name, str) and name.strip():
+            self.last_product_name = name.strip()
 
     # ------------------------------------------------------------------
     # Browser plumbing

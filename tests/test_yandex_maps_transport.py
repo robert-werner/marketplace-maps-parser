@@ -8,6 +8,7 @@ from infrastructure.transports.yandex_maps_browser import (
     aspect_chip_size,
     djb2_xor32,
     find_aspects,
+    find_org_name,
     find_rating_data,
     find_review_results,
     sign_maps_query,
@@ -75,6 +76,29 @@ def test_find_rating_data_locates_nested_aggregate() -> None:
 
 def test_find_rating_data_none_when_absent() -> None:
     assert find_rating_data({"organization": {}}) is None
+
+
+def test_find_org_name_title_or_name() -> None:
+    # Measured on the post office: the org object keys its title
+    # as ``title``; other builds use ``name`` / ``shortTitle``.
+    state_title = {
+        "organization": {
+            "title": "Отделение почтовой связи № 430028",
+            "ratingData": {"ratingCount": 358},
+        },
+    }
+    assert find_org_name(state_title) == (
+        "Отделение почтовой связи № 430028"
+    )
+
+    state_name = {
+        "organization": {
+            "name": "ГКБ 67",
+            "ratingData": {"ratingCount": 7852},
+        },
+    }
+    assert find_org_name(state_name) == "ГКБ 67"
+    assert find_org_name({"data": {"ratingData": {}}}) is None
 
 
 # --- aspect chip labels ----------------------------------------------------

@@ -73,6 +73,9 @@ STATE = {
 class StubTransport:
     last_total_count: int | None = 22
     last_average_rating: float | None = 3.6
+    last_product_title: str | None = (
+        "Больница №67 им. Л.А. Ворохобова, хирургический корпус"
+    )
 
     def __init__(
         self,

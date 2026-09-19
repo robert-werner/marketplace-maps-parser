@@ -41,6 +41,9 @@ class StubTransport:
     last_total_count: int | None = 86
     last_average_rating: float | None = 4.0
     last_rating_count: int | None = 358
+    last_product_title: str | None = (
+        "Отделение почтовой связи № 430028"
+    )
 
     def __init__(
         self,

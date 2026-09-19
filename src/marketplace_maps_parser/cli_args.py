@@ -30,6 +30,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Target marketplace.",
     )
     parser.add_argument(
+        "--format",
+        choices=("json", "jsonl"),
+        default="json",
+        help=(
+            "Output format (default: json). 'json' — the unified "
+            "document: {reviews: […10 shared fields…], diagnostics: "
+            "{status, error, …}}; errors (captcha, blocks, "
+            "transport failures) land in diagnostics, never as "
+            "review records. 'jsonl' — the legacy one-record-per-"
+            "line stream."
+        ),
+    )
+    parser.add_argument(
         "--url",
         default=None,
         help=(

@@ -12,6 +12,9 @@ from infrastructure.marketplaces.ozon_payload import (
     build_review_key as build_review_key,
 )
 from infrastructure.marketplaces.ozon_payload import (
+    extract_ozon_product_title as extract_ozon_product_title,
+)
+from infrastructure.marketplaces.ozon_payload import (
     extract_ozon_rating_summary as extract_ozon_rating_summary,
 )
 from infrastructure.marketplaces.ozon_payload import (
@@ -108,6 +111,9 @@ class OzonAdapter(MarketplaceAdapter):
         # only these aggregate counts — so the summary is the only way
         # to account for them.
         self.last_rating_summary: dict[str, Any] | None = None
+        # Product title for the unified output's ``product_title``
+        # — from the pdp_reviews seo block ("N отзыв на <name>").
+        self.last_product_title: str | None = None
 
     async def collect(self, product_url: str) -> ReviewPage:
         product_id = extract_ozon_product_id(product_url)
@@ -185,6 +191,11 @@ class OzonAdapter(MarketplaceAdapter):
             )
             if summary is not None:
                 self.last_rating_summary = summary
+
+            if self.last_product_title is None:
+                self.last_product_title = (
+                    extract_ozon_product_title(payload)
+                )
 
             reviews = extract_reviews_from_ozon_payload(
                 payload=payload,

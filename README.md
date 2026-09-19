@@ -50,6 +50,40 @@ cp .env.example .env
 | `OZON_API_KEY`  | Ozon (official API)   | Stub transport only               |
 | `PROXY`         | Optional              | HTTP/S proxy URL for scraping     |
 
+## Unified output format (`--format json`, the default)
+
+Every collector writes ONE JSON document with a shared review schema plus run diagnostics:
+
+```json
+{
+  "reviews": [
+    {
+      "source_url": "https://…",
+      "platform": "yandex_maps | 2gis | yandex | ozon | wildberries",
+      "product_title": "Отделение почтовой связи № 430028",
+      "text": "Достоинства: …\nНедостатки: …\nКомментарий…",
+      "rating": 5,
+      "review_date": "2021-12-25",
+      "photos": 2,
+      "video_len": 12.5,
+      "text_len": 157,
+      "raw": { "…the full source card…": null }
+    }
+  ],
+  "diagnostics": { "status": "ok", "error": null, "collected": 86, "total_count": 86, "…": null }
+}
+```
+
+Rules:
+
+- ``text`` merges the source's pros/cons sections (Ozon, Yandex.Market, WB) into one string; ``text_len`` is ``len(text.strip())`` of the final text.
+- ``photos`` is a COUNT (0 when none); ``video_len`` is seconds or ``null`` (no video / unknown duration).
+- ``review_date`` is ``YYYY-MM-DD``; ``rating`` is an int 1..5 or ``null``.
+- ``product_title`` per platform: yandex_maps — the org object's ``title`` from the state blob; 2gis — the org's answer signature (``official_answer.org_name``); ozon — the seo block (``"N отзыв на <name> от покупателей"``); yandex — the JSON-LD ``Product.name``; wildberries — ``brand + name`` from the card API.
+- A failed run (captcha, soft-block, transport error) yields ``reviews: []`` — or the partial batch collected before the failure — with the reason in ``diagnostics`` (``status: "error"``); a captcha page is NEVER emitted as a review.
+- ``review_id`` is not a schema field: it lives inside ``raw`` and is recovered from there for ``--resume`` dedup.
+- ``--format jsonl`` keeps the legacy one-record-per-line stream.
+
 ## Usage
 
 ### CLI
@@ -377,6 +411,17 @@ python -m marketplace_maps_parser \
     --marketplace 2gis \
     --url "https://2gis.ru/moscow/firm/70000001063192616" \
     --output 2gis_reviews.jsonl
+```
+
+### Wildberries (`--marketplace wildberries`)
+
+One browser session per product: the card API (`card.wb.ru/cards/v4/detail` → brand/name/root) and the feedbacks API (`feedbacks1.wb.ru/feedbacks/v1/<imt>`) are called via in-page `fetch()`. WB blocks every non-browser client cold — the APIs answer 403 and even the main page returns 498 for plain httpx AND curl_cffi with chrome TLS impersonation (measured 2026-09-19) — hence the invisible-playwright transport (`transports/wb_browser.py`). The public feedbacks endpoint caps the list (~25 of the 33 `feedbackCount` on the probe product — the rest are deleted/rating-only); `diagnostics.total_count` carries the site number. `product_title` = `brand + name` from the card.
+
+```bash
+python -m marketplace_maps_parser \
+    --marketplace wildberries \
+    --url "https://www.wildberries.ru/catalog/831948063/detail.aspx" \
+    --output wb_reviews.json
 ```
 
 ### Endpoint probes (`scripts/probe_ozon_endpoints.py`)

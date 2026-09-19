@@ -22,6 +22,7 @@ class StubTransport:
 
     last_total_count: int | None = 47
     last_average_rating: float | None = 4.5
+    last_product_name: str | None = "Смартфон X"
 
     def __init__(
         self,

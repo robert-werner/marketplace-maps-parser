@@ -27,6 +27,59 @@ UUID_RE = re.compile(
 )
 
 
+# ``"34687 отзыв на Лосьон для роста волос… от покупателей"`` —
+# the seo title of a pdp_reviews page; the product name is the
+# middle part.
+_SEO_REVIEW_TITLE_RE = re.compile(
+    r"\d[\d\s\u00a0]*\s*отзыв\w*\s+на\s+(?P<name>.+?)"
+    r"(?:\s+от\s+покупателей.*)?$",
+    re.DOTALL,
+)
+
+
+def extract_ozon_product_title(
+    payload: dict[str, Any],
+) -> str | None:
+    """Product title from a pdp_reviews payload.
+
+    Primary source: ``payload["seo"]["title"]`` (``"N отзыв на
+    <name> от покупателей"``). Fallback: scan every string in the
+    payload for the same pattern — the DOM-page payloads built by
+    the public_page transport repeat it in their meta tags.
+    """
+    seo = payload.get("seo")
+    title = seo.get("title") if isinstance(seo, dict) else None
+    if isinstance(title, str):
+        match = _SEO_REVIEW_TITLE_RE.search(title)
+        if match:
+            name = match.group("name").strip()
+            if name:
+                return name
+    return _scan_seo_title(payload)
+
+
+def _scan_seo_title(node: Any) -> str | None:
+    if isinstance(node, dict):
+        for value in node.values():
+            found = _scan_seo_title(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _scan_seo_title(value)
+            if found:
+                return found
+    elif isinstance(node, str):
+        match = _SEO_REVIEW_TITLE_RE.search(node)
+        if match:
+            name = match.group("name").strip()
+            # Plausible product names only, not UI phrases that
+            # happen to match ("12 отзывов на товар" etc.).
+            if 5 <= len(name) <= 300:
+                return name
+    return None
+
+
 def extract_ozon_rating_summary(
     payload: dict[str, Any],
     *,

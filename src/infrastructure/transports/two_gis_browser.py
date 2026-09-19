@@ -128,6 +128,10 @@ class TwoGisBrowserTransport:
         #: summary).
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
+        #: Firm name (the unified output's ``product_title``) —
+        #: taken from the org's own answer signature, present
+        #: whenever at least one review got an official reply.
+        self.last_product_title: str | None = None
 
     async def iter_review_batches(
         self,
@@ -200,6 +204,17 @@ class TwoGisBrowserTransport:
             rating = meta.get("rating")
             if isinstance(rating, (int, float)):
                 self.last_average_rating = round(float(rating), 2)
+            if self.last_product_title is None:
+                for card in cards:
+                    answer = card.get("official_answer")
+                    org_name = (
+                        answer.get("org_name")
+                        if isinstance(answer, dict)
+                        else None
+                    )
+                    if isinstance(org_name, str) and org_name.strip():
+                        self.last_product_title = org_name.strip()
+                        break
 
             if cards:
                 yield cards

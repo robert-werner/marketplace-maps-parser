@@ -55,6 +55,7 @@ class TwoGisTransportProtocol(Protocol):
 
     last_total_count: int | None
     last_average_rating: float | None
+    last_product_title: str | None
 
     def iter_review_batches(
         self,
@@ -108,6 +109,8 @@ class TwoGisAdapter(MarketplaceAdapter):
         #: summary).
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
+        #: Firm name for the unified output's ``product_title``.
+        self.last_product_title: str | None = None
 
     async def collect(self, firm_url: str) -> ReviewPage:
         """Not implemented: the 2GIS flow yields everything in one
@@ -138,6 +141,9 @@ class TwoGisAdapter(MarketplaceAdapter):
             )
             self.last_average_rating = (
                 self.transport.last_average_rating
+            )
+            self.last_product_title = (
+                self.transport.last_product_title
             )
             for card in batch:
                 review = self._map_review(card, product)

@@ -60,6 +60,7 @@ class YandexBrowserTransportProtocol(Protocol):
 
     last_total_count: int | None
     last_average_rating: float | None
+    last_product_name: str | None
 
     def iter_review_batches(
         self,
@@ -130,8 +131,20 @@ def normalize_yandex_rating(value: Any) -> int | None:
 
 
 _LABELED_SECTION_RES = (
-    ("pros", re.compile(r"Достоинства:\s*(.*?)(?=Недостатки:|Комментарий:|$)", re.DOTALL)),
-    ("cons", re.compile(r"Недостатки:\s*(.*?)(?=Комментарий:|$)", re.DOTALL)),
+    (
+        "pros",
+        re.compile(
+            r"Достоинства:\s*(.*?)" r"(?=Недостатки:|Комментарий:|$)",
+            re.DOTALL,
+        ),
+    ),
+    (
+        "cons",
+        re.compile(
+            r"Недостатки:\s*(.*?)(?=Комментарий:|$)",
+            re.DOTALL,
+        ),
+    ),
     ("text", re.compile(r"Комментарий:\s*(.*)", re.DOTALL)),
 )
 
@@ -212,6 +225,8 @@ class YandexMarketAdapter(MarketplaceAdapter):
         #: Filled while iterating (the CLI prints it in the summary).
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
+        #: Product title for the unified output's ``product_title``.
+        self.last_product_title: str | None = None
 
     async def collect(self, product_url: str) -> ReviewPage:
         """Not implemented: the Yandex flow is streaming-only (the
@@ -250,6 +265,9 @@ class YandexMarketAdapter(MarketplaceAdapter):
             )
             self.last_average_rating = (
                 self.transport.last_average_rating
+            )
+            self.last_product_title = (
+                self.transport.last_product_name
             )
             for card in batch:
                 review = self._map_review(card, product)
