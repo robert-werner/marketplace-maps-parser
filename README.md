@@ -1,6 +1,6 @@
 # marketplace-maps-parser
 
-Asynchronous scraper for product reviews from Russian e-commerce marketplaces (Ozon, Wildberries, Yandex Market — _planned_). Streams normalized review records to JSONL.
+Asynchronous scraper for product and organization reviews (Ozon, Wildberries, Yandex Market, Yandex Maps, 2GIS). Streams normalized review records to JSONL.
 
 ## Features
 
@@ -344,6 +344,41 @@ python -m marketplace_maps_parser \
 
 `--cookies` injects a logged-in/visited session (Playwright DevTools JSON or Netscape format — the same loader as Ozon); `--save-cookies` (default `yandex_cookies.json`) checkpoints the session after every healthy page, so a captcha solved once — manually or automatically — sticks for the cookie lifetime.
 
+### Yandex.Maps organizations (`--marketplace yandex_maps`)
+
+Streams ALL reviews of one organization (e.g. a post office, a café, a shop) from its `/maps/org/<slug>/<id>/reviews/` page. Measured facts (2026-09-18/19, live orgs incl. a 4360-review hospital):
+
+- **SSR state blob** — the reviews page ships the FIRST page (50 reviews) inside `<script class="state-view">` JSON: `reviewResults.reviews` (the same card shape as the internal API: `reviewId`, `author.name`, `text`, `rating`, `updatedTime` ISO, `reactions`, `photos`) + `reviewResults.params` (`count` / `totalPages`) + the org aggregate `ratingData` (`ratingValue` / `reviewCount` / `ratingCount`) + the `aspects` list with ids (`Персонал · 3184 отзыва`) — no UI clicking needed.
+- **The `s` signature is reversed — direct API is the primary path.** Pages 2+ load via XHR to `/maps/api/business/fetchReviews?…&csrfToken=<hex:ts>&s=<signature>`. The signature was reversed from the maps-front-maps base chunk (webpack module 79409, 2026-09-19): `s = djb2_xor32(query_string_without_s)` with a case-insensitive key sort — verified 96/96 against live captured URLs (see `sign_maps_query`). The transport templates `reqId`/`sessionId`/`csrfToken` from the site's own first XHR (one pane scroll), then pages every (ranking, aspectId) combination DIRECTLY via in-page `fetch()`. Falls back to interception+UI-walk if the recipe stops validating.
+- **The server window: first 600 reviews per stream (offset-based).** The cap is SERVER-side, not frontend (page 13 at pageSize=50 errors; at pageSize=25 the boundary moves to page 25 — always offset 600; `params.totalPages` advertises the true depth, e.g. 88 pages). Fresh `reqId`/`sessionId` do NOT unlock deeper pages; the window is bound to the (org, stream) pair.
+- **The streams matrix is the coverage lever.** Rankings (measured: «По умолчанию»=`by_relevance_org`, «По новизне»=`by_time`, «Сначала положительные»=`by_rating_desc`, «Сначала отрицательные»=`by_rating_asc`; the enum has no other values) × aspects from the blob × the two tone rankings (`by_aspect_tone_desc/asc`) — any combination is valid via the direct API, including aspect × arbitrary ranking, which the UI never offers (chips fix the tone; a ranking click resets the aspect). Small aspects (≤600 reviews) fit entirely into one window. `--dup-streak-stop 0` drains every window fully (slowest, most complete); aspects ≤600 are pruned to a single ranking in that mode.
+- **Measured coverage on the 4360-review hospital**: UI walk ~3050 (70 %) in ~40 min; direct API 3285 (75 %) in ~10 min; `--dup-streak-stop 0` full drain → **3359 (77 %)**. The remaining ~23 % sit beyond the 600-window of every (aspect × ranking) combination — mid-pack reviews of the huge aspects (Персонал: 3184) and untagged reviews beyond the four global windows. Logged-in cookies do NOT lift the window (verified with a Session_id jar: page 13+ still errors), nor do fresh `reqId`/`sessionId`, other pageSizes, or multi-`aspectId` values. Small orgs (≤600 reviews) collect 100 % (86/86 post office, 8/8 office).
+- **No captcha observed on Maps** (10+ probe sessions incl. plain curl_cffi loads, all clean) — no escalation ladder is ported; a challenge page raises `YandexCaptchaError` with the page dumped to the debug dir.
+- **Rating-only assessments** — like Ozon, Maps has textless «оценки»: `ratingData.ratingCount` (7852) vs `reviewCount` (4360) on the hospital. They are never listed individually; the CLI prints the remainder (`оценок без отзыва`).
+
+```bash
+python -m marketplace_maps_parser \
+    --marketplace yandex_maps \
+    --url "https://yandex.ru/maps/org/<slug>/<org_id>" \
+    --output yandex_maps_reviews.jsonl
+```
+
+Proxy/cookies flags work the same as the Yandex.Market flow (`--proxy`, `--proxy-list`, `--cookies`, `--save-cookies` — default `yandex_maps_cookies.json`); debug dumps go to `debug_yandex_maps/`.
+
+### 2GIS firms (`--marketplace 2gis`)
+
+Collects ALL reviews of one firm (`2gis.ru/<city>/firm/<branch_id>`). Measured facts (2026-09-19, live firm 70000001063192616, 22/22 collected):
+
+- **SSR-only data, no usable list API** — the reviews tab (`/tab/reviews`) ships the ENTIRE review list server-side inside `window.__REACT_QUERY_STATE__` (a dehydrated React-Query cache): the `fetchEntityReviews` query holds `pages[].items` (full cards: `id`, `date_created` ISO, `rating`, `text`, `user.name`, `official_answer` — the org's reply, mapped to `seller_answer` — plus `likes_count`, `emojis`, `trust_factors`) and the page meta (`total`, `rating`, `hasMore`). The widget's `public-api.reviews.2gis.com/3.0/branches/…` endpoint answers `total_count: 0` even from the site's own runtime (its ratings/summary/comments sub-endpoints work but do not list reviews); a cold curl_cffi session gets an ~11 KB shell without the state — hence the invisible-playwright transport: one page load, state read via `page.evaluate`, one batch.
+- **Pagination** — unimplemented: `hasMore=true` on a huge firm (not observed yet) would print a warning with the remainder. The `--dup-streak-stop 0` full-drain machinery from yandex_maps does not apply here.
+
+```bash
+python -m marketplace_maps_parser \
+    --marketplace 2gis \
+    --url "https://2gis.ru/moscow/firm/70000001063192616" \
+    --output 2gis_reviews.jsonl
+```
+
 ### Endpoint probes (`scripts/probe_ozon_endpoints.py`)
 
 Two hypotheses that decide the next big speedups, testable with your proxy/cookies:
@@ -593,6 +628,7 @@ URL → UrlParser → ProductRef → MarketplaceAdapter.iter_reviews()
 - [x] Multi-product parallel supervisor (`--products-file`)
 - [x] Endpoint hypothesis probes (SSR / page_size / cookie handoff — `scripts/probe_ozon_endpoints.py`, verdicts measured 2026-09-16)
 - [ ] Yandex Market adapter
+- [x] Yandex Maps org adapter (`--marketplace yandex_maps`, 86/86 on the live probe org, 2026-09-18)
 - [ ] `asyncpg` repository for direct DB writes
 - [ ] CI workflow (ruff + mypy + pytest)
 

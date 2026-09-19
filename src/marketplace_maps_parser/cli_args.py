@@ -19,7 +19,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--marketplace",
-        choices=("ozon", "wildberries", "yandex"),
+        choices=(
+            "ozon",
+            "wildberries",
+            "yandex",
+            "yandex_maps",
+            "2gis",
+        ),
         required=True,
         help="Target marketplace.",
     )
@@ -102,7 +108,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Directory for HTML/JSON debug dumps. Default: "
-            "debug_ozon (ozon), debug_yandex (yandex)."
+            "debug_ozon (ozon), debug_yandex (yandex), "
+            "debug_yandex_maps (yandex_maps)."
         ),
     )
     parser.add_argument(
@@ -267,13 +274,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--save-cookies",
         default=None,
         help=(
-            "Yandex.Market only: persist the browser session "
-            "cookies to this file (default: yandex_cookies.json). "
-            "After a SmartCaptcha is solved — automatically or "
-            "manually — the cookies are saved and auto-loaded on "
-            "the next runs, so the challenge appears at most once "
-            "per cookie lifetime. --cookies takes priority when "
-            "both are given."
+            "Yandex flows only: persist the browser session "
+            "cookies to this file (default: yandex_cookies.json "
+            "for yandex, yandex_maps_cookies.json for "
+            "yandex_maps). After a SmartCaptcha is solved — "
+            "automatically or manually — the cookies are saved "
+            "and auto-loaded on the next runs, so the challenge "
+            "appears at most once per cookie lifetime. --cookies "
+            "takes priority when both are given."
         ),
     )
     parser.add_argument(
@@ -404,7 +412,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Stop a review stream after this many CONSECUTIVE "
             "reviews already collected by other streams (default: "
             "300, i.e. ~10 pages). Protects against streams re-"
-            "serving known ground. 0 disables the early stop."
+            "serving known ground. 0 disables the early stop "
+            "(Ozon pagination; yandex_maps direct API — 0 drains "
+            "every window fully, slowest and most complete)."
         ),
     )
     parser.add_argument(

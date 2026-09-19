@@ -637,6 +637,243 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
     return count
 
 
+async def _collect_yandex_maps(args: argparse.Namespace) -> int:
+    """Collect Yandex.Maps org reviews into the output JSONL."""
+    from infrastructure.marketplaces.yandex_maps import (
+        YandexMapsAdapter,
+    )
+    from infrastructure.transports.yandex_maps_browser import (
+        YandexMapsBrowserTransport,
+    )
+
+    # Same proxy handling as the Yandex.Market flow: a single
+    # --proxy pins the egress IP; with a --proxy-list the transport
+    # takes one proxy for the whole session.
+    proxy = None
+    proxy_pool = None
+    if args.proxy:
+        proxy = _build_single_proxy(args)
+    elif args.proxy_list or args.free_proxy:
+        proxy_pool = await _build_proxy_pool(args)
+        if proxy_pool is None:
+            print(
+                "[warning] yandex_maps: proxy-пул пуст — запуск "
+                "напрямую с этого IP"
+            )
+
+    cookies = None
+    if args.cookies:
+        from infrastructure.transports.cookie_loader import (
+            load_cookies_file,
+        )
+        cookies = load_cookies_file(args.cookies)
+        print(
+            f"Я.Карты: загружено cookies из {args.cookies}: "
+            f"{len(cookies)} шт."
+        )
+
+    debug_dir = args.debug_dir or "debug_yandex_maps"
+
+    transport = YandexMapsBrowserTransport(
+        timeout_ms=args.timeout_ms,
+        settle_ms=args.settle_ms,
+        debug_dir=debug_dir,
+        proxy=proxy,
+        proxy_pool=proxy_pool,
+        cookies=cookies,
+        humanize=not args.no_humanize,
+        cookies_path=(
+            args.save_cookies or "yandex_maps_cookies.json"
+        ),
+        # Ozon-style extra streams: after the default ranking's
+        # ~600-review window walk the other rankings + aspect chips.
+        walk_extra_streams=not args.no_extra_streams,
+        # Review-count dup guard shared with the Ozon streams; 0 =
+        # full drain of every window (slowest, most complete).
+        dup_streak_stop=getattr(args, "dup_streak_stop", 300),
+    )
+    adapter = YandexMapsAdapter(browser_transport=transport)
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.resume:
+        seen_ids = _load_existing_reviews(output)
+        if seen_ids:
+            print(
+                f"Resume: {len(seen_ids)} отзывов уже в "
+                f"{output.name}, будут пропущены."
+            )
+        file_mode = "a"
+    else:
+        seen_ids = set()
+        file_mode = "w"
+
+    count = 0
+
+    with output.open(file_mode, encoding="utf-8") as file:
+        async for review in adapter.iter_reviews(args.url):
+            review_id = review.review_id
+            if review_id and review_id in seen_ids:
+                continue
+            if review_id:
+                seen_ids.add(review_id)
+
+            file.write(
+                json.dumps(
+                    _review_to_record(review),
+                    ensure_ascii=False,
+                    default=str,
+                )
+                + "\n"
+            )
+            file.flush()
+            count += 1
+
+            if count % 100 == 0:
+                print(f"Собрано отзывов: {count}")
+
+            if (
+                args.max_reviews is not None
+                and count >= args.max_reviews
+            ):
+                print(
+                    f"Достигнут лимит --max-reviews: "
+                    f"{args.max_reviews}"
+                )
+                break
+
+    total = adapter.last_total_count
+    if total is not None:
+        rating_note = ""
+        if adapter.last_average_rating is not None:
+            rating_note = (
+                f", рейтинг организации: "
+                f"{adapter.last_average_rating}"
+            )
+        rating_only_note = ""
+        if (
+            adapter.last_rating_count is not None
+            and adapter.last_rating_count > total
+        ):
+            rating_only_note = (
+                f"; оценок без отзыва (не собираются "
+                f"индивидуально): "
+                f"{adapter.last_rating_count - total}"
+            )
+        print(
+            f"Я.Карты: по данным сайта всего отзывов: {total}; "
+            f"собрано: {count}{rating_note}{rating_only_note}"
+        )
+
+    return count
+
+
+async def _collect_2gis(args: argparse.Namespace) -> int:
+    """Collect 2GIS firm reviews into the output JSONL."""
+    from infrastructure.marketplaces.two_gis import TwoGisAdapter
+    from infrastructure.transports.two_gis_browser import (
+        TwoGisBrowserTransport,
+    )
+
+    proxy = None
+    proxy_pool = None
+    if args.proxy:
+        proxy = _build_single_proxy(args)
+    elif args.proxy_list or args.free_proxy:
+        proxy_pool = await _build_proxy_pool(args)
+        if proxy_pool is None:
+            print(
+                "[warning] 2gis: proxy-пул пуст — запуск "
+                "напрямую с этого IP"
+            )
+
+    cookies = None
+    if args.cookies:
+        from infrastructure.transports.cookie_loader import (
+            load_cookies_file,
+        )
+        cookies = load_cookies_file(args.cookies)
+        print(
+            f"2ГИС: загружено cookies из {args.cookies}: "
+            f"{len(cookies)} шт."
+        )
+
+    debug_dir = args.debug_dir or "debug_2gis"
+
+    transport = TwoGisBrowserTransport(
+        timeout_ms=args.timeout_ms,
+        settle_ms=args.settle_ms,
+        debug_dir=debug_dir,
+        proxy=proxy,
+        proxy_pool=proxy_pool,
+        cookies=cookies,
+        humanize=not args.no_humanize,
+    )
+    adapter = TwoGisAdapter(browser_transport=transport)
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.resume:
+        seen_ids = _load_existing_reviews(output)
+        if seen_ids:
+            print(
+                f"Resume: {len(seen_ids)} отзывов уже в "
+                f"{output.name}, будут пропущены."
+            )
+        file_mode = "a"
+    else:
+        seen_ids = set()
+        file_mode = "w"
+
+    count = 0
+
+    with output.open(file_mode, encoding="utf-8") as file:
+        async for review in adapter.iter_reviews(args.url):
+            review_id = review.review_id
+            if review_id and review_id in seen_ids:
+                continue
+            if review_id:
+                seen_ids.add(review_id)
+
+            file.write(
+                json.dumps(
+                    _review_to_record(review),
+                    ensure_ascii=False,
+                    default=str,
+                )
+                + "\n"
+            )
+            file.flush()
+            count += 1
+
+            if (
+                args.max_reviews is not None
+                and count >= args.max_reviews
+            ):
+                print(
+                    f"Достигнут лимит --max-reviews: "
+                    f"{args.max_reviews}"
+                )
+                break
+
+    total = adapter.last_total_count
+    if total is not None:
+        rating_note = ""
+        if adapter.last_average_rating is not None:
+            rating_note = (
+                f", рейтинг организации: "
+                f"{adapter.last_average_rating}"
+            )
+        print(
+            f"2ГИС: по данным сайта всего отзывов: {total}; "
+            f"собрано: {count}{rating_note}"
+        )
+
+    return count
+
+
 async def _collect_wildberries(args: argparse.Namespace) -> int:
     # Lazy import: keeps the --help path dependency-light.
     from infrastructure.marketplaces.wildberries import (

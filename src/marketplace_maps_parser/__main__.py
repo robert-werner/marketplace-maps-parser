@@ -42,9 +42,11 @@ from marketplace_maps_parser.collectors import (
 
 async def _run(args: argparse.Namespace) -> int:
     from marketplace_maps_parser.collectors import (
+        _collect_2gis,
         _collect_ozon,
         _collect_wildberries,
         _collect_yandex,
+        _collect_yandex_maps,
     )
 
     if args.marketplace == "ozon":
@@ -53,6 +55,10 @@ async def _run(args: argparse.Namespace) -> int:
         return await _collect_wildberries(args)
     if args.marketplace == "yandex":
         return await _collect_yandex(args)
+    if args.marketplace == "yandex_maps":
+        return await _collect_yandex_maps(args)
+    if args.marketplace == "2gis":
+        return await _collect_2gis(args)
     raise SystemExit(f"Unknown marketplace: {args.marketplace}")
 
 
