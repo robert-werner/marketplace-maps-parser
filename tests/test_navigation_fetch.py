@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from infrastructure.transports.browser_json.transport import (
+from infrastructure.transports.browser_json import (
     BrowserJsonTransport,
     CloudflareChallengeError,
 )

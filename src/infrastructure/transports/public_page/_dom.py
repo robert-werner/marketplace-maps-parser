@@ -1,5 +1,6 @@
 """Mixin for PublicPageTransport."""
 from __future__ import annotations
+
 from typing import Any
 
 
@@ -120,15 +121,32 @@ class CardReadingMixin:
                         starFills = fills;
                 }
             }
-            if (!starFills) return null;
-            let orange = 0;
-            for (const f of starFills) {
-                const m = f.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
-                if (!m) continue;
-                const r = +m[1], g = +m[2], b = +m[3];
-                if (r >= 200 && g >= 120 && g <= 220 && b <= 100) orange++;
+            const countOrange = fills => {
+                let orange = 0;
+                for (const f of fills) {
+                    const m = f.match(
+                        /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/,
+                    );
+                    if (!m) continue;
+                    const r = +m[1], g = +m[2], b = +m[3];
+                    if (r >= 200 && g >= 120 && g <= 220 && b <= 100)
+                        orange++;
+                }
+                return orange;
+            };
+            if (starFills) {
+                const orange = countOrange(starFills);
+                return orange > 0 ? orange : null;
             }
-            return orange > 0 ? orange : null;
+
+            // Some Ozon layouts render only the filled star for a
+            // one-star review, so there is no 3–6-item glyph group.
+            // In that variant the count across the card is the rating.
+            const orange = countOrange(
+                [...card.querySelectorAll('svg path')]
+                    .map(p => getComputedStyle(p).fill),
+            );
+            return orange >= 1 && orange <= 5 ? orange : null;
         };
         return [...document.querySelectorAll('[data-review-uuid]')]
             .map(card => ({

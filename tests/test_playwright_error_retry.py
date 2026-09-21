@@ -28,7 +28,7 @@ import asyncio
 import pytest
 
 from infrastructure.transports import browser_json as bj_module
-from infrastructure.transports.browser_json.transport import (
+from infrastructure.transports.browser_json import (
     BrowserJsonTransport,
 )
 

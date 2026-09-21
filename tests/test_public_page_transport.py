@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from infrastructure.transports import public_page as pp_module
-from src.infrastructure.transports.public_page import PublicPageTransport
+from infrastructure.transports.public_page import PublicPageTransport
 
 # Cache the real asyncio.sleep so test monkeypatches can call it
 # without infinite recursion.
@@ -917,6 +917,46 @@ async def test_get_ozon_reviews_json_returns_first_page(monkeypatch):
     assert "reviews" in payload
     assert len(payload["reviews"]) == 1
     assert payload["reviews"][0]["reviewId"] == "r1"
+
+
+# ---------------------------------------------------------------------------
+# Product review-count discovery
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (65, 65),
+        ("1 234", 1234),
+        ("1\u00a0234", 1234),
+        (0, 0),
+        (-1, None),
+        (True, None),
+        ("65 отзывов", None),
+    ],
+)
+def test_normalize_product_review_count(
+    raw: Any,
+    expected: int | None,
+) -> None:
+    assert PublicPageTransport._normalize_review_count(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_capture_product_review_count_before_cards() -> None:
+    class _MetadataPage:
+        async def evaluate(self, expression: str) -> str:
+            if "og:title" in expression:
+                return "  Yealink   SIP-T30P  "
+            assert "reviewsCount" in expression
+            return "1 234"
+
+    transport = PublicPageTransport()
+    await transport._capture_ozon_review_count(_MetadataPage())
+
+    assert transport.last_review_count == 1234
+    assert transport.last_product_title == "Yealink SIP-T30P"
 
 
 # ---------------------------------------------------------------------------

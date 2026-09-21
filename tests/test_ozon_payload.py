@@ -223,6 +223,12 @@ def test_parse_ozon_date_handles_unix_ms() -> None:
     assert result == datetime(2024, 1, 1, tzinfo=UTC)
 
 
+def test_parse_ozon_date_handles_unix_timestamp_string() -> None:
+    """PublicPageTransport reads ``publishedat`` from the DOM."""
+    result = parse_ozon_date("1704067200")
+    assert result == datetime(2024, 1, 1, tzinfo=UTC)
+
+
 def test_build_review_key_is_stable() -> None:
     """build_review_key is used as a dedup fallback; it must be stable."""
     # is_review_node requires a non-None review_id (via extract_review_id),

@@ -557,11 +557,7 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
                     ),
                 ),
                 extra_diagnostics=lambda: {
-                    "total_count": (
-                        (adapter.last_rating_summary or {}).get(
-                            "reviews_count",
-                        )
-                    ),
+                    "total_count": adapter.last_review_count,
                     "average_score": (
                         (adapter.last_rating_summary or {}).get(
                             "average_score",

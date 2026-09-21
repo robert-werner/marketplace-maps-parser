@@ -1,7 +1,9 @@
 """Mixin for PublicPageTransport."""
 from __future__ import annotations
+
 import random
 from typing import Any
+
 import infrastructure.transports.public_page as _mod
 
 
@@ -96,6 +98,15 @@ class NavigationMixin:
             else:
                 pause_ms = random.randint(400, 1_000)
             await page.wait_for_timeout(pause_ms)
+            # PublicPageTransport mixes in WidgetFlowMixin, which can
+            # read the review counter from this product page. Keep the
+            # warmup resilient if another consumer omits that optional
+            # capability.
+            capture_review_count = getattr(
+                self, "_capture_ozon_review_count", None,
+            )
+            if capture_review_count is not None:
+                await capture_review_count(page)
         except Exception as exc:
             print(
                 f"Ozon (public): warmup не удался "

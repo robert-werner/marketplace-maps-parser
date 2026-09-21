@@ -1,9 +1,13 @@
 """Mixin."""
 from __future__ import annotations
-import asyncio
+
+import json
 from typing import Any
-from infrastructure.transports.browser_json._errors import CloudflareChallengeError
+
 import infrastructure.transports.browser_json as _mod
+from infrastructure.transports.browser_json._errors import (
+    CloudflareChallengeError,
+)
 
 
 class FetchMixin:

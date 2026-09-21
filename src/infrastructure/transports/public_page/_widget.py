@@ -1,12 +1,12 @@
 """Mixin for PublicPageTransport."""
 from __future__ import annotations
-from collections.abc import AsyncIterator
-from typing import Any
+
 import asyncio
 import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
+
 import infrastructure.transports.public_page as _mod
 
 
@@ -17,6 +17,154 @@ class WidgetFlowMixin:
     _NEXT_BUTTON_SELECTOR = (
         'button:has-text("Дальше"), a:has-text("Дальше")'
     )
+
+    # The product page normally exposes the total beside its reviews
+    # link/tab, while some page variants keep it in serialized widget
+    # state. The adapter uses this only as a completion proof: once it
+    # has that many unique cards, redundant sort streams are skipped.
+    _REVIEW_COUNT_PROBE_JS = """
+() => {
+    const counts = [];
+    const add = value => {
+        const text = String(value ?? "").replace(/[\\s\\u00a0]/g, "");
+        if (!/^\\d+$/.test(text)) return;
+        const count = Number(text);
+        if (Number.isSafeInteger(count) && count >= 0) counts.push(count);
+    };
+    const patterns = [
+        /отзыв(?:ы|а|ов)?\\s*(?:[:—–-]\\s*)?[\\[(]?\\s*([\\d\\s\\u00a0]+)\\s*[\\])]?/iu,
+        /([\\d\\s\\u00a0]+)\\s*отзыв(?:ы|а|ов)?\\b/iu,
+    ];
+    const collect = text => {
+        for (const pattern of patterns) {
+            const match = String(text ?? "").match(pattern);
+            if (match) add(match[1]);
+        }
+    };
+
+    // Highest-confidence source: Ozon stores the exact number in the
+    // webReviewProductScore element's state. getAttribute() decodes
+    // the HTML entities used in its data-state value.
+    for (const element of document.querySelectorAll(
+        "[id*='webReviewProductScore'][data-state]",
+    )) {
+        try {
+            add(JSON.parse(element.getAttribute("data-state")).reviewsCount);
+        } catch (_) {
+            // Fall through to the HTML/text probes below.
+        }
+    }
+
+    // Fallback for page variants where the state is present only in
+    // serialized HTML. Attribute quotes may be entity-encoded.
+    for (const match of document.documentElement.innerHTML.matchAll(
+        /(?:&quot;|")reviewsCount(?:&quot;|")\\s*:\\s*(?:&quot;|")?([\\d\\s\\u00a0]+)(?:&quot;|")?/g,
+    )) add(match[1]);
+
+    // Exclude review-card text: numbers in an individual review must
+    // never be interpreted as a product-wide count.
+    for (const element of document.querySelectorAll(
+        "h1, h2, h3, [role='tab'], a[href*='/reviews'], button, [data-widget]",
+    )) collect(element.innerText);
+
+    return counts.length ? Math.max(...counts) : null;
+}
+"""
+
+    _PRODUCT_TITLE_PROBE_JS = """
+() => {
+    const candidates = [
+        document.querySelector("meta[property='og:title']")?.content,
+        document.querySelector("meta[name='twitter:title']")?.content,
+        document.querySelector("h1")?.innerText,
+        document.title,
+    ];
+    for (const candidate of candidates) {
+        const title = String(candidate ?? "")
+            .replace(/\\s+/g, " ")
+            .trim();
+        if (!title) continue;
+        const lowered = title.toLowerCase();
+        if (
+            lowered.includes("похоже, нет соединения")
+            || lowered.includes("access denied")
+        ) continue;
+        return title;
+    }
+    return null;
+}
+"""
+
+    @staticmethod
+    def _normalize_review_count(value: Any) -> int | None:
+        """Return a non-negative product review count, if usable."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            normalized = re.sub(r"[\s\u00a0]", "", value)
+            if normalized.isdecimal():
+                return int(normalized)
+        return None
+
+    @staticmethod
+    def _normalize_product_title(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        title = " ".join(value.split())
+        if not title or len(title) > 300:
+            return None
+        return title
+
+    def _prepare_ozon_review_count(
+        self,
+        product_path: str,
+    ) -> None:
+        """Reset cached product metadata when the product switches."""
+        if (
+            getattr(self, "_review_count_product_path", None)
+            != product_path
+        ):
+            self.last_review_count = None
+            self.last_product_title = None
+            self._review_count_product_path = product_path
+
+    async def _capture_ozon_review_count(self, page) -> None:
+        """Store Ozon metadata exposed by the product/reviews page.
+
+        Both values are optional. Missing or changed page elements must
+        not prevent the existing end-of-pagination logic from running.
+        """
+        if (
+            getattr(self, "last_review_count", None) is not None
+            and getattr(self, "last_product_title", None) is not None
+        ):
+            return
+
+        if getattr(self, "last_review_count", None) is None:
+            try:
+                value = await page.evaluate(self._REVIEW_COUNT_PROBE_JS)
+            except Exception:
+                value = None
+
+            review_count = self._normalize_review_count(value)
+            if review_count is not None:
+                self.last_review_count = review_count
+                print(
+                    "Ozon: на странице товара заявлено "
+                    f"{review_count} отзывов"
+                )
+
+        if getattr(self, "last_product_title", None) is None:
+            try:
+                value = await page.evaluate(self._PRODUCT_TITLE_PROBE_JS)
+            except Exception:
+                value = None
+
+            product_title = self._normalize_product_title(value)
+            if product_title is not None:
+                self.last_product_title = product_title
 
     # Wait until the cards' rating SVGs have hydrated instead of a
     # fixed 1.2s sleep: the star glyphs are the last thing to
@@ -263,6 +411,7 @@ async ({ prevUuids, timeoutMs }) => {
         ``_iter_widget_parallel``.
         """
         if self.workers > 1:
+            self._prepare_ozon_review_count(product_path)
             async for batch in self._iter_widget_parallel(
                 product_path,
                 max_reviews=max_reviews,
@@ -279,6 +428,7 @@ async ({ prevUuids, timeoutMs }) => {
         resume_url = f"{product_url}/reviews?page=1"
         seen_uuids: set[str] = set()
         restarts_left = max(3, min(retry_attempts, 10))
+        self._prepare_ozon_review_count(product_path)
 
         while True:
             if (
@@ -313,6 +463,9 @@ async ({ prevUuids, timeoutMs }) => {
                         goto_attempts=retry_attempts,
                         do_warmup=True,
                     )
+                    # ``warmup`` can be disabled, so probe the review
+                    # page too before reading its first card.
+                    await self._capture_ozon_review_count(page)
 
                     locator = page.locator("[data-review-uuid]")
                     if not await self._wait_for_card_replacement(

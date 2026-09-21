@@ -114,6 +114,91 @@ class OzonAdapter(MarketplaceAdapter):
         # Product title for the unified output's ``product_title``
         # — from the pdp_reviews seo block ("N отзыв на <name>").
         self.last_product_title: str | None = None
+        # Total number of reviews advertised by Ozon. API transports
+        # expose it through webReviewProductScore; PublicPageTransport
+        # reads it from the product/reviews page during warmup.
+        self.last_review_count: int | None = None
+
+    @staticmethod
+    def _normalize_reported_review_count(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            normalized = value.replace(" ", "").replace("\u00a0", "")
+            if normalized.isdecimal():
+                return int(normalized)
+        return None
+
+    def _reported_review_count(self) -> int | None:
+        """Return Ozon's product-wide count when a transport exposed it.
+
+        The count is used only to stop *after* that many unique cards
+        are collected. If unavailable, normal pagination and stream
+        discovery remain unchanged.
+        """
+        candidates = [
+            self._normalize_reported_review_count(
+                self.last_review_count,
+            ),
+            self._normalize_reported_review_count(
+                (self.last_rating_summary or {}).get("reviews_count"),
+            ),
+            self._normalize_reported_review_count(
+                getattr(self.browser_transport, "last_review_count", None),
+            ),
+        ]
+        valid = [count for count in candidates if count is not None]
+        if not valid:
+            return None
+
+        # Prefer the larger number if Ozon's page variants disagree:
+        # this is conservative and avoids truncating distinct cards.
+        self.last_review_count = max(valid)
+        return self.last_review_count
+
+    def _has_collected_reported_total(self, yielded: int) -> bool:
+        total = self._reported_review_count()
+        return total is not None and yielded >= total
+
+    def _print_total_reached(self, yielded: int) -> None:
+        total = self._reported_review_count()
+        if total is not None:
+            print(
+                f"Ozon: собрано {yielded} из {total} заявленных "
+                "отзывов — дополнительные стримы не нужны"
+            )
+
+    async def _preflight_reported_review_count(
+        self,
+        product_path: str,
+    ) -> None:
+        """Ask transports that support a cheap product-page preflight."""
+        get_review_count = getattr(
+            self.browser_transport,
+            "get_ozon_review_count",
+            None,
+        )
+        if get_review_count is None:
+            return
+
+        try:
+            reported = await get_review_count(product_path)
+        except Exception:
+            return
+
+        count = self._normalize_reported_review_count(reported)
+        if count is not None:
+            self.last_review_count = count
+
+        product_title = getattr(
+            self.browser_transport,
+            "last_product_title",
+            None,
+        )
+        if isinstance(product_title, str) and product_title.strip():
+            self.last_product_title = product_title.strip()
 
     async def collect(self, product_url: str) -> ReviewPage:
         product_id = extract_ozon_product_id(product_url)
@@ -191,6 +276,7 @@ class OzonAdapter(MarketplaceAdapter):
             )
             if summary is not None:
                 self.last_rating_summary = summary
+                self._reported_review_count()
 
             if self.last_product_title is None:
                 self.last_product_title = (
@@ -259,6 +345,12 @@ class OzonAdapter(MarketplaceAdapter):
         # (see _read_review_cards in browser_json.py); we fall back to
         # the explicit "rating" key in the card dict if present.
         rating = card.get("rating")
+        raw_images = card.get("images")
+        photos = [
+            image
+            for image in raw_images
+            if isinstance(image, str) and image
+        ] if isinstance(raw_images, list) else []
 
         return Review(
             review_id=card.get("uuid"),
@@ -269,6 +361,7 @@ class OzonAdapter(MarketplaceAdapter):
             created_at=parse_ozon_date(
                 card.get("published_at")
             ),
+            photos=photos,
             raw=card,
         )
 
@@ -387,6 +480,10 @@ class OzonAdapter(MarketplaceAdapter):
             product_id=str(product_id),
         )
 
+        self.last_rating_summary = None
+        self.last_product_title = None
+        self.last_review_count = None
+        await self._preflight_reported_review_count(product_path)
         seen_keys: set[str] = set()
         yielded = 0
 
@@ -419,6 +516,18 @@ class OzonAdapter(MarketplaceAdapter):
                     max_reviews is not None
                     and yielded >= max_reviews
                 ):
+                    return
+                if (
+                    label == "default"
+                    and self._has_collected_reported_total(yielded)
+                ):
+                    self._print_total_reached(yielded)
+                    return
+                if (
+                    label != "default"
+                    and self._has_collected_reported_total(yielded)
+                ):
+                    self._print_total_reached(yielded)
                     return
                 if label != "default":
                     print(
@@ -558,8 +667,17 @@ class OzonAdapter(MarketplaceAdapter):
                 )
                 return
 
+        # PublicPageTransport discovers this during the product-page
+        # warmup inside its unified iterator. Read it after that
+        # iterator is exhausted: its first review is yielded before
+        # the transport assigns the captured count.
+        self._reported_review_count()
+
         # --- extra sort streams (beyond the default window) ---
         if extra_streams:
+            if self._has_collected_reported_total(yielded):
+                self._print_total_reached(yielded)
+                return
             for sort_value in self._EXTRA_STREAMS:
                 if (
                     max_reviews is not None

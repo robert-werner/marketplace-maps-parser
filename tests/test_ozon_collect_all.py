@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from domain.entities import ProductRef
 from infrastructure.marketplaces.ozon import OzonAdapter
 
 PRODUCT_URL = (
@@ -48,14 +49,26 @@ class StubTransport:
         # Payloads served for non-default streams (extra_query
         # set, e.g. "&sort=score_asc").
         variant_payloads: list[dict[str, Any]] | None = None,
+        product_review_count: int | None = None,
+        product_title: str | None = None,
     ) -> None:
         self.pagination_payloads = pagination_payloads or []
         self.scroll_batches = scroll_batches or []
         self.pagination_error = pagination_error
         self.scroll_error = scroll_error
         self.variant_payloads = variant_payloads or []
+        self.product_review_count = product_review_count
+        self.last_product_title = product_title
         self.received_extra_queries: list[str] = []
         self.iter_all_calls: list[dict[str, Any]] = []
+        self.review_count_requests: list[str] = []
+
+    async def get_ozon_review_count(
+        self,
+        product_path: str,
+    ) -> int | None:
+        self.review_count_requests.append(product_path)
+        return self.product_review_count
 
     async def iter_ozon_reviews_json(
         self,
@@ -220,6 +233,85 @@ async def test_iter_all_reviews_pagination_only() -> None:
     ]
     # iter_all_ozon_reviews must NOT be called in pagination-only mode
     assert transport.iter_all_calls == []
+
+
+@pytest.mark.asyncio
+async def test_pagination_skips_extra_streams_at_reported_total() -> None:
+    """A complete default stream must not re-walk sort variants."""
+    transport = StubTransport(
+        pagination_payloads=[_pagination_payload(["p1", "p2"])],
+        variant_payloads=[_pagination_payload(["extra"])],
+        product_review_count=2,
+        product_title="Yealink SIP-T30P",
+    )
+    adapter = OzonAdapter(browser_transport=transport)
+
+    reviews = [
+        review
+        async for review in adapter.iter_all_reviews(
+            product_url=PRODUCT_URL,
+            strategy="pagination",
+            extra_streams=True,
+        )
+    ]
+
+    assert [review.review_id for review in reviews] == ["p1", "p2"]
+    assert transport.received_extra_queries == [""]
+    assert transport.review_count_requests == [
+        "/product/ip-telefon-yealink-sip-t30-voip-ofisnyy-680123890",
+    ]
+    assert adapter.last_review_count == 2
+    assert adapter.last_product_title == "Yealink SIP-T30P"
+
+
+def test_parse_ozon_dom_card_promotes_images_to_photos() -> None:
+    adapter = OzonAdapter(browser_transport=StubTransport())
+    product = ProductRef(
+        marketplace="ozon",
+        source_url=PRODUCT_URL,
+        product_id="680123890",
+    )
+    review = adapter.parse_ozon_dom_card(
+        {
+            "uuid": "r1",
+            "text": "Author\n2026-01-01\nGood",
+            "images": [
+                "https://example.test/photo-1.jpg",
+                "https://example.test/photo-2.jpg",
+                None,
+            ],
+        },
+        product,
+    )
+
+    assert review.photos == [
+        "https://example.test/photo-1.jpg",
+        "https://example.test/photo-2.jpg",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_skips_extra_streams_at_reported_total() -> None:
+    """The public-widget path must stop before score_asc/score_desc."""
+    transport = StubTransport(
+        pagination_payloads=[_pagination_payload(["p1", "p2"])],
+        variant_payloads=[_pagination_payload(["extra"])],
+    )
+    transport.last_review_count = 2
+    adapter = OzonAdapter(browser_transport=transport)
+
+    reviews = [
+        review
+        async for review in adapter.iter_all_reviews(
+            product_url=PRODUCT_URL,
+            strategy="auto",
+            extra_streams=True,
+        )
+    ]
+
+    assert [review.review_id for review in reviews] == ["p1", "p2"]
+    assert transport.received_extra_queries == []
+    assert adapter.last_review_count == 2
 
 
 # ---------------------------------------------------------------------------

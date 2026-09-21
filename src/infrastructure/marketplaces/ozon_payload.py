@@ -494,6 +494,22 @@ def parse_ozon_date(value: Any) -> datetime | None:
     if not text:
         return None
 
+    # The public-page DOM exposes ``publishedat`` as a Unix timestamp
+    # string (for example ``"1750590285"``), whereas the API may use
+    # a numeric value. Normalize both representations identically.
+    try:
+        timestamp = float(text)
+    except ValueError:
+        timestamp = None
+
+    if timestamp is not None:
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000
+        return datetime.fromtimestamp(
+            timestamp,
+            tz=UTC,
+        )
+
     try:
         return datetime.fromisoformat(
             text.replace("Z", "+00:00"),

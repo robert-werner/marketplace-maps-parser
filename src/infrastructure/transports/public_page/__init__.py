@@ -39,9 +39,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
-import re
-import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -50,6 +47,10 @@ from infrastructure.transports.base import (
     OZON_BASE_URL,
     OzonTransportMixin,
 )
+from infrastructure.transports.public_page._dom import CardReadingMixin
+from infrastructure.transports.public_page._nav import NavigationMixin
+from infrastructure.transports.public_page._pagination import PaginationMixin
+from infrastructure.transports.public_page._widget import WidgetFlowMixin
 
 
 def _import_invisible_playwright():
@@ -84,14 +85,6 @@ def _import_retryable_errors():
 
 # Default user agent — used for logging only; invisible-playwright
 # already sets a real browser UA.
-
-
-
-from infrastructure.transports.public_page._dom import CardReadingMixin
-from infrastructure.transports.public_page._nav import NavigationMixin
-from infrastructure.transports.public_page._pagination import PaginationMixin
-from infrastructure.transports.public_page._widget import WidgetFlowMixin
-
 
 class PublicPageTransport(
     WidgetFlowMixin,
@@ -175,6 +168,14 @@ class PublicPageTransport(
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
         self.debug_dir = Path(debug_dir)
+        # Filled from the product/reviews-page DOM before card
+        # collection starts. OzonAdapter uses it as an optional
+        # completion bound before opening redundant sort streams.
+        self.last_review_count: int | None = None
+        # Filled from the same product-page preflight as the count.
+        # OzonAdapter stamps it onto the unified JSON records.
+        self.last_product_title: str | None = None
+        self._review_count_product_path: str | None = None
         # Proxy pool takes precedence over single proxy. When a
         # proxy_pool is provided, each page fetch rotates to the
         # next available proxy — this is the primary defense against
@@ -215,6 +216,44 @@ class PublicPageTransport(
         self.lazy_wait_ms = lazy_wait_ms
         self.block_assets = block_assets
         self.screenshots = screenshots
+
+    async def get_ozon_review_count(
+        self,
+        product_path: str,
+    ) -> int | None:
+        """Read the advertised review total before collection starts.
+
+        This lightweight product-page preflight prevents the adapter
+        from opening score-sorted streams when the primary widget flow
+        already collected every review Ozon advertises.
+        """
+        self._prepare_ozon_review_count(product_path)
+        page_proxy = await self._get_proxy_for_page()
+        retry_async = _import_retry_async()
+        retryable_errors = _import_retryable_errors()
+
+        try:
+            async with _import_invisible_playwright()(
+                proxy=page_proxy,
+                seed=self.seed,
+                pin=self.pin,
+                humanize=self.humanize,
+            ) as browser:
+                page = await self._new_page_with_stealth(browser)
+                await self._warmup_goto(
+                    page,
+                    product_path=product_path,
+                    retry_async=retry_async,
+                    retryable_errors=retryable_errors,
+                    label="Ozon review-count",
+                )
+        except Exception as exc:
+            print(
+                "Ozon: не удалось предварительно прочитать число "
+                f"отзывов ({type(exc).__name__})"
+            )
+
+        return self.last_review_count
 
     # ------------------------------------------------------------------
     # Scroll iterator
