@@ -1,125 +1,142 @@
-# src/infrastructure/marketplaces/wildberries.py
+"""Wildberries live DOM review adapter."""
 from __future__ import annotations
 
-from datetime import datetime
+import hashlib
+import re
+from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from domain.entities import ProductRef, Review, ReviewPage
 from infrastructure.marketplaces.base import MarketplaceAdapter
 from shared.url_parsers import extract_nm_id
 
+_MONTHS = {
+    name: index for index, name in enumerate((
+        'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+        'июля', 'августа', 'сентября', 'октября', 'ноября',
+        'декабря',
+    ), start=1)
+}
+_DATE_RE = re.compile(
+    r'(?:(Сегодня|Вчера)|(\d{1,2})\s+([а-яё]+)(?:\s+(\d{4}))?)',
+    re.I,
+)
 
-class WildberriesHttpTransport(Protocol):
-    async def get_json(
-        self,
-        url: str,
-        *,
-        params: dict[str, Any] | None = ...,
-        headers: dict[str, str] | None = ...,
-    ) -> dict[str, Any]: ...
+
+class WildberriesDomTransport(Protocol):
+    last_total_count: int | None
+    last_average_rating: float | None
+    last_product_title: str | None
+
+    def iter_review_batches(
+        self, product_url: str,
+    ) -> AsyncIterator[list[dict[str, Any]]]: ...
 
 
 class WildberriesAdapter(MarketplaceAdapter):
-    name = "wildberries"
+    name = 'wildberries'
 
-    def __init__(
-        self,
-        transport: WildberriesHttpTransport,
-    ) -> None:
+    def __init__(self, transport: WildberriesDomTransport) -> None:
         self.transport = transport
-        #: Product title for the unified output's ``product_title``
-        #: (brand + name from the card detail API).
         self.last_product_title: str | None = None
+        self.last_total_count: int | None = None
+        self.last_average_rating: float | None = None
 
     async def collect(self, product_url: str) -> ReviewPage:
-        nm_id = extract_nm_id(product_url)
-
-        card = await self.transport.get_json(
-            "https://card.wb.ru/cards/v4/detail",
-            params={
-                "appType": 1,
-                "curr": "rub",
-                "dest": -1257786,
-                "nm": nm_id,
-            },
-        )
-
-        products = card.get("products") or []
-        if not products:
-            raise ValueError(f"Товар WB не найден: {product_url}")
-
-        product = products[0]
-        imt_id = product.get("root")
-
-        if not imt_id:
-            raise ValueError(f"У WB отсутствует root: {product_url}")
-
-        self.last_product_title = (
-            " ".join(
-                part
-                for part in (
-                    product.get("brand"),
-                    product.get("name"),
-                )
-                if isinstance(part, str) and part.strip()
-            )
-            or None
-        )
-
-        raw = await self.transport.get_json(
-            f"https://feedbacks1.wb.ru/feedbacks/v1/{imt_id}",
-        )
-
-        product_ref = ProductRef(
-            marketplace=self.name,
-            source_url=product_url,
-            product_id=str(nm_id),
-            parent_id=str(imt_id),
-        )
-
+        reviews = [
+            review async for review in self.iter_reviews(product_url)
+        ]
         return ReviewPage(
-            product=product_ref,
-            reviews=[
-                self._map_review(item, product_ref)
-                for item in raw.get("feedbacks", [])
-            ],
-            total_count=raw.get("feedbackCount"),
-            average_rating=raw.get("valuation"),
+            product=ProductRef(
+                self.name,
+                product_url,
+                str(extract_nm_id(product_url)),
+            ),
+            reviews=reviews,
+            total_count=self.last_total_count,
+            average_rating=self.last_average_rating,
+        )
+
+    async def iter_reviews(self, product_url: str) -> AsyncIterator[Review]:
+        product = ProductRef(
+            self.name, product_url, str(extract_nm_id(product_url)),
+        )
+        seen: set[str] = set()
+        async for batch in self.transport.iter_review_batches(product_url):
+            self.last_product_title = self.transport.last_product_title
+            self.last_total_count = self.transport.last_total_count
+            self.last_average_rating = self.transport.last_average_rating
+            for item in batch:
+                review = self._map_review(item, product)
+                if review.review_id not in seen:
+                    seen.add(review.review_id or '')
+                    yield review
+        self.last_product_title = self.transport.last_product_title
+        self.last_total_count = self.transport.last_total_count
+        self.last_average_rating = self.transport.last_average_rating
+
+    @staticmethod
+    def _map_review(item: dict[str, Any], product: ProductRef) -> Review:
+        sections = {
+            str(section.get('label') or '').rstrip(':').lower():
+            section.get('value')
+            for section in item.get('sections') or []
+            if isinstance(section, dict)
+        }
+        text = sections.get('комментарий') or item.get('text')
+        pros = sections.get('достоинства')
+        cons = sections.get('недостатки')
+        raw_date = str(item.get('date') or '')
+        created_at = WildberriesAdapter._parse_date(raw_date)
+        date_key = raw_date
+        if created_at is not None:
+            date_key = re.sub(
+                r'^(Сегодня|Вчера)',
+                created_at.strftime('%Y-%m-%d'),
+                date_key,
+                flags=re.I,
+            )
+        # No review id is exposed in the DOM. Keep a reproducible ID
+        # across runs even when relative dates turn from today to yesterday.
+        identity = '\x1f'.join(str(v or '') for v in (
+            product.product_id, item.get('author'), date_key,
+            item.get('rating'), text, pros, cons,
+        ))
+        review_id = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+        raw = {**item, 'id': review_id, 'dom': True}
+        return Review(
+            review_id=review_id,
+            product=product,
+            rating=item.get('rating'),
+            text=text,
+            pros=pros,
+            cons=cons,
+            author=item.get('author'),
+            created_at=created_at,
+            seller_answer=item.get('answer'),
+            photos=list(item.get('photos') or []),
             raw=raw,
         )
 
-    def _map_review(
-        self,
-        item: dict[str, Any],
-        product: ProductRef,
-    ) -> Review:
-        answer = item.get("answer") or {}
-
-        return Review(
-            review_id=str(
-                item.get("id")
-                or item.get("feedbackId")
-                or ""
-            ) or None,
-            product=product,
-            rating=item.get("productValuation"),
-            text=item.get("text"),
-            pros=item.get("pros"),
-            cons=item.get("cons"),
-            author=item.get("userName"),
-            created_at=self._parse_date(item.get("createdDate")),
-            seller_answer=answer.get("text"),
-            raw=item,
-        )
-
     @staticmethod
-    def _parse_date(value: str | None) -> datetime | None:
-        if not value:
+    def _parse_date(value: str) -> datetime | None:
+        match = _DATE_RE.search(value)
+        if not match:
             return None
-
+        now = datetime.now()
+        if match.group(1):
+            return now.replace(
+                hour=0, minute=0, second=0, microsecond=0,
+            ) - timedelta(days=match.group(1).lower() == 'вчера')
+        month = _MONTHS.get(match.group(3).lower())
+        if month is None:
+            return None
+        year = int(match.group(4)) if match.group(4) else now.year
         try:
-            return datetime.fromisoformat(
-                value.replace("Z", "+00:00"),
-            )
+            result = datetime(year, month, int(match.group(2)))
+            if not match.group(4) and result > now:
+                result = result.replace(year=year - 1)
+            return result
         except ValueError:
             return None

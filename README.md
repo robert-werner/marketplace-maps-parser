@@ -430,7 +430,16 @@ python -m marketplace_maps_parser \
 
 ### Wildberries (`--marketplace wildberries`)
 
-One browser session per product: the card API (`card.wb.ru/cards/v4/detail` → brand/name/root) and the feedbacks API (`feedbacks1.wb.ru/feedbacks/v1/<imt>`) are called via in-page `fetch()`. WB blocks every non-browser client cold — the APIs answer 403 and even the main page returns 498 for plain httpx AND curl_cffi with chrome TLS impersonation (measured 2026-09-19) — hence the invisible-playwright transport (`transports/wb_browser.py`). The public feedbacks endpoint caps the list (~25 of the 33 `feedbackCount` on the probe product — the rest are deleted/rating-only); `diagnostics.total_count` carries the site number. `product_title` = `brand + name` from the card.
+One Invisible Playwright browser session per product opens the live
+`/feedbacks` page and reads rendered review cards from the DOM while
+scrolling. The Wildberries card and feedback JSON APIs are not called by
+this flow. Each card is mapped from its rendered author, date, stars,
+text, pros/cons, seller answer, and attached media. Wildberries does not
+expose a stable review ID in the rendered markup, so the adapter creates a
+deterministic hash from the product and card fields for deduplication and
+resume. `diagnostics.total_count` and `diagnostics.average_rating` are
+read from the live page when available; the title is read from the product
+page.
 
 ```bash
 python -m marketplace_maps_parser \

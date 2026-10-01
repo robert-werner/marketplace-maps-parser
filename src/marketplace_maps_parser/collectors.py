@@ -1390,11 +1390,8 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
         WildberriesBrowserTransport,
     )
 
-    # WB blocks every non-browser client cold (card/feedbacks APIs
-    # → 403, the main site → 498 — even for curl_cffi with chrome
-    # TLS impersonation, measured 2026-09-19), so the flow runs in
-    # an invisible-playwright page and calls the JSON APIs from the
-    # page context (the site's own cookies + fingerprint).
+    # Read the live reviews page with Invisible Playwright; no
+    # card.wb.ru or feedbacks API requests are issued by this flow.
     proxy = _build_single_proxy(args) if args.proxy else None
 
     async with WildberriesBrowserTransport(
@@ -1407,42 +1404,39 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
         adapter = WildberriesAdapter(transport)
 
         if args.format == "json":
-            wb_diags: dict[str, Any] = {}
-
-            async def _wb_iterator() -> (
-                AsyncIterator[Review]
-            ):
-                page = await adapter.collect(args.url)
-                wb_diags["total_count"] = page.total_count
-                wb_diags["average_rating"] = (
-                    page.average_rating
-                )
-                for review in page.reviews:
-                    yield review
-
             return await _run_unified_json(
                 args,
                 adapter=adapter,
-                make_iterator=_wb_iterator,
-                extra_diagnostics=lambda: dict(wb_diags),
+                make_iterator=lambda: adapter.iter_reviews(args.url),
+                extra_diagnostics=lambda: {
+                    "total_count": adapter.last_total_count,
+                    "average_rating": adapter.last_average_rating,
+                },
             )
 
-        page = await adapter.collect(args.url)
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    with output.open("w", encoding="utf-8") as file:
-        for review in page.reviews:
-            file.write(
-                json.dumps(
-                    _review_to_record(review),
-                    ensure_ascii=False,
-                    default=str,
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        seen_ids = (
+            _load_existing_reviews(output) if args.resume else set()
+        )
+        count = 0
+        with output.open(
+            "a" if args.resume else "w", encoding="utf-8",
+        ) as file:
+            async for review in adapter.iter_reviews(args.url):
+                if review.review_id in seen_ids:
+                    continue
+                seen_ids.add(review.review_id)
+                file.write(
+                    json.dumps(
+                        _review_to_record(review),
+                        ensure_ascii=False,
+                        default=str,
+                    ) + "\n"
                 )
-                + "\n"
-            )
-
-    return len(page.reviews)
-
+                file.flush()
+                count += 1
+                if args.max_reviews is not None and count >= args.max_reviews:
+                    break
+        return count
 

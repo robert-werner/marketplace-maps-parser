@@ -1,9 +1,8 @@
-"""Tests for the Wildberries adapter.
-
-Uses a stub transport that returns canned JSON — no network required.
-"""
+"""Wildberries live-DOM adapter tests without network calls."""
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -14,135 +13,91 @@ from infrastructure.marketplaces.wildberries import (
 )
 from shared.url_parsers import extract_nm_id
 
+WB_URL = 'https://www.wildberries.ru/catalog/12345678/detail.aspx'
+
 
 class StubWildberriesTransport:
-    """Returns canned card + feedback responses based on the URL."""
+    last_total_count = 3
+    last_average_rating = 4.5
+    last_product_title = 'Test product'
 
-    def __init__(
-        self,
-        card_payload: dict[str, Any],
-        feedbacks_payload: dict[str, Any],
-    ) -> None:
-        self.card_payload = card_payload
-        self.feedbacks_payload = feedbacks_payload
-        self.calls: list[tuple[str, dict[str, Any] | None]] = []
+    def __init__(self, batches: list[list[dict[str, Any]]]) -> None:
+        self.batches = batches
+        self.urls: list[str] = []
 
-    async def get_json(
-        self,
-        url: str,
-        *,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        self.calls.append((url, params))
-        if "card.wb.ru" in url:
-            return self.card_payload
-        if "feedbacks1.wb.ru" in url:
-            return self.feedbacks_payload
-        raise AssertionError(f"unexpected URL: {url}")
+    async def iter_review_batches(
+        self, product_url: str,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        self.urls.append(product_url)
+        for batch in self.batches:
+            yield batch
 
 
-WB_URL = (
-    "https://www.wildberries.ru/catalog/12345678/detail.aspx"
-)
-
-
-def _card_payload() -> dict[str, Any]:
-    return {
-        "products": [
-            {"root": 999, "name": "Test product"},
-        ]
-    }
-
-
-def _feedbacks_payload() -> dict[str, Any]:
-    return {
-        "feedbackCount": 2,
-        "valuation": 4.5,
-        "feedbacks": [
-            {
-                "id": 111,
-                "productValuation": 5,
-                "text": "Отлично",
-                "pros": "Качество",
-                "cons": None,
-                "userName": "Иван",
-                "createdDate": "2024-01-01T00:00:00Z",
-                "answer": {"text": "Спасибо"},
-            },
-            {
-                "id": 222,
-                "productValuation": 4,
-                "text": "Нормально",
-                "pros": None,
-                "cons": "Цена",
-                "userName": "Мария",
-                "createdDate": "2024-02-01T00:00:00Z",
-                "answer": None,
-            },
-        ],
-    }
+def _cards() -> list[dict[str, Any]]:
+    return [
+        {
+            'author': 'Иван', 'date': '01 января 2024',
+            'rating': 5, 'text': None,
+            'sections': [
+                {'label': 'Достоинства:', 'value': 'Качество'},
+                {'label': 'Комментарий:', 'value': 'Отлично'},
+            ],
+            'answer': 'Спасибо', 'photos': ['https://example.org/a.webp'],
+        },
+        {
+            'author': 'Мария', 'date': '02 февраля 2024',
+            'rating': 4, 'text': 'Нормально',
+            'sections': [], 'answer': None, 'photos': [],
+        },
+    ]
 
 
 @pytest.mark.asyncio
 async def test_wildberries_adapter_collect() -> None:
-    transport = StubWildberriesTransport(
-        card_payload=_card_payload(),
-        feedbacks_payload=_feedbacks_payload(),
-    )
+    cards = _cards()
+    transport = StubWildberriesTransport([cards, cards])
     adapter = WildberriesAdapter(transport)
 
     page = await adapter.collect(WB_URL)
 
     assert isinstance(page, ReviewPage)
-    assert page.product.product_id == "12345678"
-    assert page.product.parent_id == "999"
-    assert page.total_count == 2
+    assert page.product.product_id == '12345678'
+    assert page.total_count == 3
     assert page.average_rating == 4.5
-
+    assert adapter.last_product_title == 'Test product'
+    assert transport.urls == [WB_URL]
     assert len(page.reviews) == 2
     r1, r2 = page.reviews
-
-    assert r1.review_id == "111"
+    assert r1.review_id == WildberriesAdapter._map_review(
+        cards[0], page.product,
+    ).review_id
     assert r1.rating == 5
-    assert r1.text == "Отлично"
-    assert r1.pros == "Качество"
-    assert r1.cons is None
-    assert r1.author == "Иван"
-    assert r1.seller_answer == "Спасибо"
-
-    assert r2.review_id == "222"
+    assert r1.text == 'Отлично'
+    assert r1.pros == 'Качество'
+    assert r1.created_at and r1.created_at.year == 2024
+    assert r1.photos == ['https://example.org/a.webp']
+    assert r1.seller_answer == 'Спасибо'
+    assert r1.raw['id'] == r1.review_id
     assert r2.rating == 4
-    assert r2.cons == "Цена"
+    assert r2.text == 'Нормально'
     assert r2.seller_answer is None
 
 
 @pytest.mark.asyncio
-async def test_wildberries_adapter_missing_product() -> None:
-    transport = StubWildberriesTransport(
-        card_payload={"products": []},
-        feedbacks_payload=_feedbacks_payload(),
-    )
-    adapter = WildberriesAdapter(transport)
-
-    with pytest.raises(ValueError, match="не найден"):
-        await adapter.collect(WB_URL)
+async def test_wildberries_empty_batches() -> None:
+    page = await WildberriesAdapter(
+        StubWildberriesTransport([[]]),
+    ).collect(WB_URL)
+    assert page.reviews == []
 
 
-@pytest.mark.asyncio
-async def test_wildberries_adapter_missing_root() -> None:
-    transport = StubWildberriesTransport(
-        card_payload={
-            "products": [{"name": "no root here"}]
-        },
-        feedbacks_payload=_feedbacks_payload(),
-    )
-    adapter = WildberriesAdapter(transport)
-
-    with pytest.raises(ValueError, match="root"):
-        await adapter.collect(WB_URL)
-
-
-def test_extract_nm_id_used_by_adapter() -> None:
-    """Sanity: the URL parser and the adapter agree on the SKU."""
+def test_wildberries_date_and_id() -> None:
     assert extract_nm_id(WB_URL) == 12345678
+    assert WildberriesAdapter._parse_date('Нет даты') is None
+    assert WildberriesAdapter._parse_date('31 февраля 2024') is None
+    assert WildberriesAdapter._parse_date(
+        'Сегодня, 12:16 · Дополнен'
+    ).date() == datetime.now().date()
+    assert WildberriesAdapter._parse_date(
+        'Вчера, 10:00'
+    ).date() == (datetime.now() - timedelta(days=1)).date()
