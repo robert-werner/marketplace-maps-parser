@@ -10,8 +10,8 @@ Two formats are accepted:
 - Netscape cookie file — tab-separated lines with ``#`` comments,
   as written by curl/wget and most cookie exporters.
 
-Cookies are injected into every browser page the public_page
-transport opens. Measured 2026-09-15: anonymous sessions get ~33
+Cookies are injected into every browser page the Ozon browser transport
+opens. Measured 2026-09-15: anonymous sessions get ~33
 review pages (≈990 reviews) from the reviews widget; a logged-in
 session unlocks the full list.
 """

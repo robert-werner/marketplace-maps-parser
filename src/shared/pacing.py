@@ -15,7 +15,7 @@ user-supplied ``base_delay`` and adapts:
 - ``wait()`` jitters the sleep (±30%) so the delay sequence never
   becomes a fixed rhythm the antibot can fingerprint.
 
-All four Ozon transports create ``self._pacer = AdaptivePacer(
+The Ozon browser transports create ``self._pacer = AdaptivePacer(
 base_delay=page_delay_seconds)`` inside ``iter_all_ozon_reviews`` and
 drive it through ``record_success()`` / ``wait()`` / ``record_block()``
 (see ``transports/base.py::_notify_pacer_block``).

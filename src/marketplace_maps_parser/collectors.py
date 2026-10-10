@@ -16,263 +16,36 @@ Two output formats (``--format``):
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
-from domain.entities import Review
-from shared.unified_format import (
-    build_unified_document,
-    build_unified_review,
-    unified_review_id,
+from marketplace_maps_parser.concurrency import (
+    PartialCollectionError as PartialCollectionError,
 )
-
-
-def _review_to_record(review: Any) -> dict[str, Any]:
-    return {
-        "review_id": review.review_id,
-        "product_id": review.product.product_id,
-        "marketplace": review.product.marketplace,
-        "rating": review.rating,
-        "text": review.text,
-        "author": review.author,
-        "created_at": review.created_at,
-        "pros": review.pros,
-        "cons": review.cons,
-        "seller_answer": review.seller_answer,
-        "raw": review.raw,
-    }
-
-
-class _UnifiedRun:
-    """Accumulates unified review records for ``--format json``.
-
-    Resume support re-reads the existing document and keeps its
-    records; dedup keys come from ``raw`` (``reviewId`` / ``id`` /
-    ``uuid`` — the unified schema itself has no ``review_id``
-    field)."""
-
-    def __init__(self, output: Path, *, resume: bool) -> None:
-        self.output = output
-        self.records: list[dict[str, Any]] = []
-        self.seen: set[str] = set()
-        if resume and output.exists():
-            try:
-                document = json.loads(
-                    output.read_text(encoding="utf-8"),
-                )
-            except (OSError, json.JSONDecodeError):
-                document = None
-            for record in (
-                document.get("reviews") or []
-                if isinstance(document, dict)
-                else []
-            ):
-                if not isinstance(record, dict):
-                    continue
-                review_id = unified_review_id(record)
-                if review_id:
-                    self.seen.add(review_id)
-                self.records.append(record)
-            if self.seen:
-                print(
-                    f"Resume: {len(self.seen)} отзывов уже в "
-                    f"{output.name}, будут пропущены."
-                )
-
-    def add(self, review: Review) -> bool:
-        record = build_unified_review(review)
-        review_id = unified_review_id(record)
-        if review_id and review_id in self.seen:
-            return False
-        if review_id:
-            self.seen.add(review_id)
-        self.records.append(record)
-        return True
-
-    def finish(
-        self,
-        *,
-        product_title: str | None,
-        error: str | None,
-        collected: int,
-        **diagnostics: Any,
-    ) -> None:
-        # One run = one product/org: stamp the title (known only
-        # after the first payload arrives) onto every record.
-        for record in self.records:
-            record["product_title"] = product_title
-        self.output.parent.mkdir(parents=True, exist_ok=True)
-        document = build_unified_document(
-            self.records,
-            error=error,
-            collected=collected,
-            **diagnostics,
-        )
-        self.output.write_text(
-            json.dumps(
-                document,
-                ensure_ascii=False,
-                indent=2,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
-
-
-async def _run_unified_json(
-    args: argparse.Namespace,
-    *,
-    adapter: Any,
-    make_iterator: Callable[[], AsyncIterator[Review]],
-    extra_diagnostics: Callable[[], dict[str, Any]] | None = None,
-) -> int:
-    """Stream reviews into the unified JSON document.
-
-    A failed run (captcha, block, transport error) keeps the
-    reviews collected before the failure and lands the reason in
-    ``diagnostics`` — a captcha is NEVER emitted as a review."""
-    run = _UnifiedRun(Path(args.output), resume=args.resume)
-    count = 0
-    error: str | None = None
-    try:
-        async for review in make_iterator():
-            if run.add(review):
-                count += 1
-                if count % 100 == 0:
-                    print(f"Собрано отзывов: {count}")
-                if (
-                    args.max_reviews is not None
-                    and count >= args.max_reviews
-                ):
-                    print(
-                        f"Достигнут лимит --max-reviews: "
-                        f"{args.max_reviews}"
-                    )
-                    break
-    except Exception as exc:
-        import traceback
-        error = f"{type(exc).__name__}: {exc}"
-        print(f"Сбор прерван ошибкой: {error}")
-        print("\n=== Полный traceback ===")
-        traceback.print_exc()
-        print("========================\n")
-    diagnostics = (
-        extra_diagnostics() if extra_diagnostics else {}
-    )
-    run.finish(
-        product_title=getattr(
-            adapter, "last_product_title", None,
-        ),
-        error=error,
-        collected=count,
-        **diagnostics,
-    )
-    return count
-
-
-async def _iter_parallel_reviews(
-    adapters: list[Any],
-    url: str,
-) -> AsyncIterator[Any]:
-    """Fan the review streams of N adapters (one browser session
-    each, disjoint page ranges) into a single queue.
-
-    A session that dies (captcha / soft-block past its proxy
-    rotations) keeps its already-yielded reviews and the rest
-    continue; the error is re-raised only when EVERY session died
-    without yielding anything — the run then lands in diagnostics
-    as an error instead of an empty success."""
-    from infrastructure.transports.yandex_browser import (
-        YandexCaptchaError,
-    )
-
-    queue: asyncio.Queue[Any] = asyncio.Queue()
-    failures: list[BaseException] = []
-    yielded = 0
-
-    async def pump(adapter: Any) -> None:
-        try:
-            async for review in adapter.iter_reviews(url):
-                await queue.put(review)
-        except YandexCaptchaError as exc:
-            failures.append(exc)
-            print(f"[warning] Я.Маркет: сессия остановилась: {exc}")
-
-    tasks = [
-        asyncio.create_task(pump(adapter))
-        for adapter in adapters
-    ]
-
-    async def finisher() -> None:
-        # return_exceptions: a late sibling failure must not turn
-        # into an unretrieved-task-exception warning.
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await queue.put(None)
-
-    finisher_task = asyncio.create_task(finisher())
-    try:
-        while True:
-            review = await queue.get()
-            if review is None:
-                break
-            yielded += 1
-            yield review
-        if not yielded and len(failures) == len(adapters):
-            raise failures[0]
-    finally:
-        finisher_task.cancel()
-        for task in tasks:
-            task.cancel()
-
-
-class _ParallelYandexSessions:
-    """Adapter stand-in for ``--parallel-sessions`` (yandex): N
-    one-range browser sessions fanned into a single review stream.
-
-    Exposes the aggregate ``last_*`` totals so both output formats
-    and the summary print work unchanged."""
-
-    def __init__(self, adapters: list[Any]) -> None:
-        self._adapters = adapters
-        self.last_total_count: int | None = None
-        self.last_average_rating: float | None = None
-        self.last_product_title: str | None = None
-
-    async def iter_reviews(self, url: str) -> AsyncIterator[Any]:
-        async for review in _iter_parallel_reviews(
-            self._adapters, url,
-        ):
-            # Refresh the totals on every review (the same pattern
-            # as the single-session adapter: they must survive an
-            # early --max-reviews break).
-            counts = [
-                adapter.last_total_count
-                for adapter in self._adapters
-                if adapter.last_total_count is not None
-            ]
-            self.last_total_count = (
-                max(counts) if counts else None
-            )
-            ratings = [
-                adapter.last_average_rating
-                for adapter in self._adapters
-                if adapter.last_average_rating is not None
-            ]
-            self.last_average_rating = (
-                ratings[0] if ratings else None
-            )
-            titles = [
-                adapter.last_product_title
-                for adapter in self._adapters
-                if adapter.last_product_title
-            ]
-            self.last_product_title = (
-                titles[0] if titles else None
-            )
-            yield review
+from marketplace_maps_parser.concurrency import (
+    _iter_parallel_reviews as _iter_parallel_reviews,
+)
+from marketplace_maps_parser.concurrency import (
+    _ParallelYandexSessions,
+)
+from marketplace_maps_parser.rating_summary import (
+    _finalize_rating_summary as _finalize_rating_summary,
+)
+from marketplace_maps_parser.rating_summary import (
+    _scan_output_ratings as _scan_output_ratings,
+)
+from marketplace_maps_parser.run_state import write_status
+from marketplace_maps_parser.runner import run_collection as _run_unified_json
+from marketplace_maps_parser.transport_factory import (
+    _build_ozon_transport as _build_ozon_transport,
+)
+from marketplace_maps_parser.transport_factory import (
+    _build_proxy_pool as _build_proxy_pool,
+)
+from marketplace_maps_parser.transport_factory import (
+    _build_single_proxy as _build_single_proxy,
+)
 
 
 async def _draw_session_proxies(
@@ -334,153 +107,7 @@ def _load_existing_reviews(
     return seen
 
 
-def _scan_output_ratings(
-    output: Path,
-    product_id: str,
-) -> tuple[dict[str, int], dict[str, int]]:
-    """Scan the output JSONL: total rows per star and existing
-    synthetic rating-only rows per star (ids prefixed
-    ``<product_id>-ro-<star>-``).
-    """
-    per_star: dict[str, int] = {}
-    synth: dict[str, int] = {}
-    prefix = f"{product_id}-ro-"
-    try:
-        with output.open("r", encoding="utf-8") as file:
-            for line in file:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                rating = record.get("rating")
-                if rating is None or isinstance(rating, bool):
-                    continue
-                try:
-                    star = str(int(rating))
-                except (TypeError, ValueError):
-                    continue
-                per_star[star] = per_star.get(star, 0) + 1
-                rid = str(record.get("review_id") or "")
-                if rid.startswith(f"{prefix}{star}-"):
-                    synth[star] = synth.get(star, 0) + 1
-    except OSError:
-        pass
-    return per_star, synth
-
-
-def _finalize_rating_summary(
-    *,
-    output: Path,
-    summary: dict[str, Any],
-    include_rating_only: bool,
-    marketplace: str,
-) -> int:
-    """Write ``<output>.summary.json``; with ``include_rating_only``
-    also append synthetic rows for the rating-only remainder.
-
-    Returns the number of synthetic rows appended this run.
-    """
-    histogram = summary.get("histogram") or {}
-    product_id = str(summary.get("product_id") or "")
-    if not histogram or not product_id:
-        return 0
-
-    per_star, synth = _scan_output_ratings(output, product_id)
-
-    remainder = {
-        star: max(0, int(count) - per_star.get(star, 0))
-        for star, count in histogram.items()
-    }
-
-    added = 0
-    if include_rating_only and any(remainder.values()):
-        with output.open("a", encoding="utf-8") as file:
-            for star in sorted(remainder, reverse=True):
-                need = remainder[star]
-                if need <= 0:
-                    continue
-                start = synth.get(star, 0)
-                for n in range(start + 1, start + need + 1):
-                    record = {
-                        "review_id": (
-                            f"{product_id}-ro-{star}-{n:05d}"
-                        ),
-                        "product_id": product_id,
-                        "marketplace": marketplace,
-                        "rating": int(star),
-                        "text": None,
-                        "author": None,
-                        "created_at": None,
-                        "pros": None,
-                        "cons": None,
-                        "seller_answer": None,
-                        "raw": {
-                            "synthetic": True,
-                            "source": (
-                                "webReviewProductScore histogram"
-                            ),
-                            "note": (
-                                "Оценка без отзыва: Ozon не отдаёт "
-                                "такие записи по отдельности"
-                            ),
-                        },
-                    }
-                    file.write(
-                        json.dumps(
-                            record,
-                            ensure_ascii=False,
-                            default=str,
-                        )
-                        + "\n"
-                    )
-                    added += 1
-
-    summary_record = {
-        "product_id": product_id,
-        "product_url": summary.get("product_url"),
-        "average_score": summary.get("average_score"),
-        "site_ratings_total": summary.get("reviews_count"),
-        "site_histogram": histogram,
-        "rows_per_star_in_file": per_star,
-        "rating_only_per_star": remainder,
-        "synthetic_rows_appended_this_run": added,
-        "synthetic_rows_total_in_file": sum(synth.values()) + added,
-    }
-    summary_path = Path(str(output) + ".summary.json")
-    summary_path.write_text(
-        json.dumps(
-            summary_record,
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    histogram_preview = " ".join(
-        f"{star}*={count}"
-        for star, count in sorted(
-            histogram.items(),
-            reverse=True,
-        )
-    )
-    print(
-        f"Ozon: гистограмма оценок: {histogram_preview}; "
-        f"оценок без текста (нельзя собрать индивидуально): "
-        f"{sum(remainder.values())}"
-        + (
-            f"; добавлено синтетических строк: {added}"
-            if added
-            else ""
-        )
-        + f"; сводка: {summary_path.name}"
-    )
-    return added
-
-
-async def _collect_ozon(args: argparse.Namespace) -> int:
+async def _collect_ozon_once(args: argparse.Namespace) -> int:
     # Lazy import: heavy transport modules are imported only when
     # the user selects them.
     from infrastructure.marketplaces.ozon import OzonAdapter
@@ -491,94 +118,15 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
     transport = await _build_ozon_transport(args)
     adapter = OzonAdapter(browser_transport=transport)
 
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    # ``--resume``: load review_ids already in the output file so we
-    # don't re-emit them. Open in append mode so the new run extends
-    # the file rather than overwriting it.
-    if args.resume:
-        seen_ids = _load_existing_reviews(output)
-        if seen_ids:
-            print(
-                f"Resume: {len(seen_ids)} reviews already in "
-                f"{output.name}, will skip them."
-            )
-        file_mode = "a"
-    else:
-        seen_ids = set()
-        file_mode = "w"
-
-    count = 0
-
-    # When using curl_cffi, scroll strategy is not supported —
-    # silently coerce it to pagination to avoid a NotImplementedError
-    # at fetch time.
-    effective_strategy = args.strategy
-    if args.transport == "curl_cffi" and effective_strategy == "scroll":
-        print(
-            "[info] --transport curl_cffi не поддерживает "
-            "--strategy scroll; переключаю на pagination"
-        )
-        effective_strategy = "pagination"
-    elif (
-        args.transport == "curl_cffi"
-        and effective_strategy == "auto"
-    ):
-        print(
-            "[info] --transport curl_cffi: auto strategy "
-            "эквивалентна pagination (scroll не поддерживается)"
-        )
-        effective_strategy = "pagination"
-
-    if args.format == "json":
-        try:
-            return await _run_unified_json(
-                args,
-                adapter=adapter,
-                make_iterator=lambda: adapter.iter_all_reviews(
-                    product_url=args.url,
-                    strategy=effective_strategy,
-                    max_reviews=args.max_reviews,
-                    pagination_max_pages=args.max_pages,
-                    pagination_start_page=args.start_page,
-                    page_delay_seconds=args.page_delay_seconds,
-                    scroll_pause_seconds=args.scroll_pause_seconds,
-                    retry_attempts=args.retry_attempts,
-                    extra_streams=not args.no_extra_streams,
-                    parallel_streams=getattr(
-                        args, "parallel_streams", False,
-                    ),
-                    filter_streams=getattr(
-                        args, "filter_streams", False,
-                    ),
-                    dup_streak_stop=getattr(
-                        args, "dup_streak_stop", 300,
-                    ),
-                ),
-                extra_diagnostics=lambda: {
-                    "total_count": adapter.last_review_count,
-                    "average_score": (
-                        (adapter.last_rating_summary or {}).get(
-                            "average_score",
-                        )
-                    ),
-                },
-            )
-        finally:
-            close = getattr(transport, "close", None)
-            if close is not None:
-                try:
-                    await close()
-                except Exception:
-                    pass
 
     try:
-        with output.open(file_mode, encoding="utf-8") as file:
-            async for review in adapter.iter_all_reviews(
+        count = await _run_unified_json(
+            args,
+            adapter=adapter,
+            make_iterator=lambda: adapter.iter_all_reviews(
                 product_url=args.url,
-                strategy=effective_strategy,
-                max_reviews=args.max_reviews,
+                strategy=args.strategy,
+                max_reviews=None,
                 pagination_max_pages=args.max_pages,
                 pagination_start_page=args.start_page,
                 page_delay_seconds=args.page_delay_seconds,
@@ -594,29 +142,17 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
                 dup_streak_stop=getattr(
                     args, "dup_streak_stop", 300,
                 ),
-            ):
-                review_id = review.review_id
-                if review_id and review_id in seen_ids:
-                    continue
-                if review_id:
-                    seen_ids.add(review_id)
-
-                file.write(
-                    json.dumps(
-                        _review_to_record(review),
-                        ensure_ascii=False,
-                        default=str,
+            ),
+            extra_diagnostics=lambda: {
+                "total_count": adapter.last_review_count,
+                "average_score": (
+                    (adapter.last_rating_summary or {}).get(
+                        "average_score",
                     )
-                    + "\n"
-                )
-                file.flush()
-                count += 1
-
-                if count % 100 == 0:
-                    print(f"Собрано отзывов: {count}")
+                ),
+            },
+        )
     finally:
-        # Ensure the transport's HTTP session is closed (curl_cffi
-        # holds a connection pool that should be released).
         close = getattr(transport, "close", None)
         if close is not None:
             try:
@@ -629,9 +165,10 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
     # histogram counts. Write a summary file and, with
     # --include-rating-only, append synthetic rows for the remainder.
     summary = getattr(adapter, "last_rating_summary", None)
-    if isinstance(summary, dict) and summary.get("histogram"):
+    if (args.format == "jsonl" and isinstance(summary, dict)
+            and summary.get("histogram")):
         added = _finalize_rating_summary(
-            output=output,
+            output=Path(args.output),
             summary=summary,
             include_rating_only=getattr(
                 args, "include_rating_only", False,
@@ -639,202 +176,73 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
             marketplace=adapter.name,
         )
         count += added
+        write_status(
+            args.output,
+            status=getattr(args, "_run_status", "complete"),
+            collected=count,
+            total_records=count,
+            rating_only_rows=added,
+        )
 
     return count
 
 
-async def _build_ozon_transport(
-    args: argparse.Namespace,
-) -> Any:
-    """Construct the Ozon transport based on --transport.
+async def _collect_ozon(args: argparse.Namespace) -> int:
+    """Retry failed runs on distinct proxies with fresh browser sessions.
 
-    Returns an object that implements the OzonBrowserTransport
-    Protocol (iter_ozon_reviews_json, iter_ozon_reviews_by_scroll,
-    iter_all_ozon_reviews, get_ozon_reviews_json).
+    Keep already-written records via --resume; do not reuse a fingerprint
+    or cookies within one poisoned browser session. A partial run without
+    an exception (e.g. --max-reviews) is not automatically retried.
     """
-    # Build proxy pool / single proxy from CLI args.
-    from infrastructure.transports.proxy_pool import proxy_to_url
-
-    proxy_pool = await _build_proxy_pool(args)
-    single_proxy = _build_single_proxy(args) if proxy_pool is None else None
-
-    # playwright/hybrid drive ONE browser session and accept a
-    # single proxy. Without this, --proxy-list would be silently
-    # ignored for them and ALL traffic would go direct from this
-    # machine (privacy + rotation loss). Take the next proxy from
-    # the pool for the whole run.
     if (
-        proxy_pool is not None
-        and args.transport in ("playwright", "hybrid")
+        not args.proxy_list
+        or args.proxy
+        or getattr(args, "proxy_attempts", 1) == 1
     ):
-        pool_next = getattr(proxy_pool, "next_async", None)
-        single_proxy = (
-            await pool_next()
-            if pool_next is not None
-            else proxy_pool.next()
-        )
-        if single_proxy is None:
-            print(
-                "[warning] все proxy пула заблокированы — "
-                "запуск напрямую с этого IP"
-            )
-        else:
-            print(
-                f"[info] {args.transport}-транспорт: один proxy на "
-                f"весь запуск — {single_proxy.get('server', '?')} "
-                "(построчная ротация только у public_page)"
-            )
+        return await _collect_ozon_once(args)
 
-    cookies = None
-    if args.cookies:
-        from infrastructure.transports.cookie_loader import (
-            load_cookies_file,
-        )
-        cookies = load_cookies_file(args.cookies)
-        print(
-            f"Ozon: загружено cookies из {args.cookies}: "
-            f"{len(cookies)} шт."
-        )
+    from infrastructure.transports.proxy_pool import ProxyPool
 
-    if args.transport == "public_page":
-        from infrastructure.transports.public_page import (
-            PublicPageTransport,
-        )
-        return PublicPageTransport(
-            timeout_ms=args.timeout_ms,
-            settle_ms=args.settle_ms,
-            debug_dir=args.debug_dir,
-            proxy=single_proxy,
-            proxy_pool=proxy_pool,
-            humanize=not args.no_humanize,
-            stealth=not args.no_stealth,
-            randomize_fingerprint=args.randomize_fingerprint,
-            cookies=cookies,
-            workers=args.workers,
-            widget_scroll=not args.no_widget_scroll,
-            block_assets=not args.no_block_assets,
-            screenshots=args.screenshots,
-        )
+    pool = ProxyPool.from_file(args.proxy_list)
+    attempts = min(args.proxy_attempts, pool.size)
+    original_resume = args.resume
+    count = 0
+    try:
+        for index in range(attempts):
+            pinned_proxy = pool.next()
+            if pinned_proxy is None:
+                break
+            args._pinned_proxy = pinned_proxy
+            args.resume = original_resume or index > 0
+            # Every attempt starts a new browser and, when resuming,
+            # deduplicates records saved by previous attempts.
+            count += await _collect_ozon_once(args)
+            status = getattr(args, "_run_status", "failed")
+            if status == "complete":
+                return count
+            from marketplace_maps_parser.run_state import status_path
 
-    if args.transport == "curl_cffi":
-        from infrastructure.transports.curl_cffi import (
-            CurlCffiTransport,
-        )
-        # curl_cffi takes a proxy URL string, not a dict.
-        proxy_url = (
-            proxy_to_url(single_proxy)
-            if single_proxy is not None
-            else None
-        )
-        return CurlCffiTransport(
-            timeout=args.timeout_ms / 1000.0,
-            debug_dir=args.debug_dir,
-            impersonate=args.impersonate,
-            proxy=proxy_url,
-        )
+            try:
+                import json
 
-    if args.transport == "hybrid":
-        from infrastructure.transports.hybrid import HybridTransport
-        # Hybrid takes a playwright proxy dict + curl_cffi proxy URL.
-        curl_proxy_url = (
-            proxy_to_url(single_proxy)
-            if single_proxy is not None
-            else None
-        )
-        return HybridTransport(
-            curl_cffi_kwargs={
-                "timeout": args.timeout_ms / 1000.0,
-                "impersonate": args.impersonate,
-                "proxy": curl_proxy_url,
-            },
-            playwright_kwargs={
-                "timeout_ms": args.timeout_ms,
-                "settle_ms": args.settle_ms,
-                "proxy": single_proxy,
-                "humanize": not args.no_humanize,
-                "fetch_strategy": args.fetch_strategy,
-                "stealth": not args.no_stealth,
-                "cookies": cookies,
-                "block_assets": not args.no_block_assets,
-            },
-            debug_dir=args.debug_dir,
-        )
-
-    # default: playwright
-    from infrastructure.transports.browser_json import (
-        BrowserJsonTransport,
-    )
-    return BrowserJsonTransport(
-        timeout_ms=args.timeout_ms,
-        settle_ms=args.settle_ms,
-        debug_dir=args.debug_dir,
-        proxy=single_proxy,
-        humanize=not args.no_humanize,
-        fetch_strategy=args.fetch_strategy,
-        stealth=not args.no_stealth,
-        cookies=cookies,
-        screenshots=args.screenshots,
-        block_assets=not args.no_block_assets,
-    )
-
-
-async def _build_proxy_pool(
-    args: argparse.Namespace,
-) -> Any:
-    """Build a proxy pool from --proxy-list or --free-proxy.
-
-    Returns None if neither was provided.
-
-    Priority: --proxy-list > --free-proxy (proxy-list takes
-    precedence because residential proxies from a file are more
-    reliable than free public proxies).
-    """
-    if args.proxy_list:
-        from infrastructure.transports.proxy_pool import ProxyPool
-        return ProxyPool.from_file(args.proxy_list)
-
-    if args.free_proxy:
-        from infrastructure.transports.free_proxy_pool import (
-            FreeProxyPool,
-        )
-        country_id = None
-        if args.free_proxy_country:
-            country_id = [
-                c.strip() for c in args.free_proxy_country.split(",")
-                if c.strip()
-            ]
-        print(
-            "[info] --free-proxy: загружаю бесплатные публичные "
-            "proxy через free-proxy package..."
-            + (f" (country={country_id})" if country_id else "")
-            + (" (elite)" if args.free_proxy_elite else "")
-        )
-        # Async factory: the free-proxy batch fetch runs in a
-        # worker thread so the event loop is never blocked.
-        return await FreeProxyPool.create_async(
-            country_id=country_id,
-            elite=args.free_proxy_elite,
-        )
-
-    return None
-
-
-def _build_single_proxy(
-    args: argparse.Namespace,
-) -> dict[str, str] | None:
-    """Build a single proxy dict from --proxy. Returns None if no
-    single proxy was provided."""
-    if not args.proxy:
-        return None
-    from infrastructure.transports.proxy_pool import parse_proxy_line
-    proxy = parse_proxy_line(args.proxy)
-    if proxy is None:
-        raise SystemExit(
-            f"Invalid --proxy format: {args.proxy!r}. "
-            "Expected: 'http://host:port' or "
-            "'http://user:pass@host:port' or 'socks5://host:port'"
-        )
-    return proxy
+                metadata = json.loads(
+                    status_path(args.output).read_text(encoding="utf-8"),
+                )
+            except (OSError, ValueError):
+                metadata = {}
+            if not metadata.get("error"):
+                return count
+            pool.mark_blocked(pinned_proxy)
+            if index + 1 < attempts:
+                print(
+                    f"Ozon: ошибка с proxy #{index + 1}; "
+                    "пробую новую браузерную сессию с другим proxy"
+                )
+        return count
+    finally:
+        args.resume = original_resume
+        if hasattr(args, "_pinned_proxy"):
+            delattr(args, "_pinned_proxy")
 
 
 async def _probe_yandex_page_count(
@@ -871,6 +279,7 @@ async def _probe_yandex_page_count(
         cookies=cookies,
         humanize=not args.no_humanize,
         cookies_path=(args.save_cookies or "yandex_cookies.json"),
+        use_api=not getattr(args, "no_browser_api", False),
     )
     try:
         total = await probe.fetch_total_count(args.url)
@@ -985,6 +394,7 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
                 else proxy
             )
             session_transport = YandexBrowserTransport(
+                use_api=not getattr(args, "no_browser_api", False),
                 timeout_ms=args.timeout_ms,
                 settle_ms=args.settle_ms,
                 debug_dir=debug_dir,
@@ -1019,6 +429,7 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
         adapter = _ParallelYandexSessions(session_adapters)
     else:
         transport = YandexBrowserTransport(
+            use_api=not getattr(args, "no_browser_api", False),
             timeout_ms=args.timeout_ms,
             settle_ms=args.settle_ms,
             debug_dir=debug_dir,
@@ -1027,6 +438,8 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
             cookies=cookies,
             humanize=not args.no_humanize,
             dup_pages_stop=getattr(args, "dup_pages_stop", 3),
+            start_page=args.start_page,
+            max_pages=args.max_pages,
             # NOTE: block_assets stays at the transport default
             # (False) — a real browser loads images/fonts and
             # SmartCaptcha weighs that; --no-block-assets is an
@@ -1037,76 +450,17 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
         )
         adapter = YandexMarketAdapter(browser_transport=transport)
 
-    if args.format == "json":
-        return await _run_unified_json(
-            args,
-            adapter=adapter,
-            make_iterator=lambda: adapter.iter_reviews(
-                args.url,
-            ),
-            extra_diagnostics=lambda: {
-                "total_count": adapter.last_total_count,
-                "average_rating": adapter.last_average_rating,
-            },
-        )
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    if args.resume:
-        seen_ids = _load_existing_reviews(output)
-        if seen_ids:
-            print(
-                f"Resume: {len(seen_ids)} отзывов уже в "
-                f"{output.name}, будут пропущены."
-            )
-        file_mode = "a"
-    else:
-        seen_ids = set()
-        file_mode = "w"
-
-    count = 0
-
-    with output.open(file_mode, encoding="utf-8") as file:
-        async for review in adapter.iter_reviews(args.url):
-            review_id = review.review_id
-            if review_id and review_id in seen_ids:
-                continue
-            if review_id:
-                seen_ids.add(review_id)
-
-            file.write(
-                json.dumps(
-                    _review_to_record(review),
-                    ensure_ascii=False,
-                    default=str,
-                )
-                + "\n"
-            )
-            file.flush()
-            count += 1
-
-            if count % 100 == 0:
-                print(f"Собрано отзывов: {count}")
-
-            if (
-                args.max_reviews is not None
-                and count >= args.max_reviews
-            ):
-                print(
-                    f"Достигнут лимит --max-reviews: "
-                    f"{args.max_reviews}"
-                )
-                break
-
-    total = adapter.last_total_count
-    if total is not None:
-        print(
-            f"Я.Маркет: по данным сайта всего отзывов: {total}; "
-            f"собрано: {count}"
-        )
-
-    return count
+    return await _run_unified_json(
+        args,
+        adapter=adapter,
+        make_iterator=lambda: adapter.iter_reviews(
+            args.url,
+        ),
+        extra_diagnostics=lambda: {
+            "total_count": adapter.last_total_count,
+            "average_rating": adapter.last_average_rating,
+        },
+    )
 
 
 async def _collect_yandex_maps(args: argparse.Namespace) -> int:
@@ -1147,6 +501,7 @@ async def _collect_yandex_maps(args: argparse.Namespace) -> int:
     debug_dir = args.debug_dir or "debug_yandex_maps"
 
     transport = YandexMapsBrowserTransport(
+        use_direct_api=not getattr(args, "no_browser_api", False),
         timeout_ms=args.timeout_ms,
         settle_ms=args.settle_ms,
         debug_dir=debug_dir,
@@ -1174,93 +529,18 @@ async def _collect_yandex_maps(args: argparse.Namespace) -> int:
     )
     adapter = YandexMapsAdapter(browser_transport=transport)
 
-    if args.format == "json":
-        return await _run_unified_json(
-            args,
-            adapter=adapter,
-            make_iterator=lambda: adapter.iter_reviews(
-                args.url,
-            ),
-            extra_diagnostics=lambda: {
-                "total_count": adapter.last_total_count,
-                "average_rating": adapter.last_average_rating,
-                "rating_count": adapter.last_rating_count,
-            },
-        )
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    if args.resume:
-        seen_ids = _load_existing_reviews(output)
-        if seen_ids:
-            print(
-                f"Resume: {len(seen_ids)} отзывов уже в "
-                f"{output.name}, будут пропущены."
-            )
-        file_mode = "a"
-    else:
-        seen_ids = set()
-        file_mode = "w"
-
-    count = 0
-
-    with output.open(file_mode, encoding="utf-8") as file:
-        async for review in adapter.iter_reviews(args.url):
-            review_id = review.review_id
-            if review_id and review_id in seen_ids:
-                continue
-            if review_id:
-                seen_ids.add(review_id)
-
-            file.write(
-                json.dumps(
-                    _review_to_record(review),
-                    ensure_ascii=False,
-                    default=str,
-                )
-                + "\n"
-            )
-            file.flush()
-            count += 1
-
-            if count % 100 == 0:
-                print(f"Собрано отзывов: {count}")
-
-            if (
-                args.max_reviews is not None
-                and count >= args.max_reviews
-            ):
-                print(
-                    f"Достигнут лимит --max-reviews: "
-                    f"{args.max_reviews}"
-                )
-                break
-
-    total = adapter.last_total_count
-    if total is not None:
-        rating_note = ""
-        if adapter.last_average_rating is not None:
-            rating_note = (
-                f", рейтинг организации: "
-                f"{adapter.last_average_rating}"
-            )
-        rating_only_note = ""
-        if (
-            adapter.last_rating_count is not None
-            and adapter.last_rating_count > total
-        ):
-            rating_only_note = (
-                f"; оценок без отзыва (не собираются "
-                f"индивидуально): "
-                f"{adapter.last_rating_count - total}"
-            )
-        print(
-            f"Я.Карты: по данным сайта всего отзывов: {total}; "
-            f"собрано: {count}{rating_note}{rating_only_note}"
-        )
-
-    return count
+    return await _run_unified_json(
+        args,
+        adapter=adapter,
+        make_iterator=lambda: adapter.iter_reviews(
+            args.url,
+        ),
+        extra_diagnostics=lambda: {
+            "total_count": adapter.last_total_count,
+            "average_rating": adapter.last_average_rating,
+            "rating_count": adapter.last_rating_count,
+        },
+    )
 
 
 async def _collect_2gis(args: argparse.Namespace) -> int:
@@ -1296,6 +576,9 @@ async def _collect_2gis(args: argparse.Namespace) -> int:
     debug_dir = args.debug_dir or "debug_2gis"
 
     transport = TwoGisBrowserTransport(
+        use_api=not getattr(args, "no_browser_api", False),
+        max_pages=args.max_pages,
+        page_delay_seconds=args.page_delay_seconds,
         timeout_ms=args.timeout_ms,
         settle_ms=args.settle_ms,
         debug_dir=debug_dir,
@@ -1306,79 +589,17 @@ async def _collect_2gis(args: argparse.Namespace) -> int:
     )
     adapter = TwoGisAdapter(browser_transport=transport)
 
-    if args.format == "json":
-        return await _run_unified_json(
-            args,
-            adapter=adapter,
-            make_iterator=lambda: adapter.iter_reviews(
-                args.url,
-            ),
-            extra_diagnostics=lambda: {
-                "total_count": adapter.last_total_count,
-                "average_rating": adapter.last_average_rating,
-            },
-        )
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    if args.resume:
-        seen_ids = _load_existing_reviews(output)
-        if seen_ids:
-            print(
-                f"Resume: {len(seen_ids)} отзывов уже в "
-                f"{output.name}, будут пропущены."
-            )
-        file_mode = "a"
-    else:
-        seen_ids = set()
-        file_mode = "w"
-
-    count = 0
-
-    with output.open(file_mode, encoding="utf-8") as file:
-        async for review in adapter.iter_reviews(args.url):
-            review_id = review.review_id
-            if review_id and review_id in seen_ids:
-                continue
-            if review_id:
-                seen_ids.add(review_id)
-
-            file.write(
-                json.dumps(
-                    _review_to_record(review),
-                    ensure_ascii=False,
-                    default=str,
-                )
-                + "\n"
-            )
-            file.flush()
-            count += 1
-
-            if (
-                args.max_reviews is not None
-                and count >= args.max_reviews
-            ):
-                print(
-                    f"Достигнут лимит --max-reviews: "
-                    f"{args.max_reviews}"
-                )
-                break
-
-    total = adapter.last_total_count
-    if total is not None:
-        rating_note = ""
-        if adapter.last_average_rating is not None:
-            rating_note = (
-                f", рейтинг организации: "
-                f"{adapter.last_average_rating}"
-            )
-        print(
-            f"2ГИС: по данным сайта всего отзывов: {total}; "
-            f"собрано: {count}{rating_note}"
-        )
-
-    return count
+    return await _run_unified_json(
+        args,
+        adapter=adapter,
+        make_iterator=lambda: adapter.iter_reviews(
+            args.url,
+        ),
+        extra_diagnostics=lambda: {
+            "total_count": adapter.last_total_count,
+            "average_rating": adapter.last_average_rating,
+        },
+    )
 
 
 async def _collect_wildberries(args: argparse.Namespace) -> int:
@@ -1386,57 +607,62 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
     from infrastructure.marketplaces.wildberries import (
         WildberriesAdapter,
     )
+    from infrastructure.transports.cookie_loader import load_cookies_file
     from infrastructure.transports.wb_browser import (
         WildberriesBrowserTransport,
     )
 
-    # Read the live reviews page with Invisible Playwright; no
-    # card.wb.ru or feedbacks API requests are issued by this flow.
     proxy = _build_single_proxy(args) if args.proxy else None
-
-    async with WildberriesBrowserTransport(
-        product_url=args.url,
-        timeout_ms=args.timeout_ms,
-        settle_ms=args.settle_ms,
-        proxy=proxy,
-        humanize=not args.no_humanize,
-    ) as transport:
-        adapter = WildberriesAdapter(transport)
-
-        if args.format == "json":
-            return await _run_unified_json(
-                args,
-                adapter=adapter,
-                make_iterator=lambda: adapter.iter_reviews(args.url),
-                extra_diagnostics=lambda: {
-                    "total_count": adapter.last_total_count,
-                    "average_rating": adapter.last_average_rating,
-                },
-            )
-
-        output = Path(args.output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        seen_ids = (
-            _load_existing_reviews(output) if args.resume else set()
+    if proxy is None:
+        selected = await _draw_session_proxies(
+            await _build_proxy_pool(args), 1,
         )
-        count = 0
-        with output.open(
-            "a" if args.resume else "w", encoding="utf-8",
-        ) as file:
-            async for review in adapter.iter_reviews(args.url):
-                if review.review_id in seen_ids:
-                    continue
-                seen_ids.add(review.review_id)
-                file.write(
-                    json.dumps(
-                        _review_to_record(review),
-                        ensure_ascii=False,
-                        default=str,
-                    ) + "\n"
-                )
-                file.flush()
-                count += 1
-                if args.max_reviews is not None and count >= args.max_reviews:
-                    break
-        return count
+        proxy = selected[0] if selected else None
+    transport = WildberriesBrowserTransport(
+        product_url=args.url, timeout_ms=args.timeout_ms,
+        settle_ms=args.settle_ms, proxy=proxy,
+        humanize=not args.no_humanize,
+        cookies=load_cookies_file(args.cookies) if args.cookies else None,
+        use_api=not getattr(args, "no_browser_api", False),
+        max_pages=args.max_pages,
+    )
+    adapter = WildberriesAdapter(transport)
+    return await _run_unified_json(
+        args, adapter=adapter,
+        make_iterator=lambda: adapter.iter_reviews(args.url),
+        extra_diagnostics=lambda: {
+            "total_count": adapter.last_total_count,
+            "average_rating": adapter.last_average_rating,
+            "collection_path": transport.collection_path,
+        },
+    )
 
+
+async def _collect_avito(args: argparse.Namespace) -> int:
+    from infrastructure.marketplaces.avito import AvitoAdapter
+    from infrastructure.transports.avito_browser import AvitoBrowserTransport
+    from infrastructure.transports.cookie_loader import load_cookies_file
+
+    proxy = _build_single_proxy(args) if args.proxy else None
+    if proxy is None:
+        pool = await _build_proxy_pool(args)
+        selected = await _draw_session_proxies(pool, 1)
+        proxy = selected[0] if selected else None
+    transport = AvitoBrowserTransport(
+        proxy=proxy,
+        cookies=load_cookies_file(args.cookies) if args.cookies else None,
+        timeout_ms=args.timeout_ms, settle_ms=args.settle_ms,
+        humanize=not args.no_humanize,
+        use_api=not args.no_browser_api, max_pages=args.max_pages,
+        page_delay_seconds=args.page_delay_seconds,
+    )
+    adapter = AvitoAdapter(transport)
+    return await _run_unified_json(
+        args, adapter=adapter,
+        make_iterator=lambda: adapter.iter_reviews(args.url),
+        extra_diagnostics=lambda: {
+            "total_count": adapter.last_total_count,
+            "average_rating": adapter.last_average_rating,
+            "collection_path": transport.collection_path,
+        },
+    )

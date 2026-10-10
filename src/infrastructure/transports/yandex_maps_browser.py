@@ -65,6 +65,7 @@ from infrastructure.transports.yandex_browser import (
     YandexCaptchaError,
     YandexSoftBlockError,
 )
+from shared.async_iterators import closing_iterator
 from shared.url_parsers import extract_yandex_maps_org_path
 
 # NOTE: extract_yandex_maps_org_path returns the FULL path
@@ -108,6 +109,8 @@ _API_FETCH_JS = """
 async (url) => {
     const resp = await fetch(url, {
         headers: {'Accept': 'application/json, text/plain, */*'},
+        credentials: 'include',
+        signal: AbortSignal.timeout(30000),
     });
     const text = await resp.text();
     let payload = null;
@@ -143,7 +146,7 @@ _RANKING_OPTIONS = (
 )
 
 # Kept minimal: no captcha has been served on Maps yet (measured
-# 2026-09-18: 4 probe sessions, incl. 2 curl_cffi loads, all clean).
+# 2026-09-18: four probe sessions were clean).
 # yandex_browser.py carries the full marker list if Maps starts
 # challenging.
 _CAPTCHA_URL_MARKERS = (
@@ -462,6 +465,8 @@ class YandexMapsBrowserTransport:
         self.last_rating_count: int | None = None
         #: Org name (the unified output's ``product_title``).
         self.last_product_title: str | None = None
+        self.collection_path = "ssr"
+        self.incomplete_reason: str | None = None
 
     async def iter_review_batches(
         self,
@@ -503,6 +508,7 @@ class YandexMapsBrowserTransport:
                 lambda response: (
                     captured.append(response)
                     if FETCH_REVIEWS_MARKER in response.url
+                    and len(captured) < 32
                     else None
                 ),
             )
@@ -544,6 +550,11 @@ class YandexMapsBrowserTransport:
             first_batch = results.get("reviews") or []
             if first_batch:
                 yield first_batch
+            if (
+                self.last_total_count is not None
+                and len(seen) >= self.last_total_count
+            ):
+                return  # No template discovery/probe for a complete SSR page.
 
             consumed = 0
             dup_streak = 0
@@ -590,6 +601,8 @@ class YandexMapsBrowserTransport:
                         if review_id:
                             seen.add(review_id)
                         new_cards.append(card)
+                del captured[:consumed]
+                consumed = 0
                 return new_cards
 
             async def stream_batches(
@@ -638,10 +651,14 @@ class YandexMapsBrowserTransport:
             # clicks, and windows the UI cannot even reach.
             if self.use_direct_api:
                 try:
-                    async for batch in self._iter_direct_api(
-                        page, captured, seen, state,
-                    ):
-                        yield batch
+                    async with closing_iterator(
+                        self._iter_direct_api(
+                            page, captured, seen, state,
+                        )
+                    ) as owned_stream:
+                        async for batch in owned_stream:
+                            self.collection_path = "ssr+api"
+                            yield batch
                     await self._save_cookies(page)
                     return
                 except _DirectApiUnavailable as exc:
@@ -650,9 +667,13 @@ class YandexMapsBrowserTransport:
                         "переключаюсь на обход через UI"
                     )
 
+            self.collection_path = "ssr+ui_api"
             # Stream 0: the default ranking.
-            async for batch in stream_batches():
-                yield batch
+            async with closing_iterator(
+                stream_batches()
+            ) as owned_stream:
+                async for batch in owned_stream:
+                    yield batch
 
             # Streams 1..N: other rankings + aspect chips, each its
             # own ~600-review window on the same list.
@@ -666,8 +687,11 @@ class YandexMapsBrowserTransport:
                         f"Я.Карты: поток сортировки «{label}» "
                         f"(собрано уникальных: {len(seen)})"
                     )
-                    async for batch in stream_batches():
-                        yield batch
+                    async with closing_iterator(
+                        stream_batches()
+                    ) as owned_stream:
+                        async for batch in owned_stream:
+                            yield batch
                     if total_reached():
                         break
 
@@ -691,8 +715,11 @@ class YandexMapsBrowserTransport:
                         f"Я.Карты: поток аспекта «{name}» "
                         f"(собрано уникальных: {len(seen)})"
                     )
-                    async for batch in stream_batches():
-                        yield batch
+                    async with closing_iterator(
+                        stream_batches()
+                    ) as owned_stream:
+                        async for batch in owned_stream:
+                            yield batch
                     if total_reached():
                         break
 
@@ -714,11 +741,12 @@ class YandexMapsBrowserTransport:
         if captured:
             return True
         await page.evaluate(_SCROLL_PANE_JS)
-        for _poll in range(4):
-            await page.wait_for_timeout(800)
+        await self._click_more(page)
+        for _poll in range(12):
             if captured:
                 return True
-        return False
+            await page.wait_for_timeout(100)
+        return bool(captured)
 
     async def _iter_direct_api(
         self,
@@ -742,6 +770,29 @@ class YandexMapsBrowserTransport:
             raise _DirectApiUnavailable(
                 "сайт не выпустил XHR для шаблона параметров"
             )
+        # Template discovery already loads a real page of reviews. Reuse
+        # its body before probing/fetching page 1 again.
+        for response in captured:
+            try:
+                payload = await response.json()
+            except Exception:
+                continue
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict):
+                continue
+            fresh = []
+            for card in data.get("reviews") or []:
+                key = card.get("reviewId")
+                if key and key not in seen:
+                    seen.add(key)
+                    fresh.append(card)
+            if fresh:
+                yield fresh
+            if (
+                self.last_total_count is not None
+                and len(seen) >= self.last_total_count
+            ):
+                return
         query = dict(
             parse_qsl(urlsplit(captured[0].url).query),
         )
@@ -772,6 +823,10 @@ class YandexMapsBrowserTransport:
                 raise _DirectApiUnavailable(
                     f"не-JSON ответ (status={status})"
                 )
+            if not 200 <= out.get("status", 0) < 300:
+                raise _DirectApiUnavailable(
+                    f"API HTTP {out.get('status', 0)}"
+                )
             return payload
 
         def take_new_cards(
@@ -780,7 +835,7 @@ class YandexMapsBrowserTransport:
             new_cards: list[dict[str, Any]] = []
             for card in data.get("reviews") or []:
                 review_id = card.get("reviewId")
-                if review_id and review_id in seen:
+                if not review_id or review_id in seen:
                     continue
                 if review_id:
                     seen.add(review_id)
@@ -840,8 +895,11 @@ class YandexMapsBrowserTransport:
                     if "Validation" in message:
                         validation = message
                         continue
-                    # «Internal error» past the 600-review window.
-                    return end_of_window
+                    # A server error is not proof of end-of-data. Let
+                    # the caller try the UI rather than claim exhaustion.
+                    raise _DirectApiUnavailable(
+                        "fetchReviews returned a server error"
+                    )
                 return payload.get("data") or {}
             if validation:
                 raise _DirectApiUnavailable(
@@ -853,7 +911,8 @@ class YandexMapsBrowserTransport:
 
         batches: asyncio.Queue[
             list[dict[str, Any]] | BaseException | None
-        ] = asyncio.Queue()
+        ] = asyncio.Queue(maxsize=max(2, self.api_concurrency * 2))
+        probe_loaded_first_page = False
 
         async def probe_page_size() -> None:
             """Doubling pageSize (50 → 100) halves the request
@@ -863,7 +922,7 @@ class YandexMapsBrowserTransport:
             must not break the direct path. The probe request IS
             page 1 of the first stream: its reviews are emitted,
             not wasted."""
-            nonlocal token
+            nonlocal token, probe_loaded_first_page
             original = base.get("pageSize", "50")
             try:
                 base["pageSize"] = "100"
@@ -886,6 +945,7 @@ class YandexMapsBrowserTransport:
             ):
                 base["pageSize"] = original
                 return
+            probe_loaded_first_page = True
             params = data.get("params") or {}
             self._update_totals(params, {})
             new_cards = take_new_cards(data)
@@ -936,7 +996,18 @@ class YandexMapsBrowserTransport:
             # by_relevance window already holds), so a page-count
             # guard would abandon it too early.
             dup_run = 0
-            for page_no in range(1, _MAX_API_PAGES + 1):
+            first_page = (
+                2
+                if (
+                    probe_loaded_first_page
+                    and ranking == _GLOBAL_RANKINGS[0]
+                    and aspect_id is None
+                )
+                else 1
+            )
+            for page_no in range(first_page, _MAX_API_PAGES + 1):
+                if total_reached():
+                    break
                 data = await call_api(ranking, aspect_id, page_no)
                 if data is end_of_window:
                     break
@@ -946,6 +1017,8 @@ class YandexMapsBrowserTransport:
                     is_aspect=aspect_id is not None,
                 )
                 page_cards = data.get("reviews") or []
+                if not page_cards:
+                    break
                 new_cards = take_new_cards(data)
                 if new_cards:
                     dup_run = 0
@@ -960,6 +1033,10 @@ class YandexMapsBrowserTransport:
                         and dup_run >= self.dup_streak_stop
                     ):
                         break
+                params = data.get("params") or {}
+                total_pages = params.get("totalPages")
+                if isinstance(total_pages, int) and page_no >= total_pages:
+                    break
                 # Every break above skips this — no sleep past a
                 # stream's last useful page.
                 await asyncio.sleep(self.api_pacing_seconds)
@@ -976,19 +1053,12 @@ class YandexMapsBrowserTransport:
                     return
                 await walk_stream(ranking, aspect_id)
 
-        workers = [
-            asyncio.create_task(worker())
-            for _ in range(
-                min(max(1, self.api_concurrency), len(streams)),
-            )
-        ]
-
-        async def pump() -> None:
+        async def pump(active_workers: list[asyncio.Task[Any]]) -> None:
             # return_exceptions: every worker's outcome is
             # consumed here, so a late sibling failure never turns
             # into an unretrieved-task-exception warning.
             results = await asyncio.gather(
-                *workers, return_exceptions=True,
+                *active_workers, return_exceptions=True,
             )
             for result in results:
                 if isinstance(result, BaseException):
@@ -996,9 +1066,19 @@ class YandexMapsBrowserTransport:
                     return
             await batches.put(None)
 
-        pump_task = asyncio.create_task(pump())
+        workers: list[asyncio.Task[Any]] = []
+        pump_task: asyncio.Task[Any] | None = None
         try:
+            # Probe first. It is page 1 of the primary stream, so starting
+            # workers before it would race and fetch that page twice.
             await probe_page_size()
+            workers = [
+                asyncio.create_task(worker())
+                for _ in range(
+                    min(max(1, self.api_concurrency), len(streams)),
+                )
+            ]
+            pump_task = asyncio.create_task(pump(workers))
             while True:
                 item = await batches.get()
                 if item is None:
@@ -1007,9 +1087,15 @@ class YandexMapsBrowserTransport:
                     raise item
                 yield item
         finally:
-            pump_task.cancel()
+            if pump_task is not None:
+                pump_task.cancel()
             for task in workers:
                 task.cancel()
+            await asyncio.gather(
+                *workers,
+                *([pump_task] if pump_task is not None else []),
+                return_exceptions=True,
+            )
 
     async def _next_proxy(self) -> dict[str, str] | None:
         """Pull the next proxy from the pool (async-aware)."""
@@ -1034,19 +1120,15 @@ class YandexMapsBrowserTransport:
         page: Any,
         org_path: str,
     ) -> None:
-        """Warmup on the org page, then open ``/reviews/``."""
+        """Load the review route once; it already includes the org state."""
         base = YANDEX_MAPS_BASE
-        await page.goto(
-            f"{base}{org_path}", timeout=self.timeout_ms,
-        )
-        await page.wait_for_timeout(self.settle_ms)
-
         await page.goto(
             f"{base}{org_path}/reviews/",
             timeout=self.timeout_ms,
             referer=f"{base}{org_path}",
+            wait_until="domcontentloaded",
         )
-        await page.wait_for_timeout(self.settle_ms)
+        await self._wait_for_reviews_state(page)
 
         url = page.url
         html = await page.content()
@@ -1067,6 +1149,23 @@ class YandexMapsBrowserTransport:
             raise YandexCaptchaError(
                 f"Я.Карты: inline-капча ({markers[0]!r})"
             )
+
+    async def _wait_for_reviews_state(self, page: Any) -> None:
+        """Wait in the browser until the SSR state exists."""
+        wait_for_function = getattr(page, "wait_for_function", None)
+        if wait_for_function is not None:
+            try:
+                handle = await wait_for_function(
+                    "() => Boolean(document.querySelector("
+                    "'script.state-view'))",
+                    timeout=max(250, min(self.settle_ms, 2_000)),
+                )
+                await handle.dispose()
+                return
+            except Exception:
+                pass
+        if self.settle_ms > 0:
+            await page.wait_for_timeout(min(self.settle_ms, 750))
 
     async def _click_more(self, page: Any) -> bool:
         """Click «Ещё»; False when absent or disabled."""
@@ -1134,7 +1233,7 @@ class YandexMapsBrowserTransport:
             if not clicked:
                 return None
             for _poll in range(4):
-                await page.wait_for_timeout(1_000)
+                await page.wait_for_timeout(250)
                 for response in captured[before:]:
                     match = aspect_re.search(response.url)
                     if match:

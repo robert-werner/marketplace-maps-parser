@@ -133,7 +133,7 @@ def test_extract_reviews_from_ozon_payload_includes_rating_only():
 
 def test_parse_ozon_dom_card_reads_rating_from_card():
     """parse_ozon_dom_card should use the ``rating`` field from the
-    card dict (set by BrowserDomTransport._read_review_card), not
+    card dict (set by the browser JSON card reader), not
     hard-code rating=None.
     """
     adapter = OzonAdapter(browser_transport=None)  # type: ignore

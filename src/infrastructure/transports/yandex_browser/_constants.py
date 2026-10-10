@@ -1,8 +1,8 @@
 """Constants and helper functions for Yandex Market transport."""
 from __future__ import annotations
+
 import re
 from typing import Any
-
 
 YANDEX_MARKET_BASE = "https://market.yandex.ru"
 

@@ -54,3 +54,27 @@ def test_unknown_url_errors() -> None:
 def test_products_file_requires_explicit_marketplace() -> None:
     with pytest.raises(SystemExit):
         parse_args(["--products-file", "products.txt"])
+
+
+def test_invisible_playwright_is_the_default_and_explicit_transport() -> None:
+    argv = ["--url", "https://www.ozon.ru/product/sample-123/"]
+    assert parse_args(argv).transport == "playwright"
+    assert parse_args(argv + ["--transport", "playwright"]).transport == (
+        "playwright"
+    )
+
+
+@pytest.mark.parametrize("removed_options", [
+    ["--transport", "chromium"],
+    ["--chromium-headed"],
+    ["--chromium-executable", "/unused/chromium"],
+])
+def test_removed_chromium_options_are_rejected(
+    removed_options: list[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        parse_args([
+            "--url", "https://www.ozon.ru/product/sample-123/",
+            *removed_options,
+        ])
+    assert exc.value.code == 2

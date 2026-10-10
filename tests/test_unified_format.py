@@ -104,7 +104,7 @@ def test_rating_normalisation() -> None:
 
 def test_document_ok_and_error() -> None:
     doc = build_unified_document([], error=None)
-    assert doc["diagnostics"]["status"] == "ok"
+    assert doc["diagnostics"]["status"] == "complete"
     assert doc["diagnostics"]["error"] is None
 
     doc = build_unified_document(
@@ -113,7 +113,7 @@ def test_document_ok_and_error() -> None:
         total_count=86,
     )
     assert doc["reviews"] == []
-    assert doc["diagnostics"]["status"] == "error"
+    assert doc["diagnostics"]["status"] == "failed"
     assert doc["diagnostics"]["error"] == (
         "YandexCaptchaError: капча"
     )

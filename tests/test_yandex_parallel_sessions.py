@@ -19,6 +19,7 @@ from infrastructure.transports.yandex_browser import (
     YandexCaptchaError,
 )
 from marketplace_maps_parser.collectors import (
+    PartialCollectionError,
     _iter_parallel_reviews,
 )
 
@@ -42,7 +43,7 @@ class _FakeContext:
 
 
 class _FakeMouse:
-    def __init__(self, page: "_FakePage") -> None:
+    def __init__(self, page: _FakePage) -> None:
         self._page = page
 
     async def move(self, x: int, y: int) -> None:
@@ -59,7 +60,7 @@ class _FakeLocator:
         return 0
 
     @property
-    def first(self) -> "_FakeLocator":
+    def first(self) -> _FakeLocator:
         return self
 
     async def click(self) -> None:
@@ -67,7 +68,7 @@ class _FakeLocator:
 
 
 class _FakeLink:
-    def __init__(self, href: str, page: "_FakePage") -> None:
+    def __init__(self, href: str, page: _FakePage) -> None:
         self._href = href
         self._page = page
 
@@ -95,7 +96,7 @@ class _FakeLink:
 
 class _FakeLinks:
     def __init__(
-        self, hrefs: list[str], page: "_FakePage",
+        self, hrefs: list[str], page: _FakePage,
     ) -> None:
         self._hrefs = hrefs
         self._page = page
@@ -205,15 +206,6 @@ class _FakePage:
     async def close(self) -> None:
         return None
 
-    async def add_init_script(self, script: str) -> None:
-        return None
-
-    async def route(self, pattern: str, handler: Any) -> None:
-        return None
-
-    async def close(self) -> None:
-        return None
-
 
 class _FakeBrowser:
     def __init__(self, page: _FakePage) -> None:
@@ -222,7 +214,7 @@ class _FakeBrowser:
     async def new_page(self) -> _FakePage:
         return self.page
 
-    async def __aenter__(self) -> "_FakeBrowser":
+    async def __aenter__(self) -> _FakeBrowser:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -367,7 +359,7 @@ def test_parallel_merge_interleaves_and_tolerates_partial_death() -> None:
         _FakeAdapter(["b1", "b2"]),
     ])
     assert sorted(ids) == ["a1", "b1", "b2"]
-    assert exc is None
+    assert isinstance(exc, PartialCollectionError)
 
 
 def test_parallel_merge_raises_only_when_every_session_dies_barren() -> None:
@@ -387,7 +379,7 @@ def test_parallel_merge_partial_yield_beats_total_failure() -> None:
         _FakeAdapter([], error=YandexCaptchaError("капча")),
     ])
     assert ids == ["a1"]
-    assert exc is None
+    assert isinstance(exc, PartialCollectionError)
 
 
 # ----------------------------------------------------------------------

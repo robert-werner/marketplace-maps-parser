@@ -583,8 +583,7 @@ async def test_parallel_streams_merges_and_dedups() -> None:
 
 @pytest.mark.asyncio
 async def test_parallel_streams_survive_one_failing_stream() -> None:
-    """A stream that raises is logged and skipped; the others keep
-    going and their reviews are still yielded."""
+    """A failing stream cannot make a partial run look complete."""
 
     class _FailingAscTransport(StubTransport):
         async def iter_ozon_reviews_json(
@@ -612,18 +611,16 @@ async def test_parallel_streams_survive_one_failing_stream() -> None:
     )
     adapter = OzonAdapter(browser_transport=transport)
 
-    reviews = [
-        r
-        async for r in adapter.iter_all_reviews(
-            product_url=PRODUCT_URL,
-            strategy="pagination",
-            extra_streams=True,
-            parallel_streams=True,
-        )
-    ]
-
-    # default + score_desc survived; score_asc failure is swallowed.
-    assert {r.review_id for r in reviews} == {"d1", "s1"}
+    with pytest.raises(RuntimeError, match="параллельных стримах"):
+        [
+            r
+            async for r in adapter.iter_all_reviews(
+                product_url=PRODUCT_URL,
+                strategy="pagination",
+                extra_streams=True,
+                parallel_streams=True,
+            )
+        ]
 
 
 @pytest.mark.asyncio

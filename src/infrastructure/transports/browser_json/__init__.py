@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from weakref import WeakKeyDictionary
 
-from infrastructure.transports.base import (
-    OZON_BASE_URL,
-    OzonTransportMixin,
-)
-from infrastructure.transports.browser_common import (
-    _STEALTH_INIT_SCRIPT as _STEALTH_INIT_SCRIPT,
-)
+from infrastructure.transports.base import OZON_BASE_URL
 
-# Retry semantics and the stealth script are shared with the other
+# Retry semantics are shared with the other
 # browser transports — see browser_common.py.
 from infrastructure.transports.browser_common import (
     _get_retryable_errors as _get_retryable_errors,
@@ -25,6 +21,13 @@ from infrastructure.transports.browser_common import (
 from infrastructure.transports.browser_common import (
     import_invisible_playwright,
 )
+from infrastructure.transports.browser_json._dom import CardReadingMixin
+from infrastructure.transports.browser_json._errors import (
+    CloudflareChallengeError as CloudflareChallengeError,
+)
+from infrastructure.transports.browser_json._fetch import FetchMixin
+from shared.async_iterators import closing_iterator
+from shared.pacing import AdaptivePacer
 
 
 def _import_invisible_playwright() -> type:
@@ -34,35 +37,24 @@ def _import_invisible_playwright() -> type:
     return import_invisible_playwright()
 
 
-
-
-
-from infrastructure.transports.browser_json._dom import CardReadingMixin
-from infrastructure.transports.browser_json._errors import CloudflareChallengeError
-from infrastructure.transports.browser_json._fetch import FetchMixin
-
-
-class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
+class BrowserJsonTransport(FetchMixin, CardReadingMixin):
     """Получает JSON Ozon в одной browser-сессии.
 
     Сначала открывается страница отзывов, затем внутренний endpoint
     вызывается из этой же страницы через window.fetch(). Следующая
     страница берётся из поля nextPage ответа Ozon.
 
-    Two fetch strategies are supported (controlled by
+    Three fetch strategies are supported (controlled by
     ``fetch_strategy`` constructor arg):
 
-    - ``"navigation"`` (default): ``page.goto(api_url)`` — opens the
-      API URL directly in the browser tab. Cloudflare sees a real
-      browser navigation and is much less likely to return 403.
-    - ``"fetch"`` (legacy): ``page.evaluate(fetch(api_url))`` — calls
-      ``fetch()`` from the page's JS context. Faster but Cloudflare
-      blocks it more aggressively.
+    - ``"auto"`` (default): fetch in a ready reviews document, falling
+      back to API navigation once per tab.
+    - ``"navigation"``: ``page.goto(api_url)`` with raw JSON extraction.
+    - ``"fetch"``: only ``page.evaluate(fetch(api_url))``.
 
-    Stealth mode (``stealth=True`` by default) applies an init
-    script to every fresh page that patches ``navigator.webdriver``,
-    ``chrome.runtime``, ``Notification.permission``, and other
-    signals Cloudflare uses to detect automated browsers.
+    The ``stealth`` argument is retained for compatibility. Invisible
+    Playwright owns the fingerprint inside its patched browser engine;
+    this transport deliberately does not add a page-level JS shim.
     """
 
     def __init__(
@@ -72,10 +64,11 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
         settle_ms: int = 2_000,
         debug_dir: str = "debug_ozon",
         proxy: dict[str, str] | None = None,
+        proxy_pool: Any | None = None,
         seed: int | None = None,
         pin: dict[str, Any] | None = None,
         humanize: bool = True,
-        fetch_strategy: str = "navigation",
+        fetch_strategy: str = "auto",
         stealth: bool = True,
         # Playwright-format cookies of a logged-in Ozon session
         # (see cookie_loader). Injected into every page before the
@@ -85,20 +78,20 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
         # Save a page screenshot into the debug dir on every debug
         # dump. OFF by default: full-page screenshots of a logged-in
         # session are a PII hazard and cost a noticeable share of the
-        # per-page wall time. HTML/payload dumps stay on.
+        # per-page wall time. Raw dumps are also opt-in.
         screenshots: bool = False,
         # Abort image/font/media requests on scraper navigations.
-        # Review photos dominate the ~880KB reviews page; the JSON
-        # fetch needs none of them, so blocking cuts the per-page
-        # wall time roughly in half. Mirrors the public_page
-        # transport (same measured pattern: route by file extension,
-        # never "**/*").
+        # The JSON fetch needs none of these assets. Route by file
+        # extension rather than sending every request through Python.
         block_assets: bool = True,
+        debug_dumps: bool = False,
+        page_delay_seconds: float = 0.8,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
         self.debug_dir = Path(debug_dir)
         self.proxy = proxy
+        self.proxy_pool = proxy_pool
         self.seed = seed
         self.pin = pin
         self.humanize = humanize
@@ -106,14 +99,48 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
         self.cookies = cookies
         self.screenshots = screenshots
         self.block_assets = block_assets
-        if fetch_strategy not in ("navigation", "fetch"):
+        self.debug_dumps = debug_dumps or screenshots
+        self.page_delay_seconds = page_delay_seconds
+        self._page_fetch_modes: WeakKeyDictionary[Any, str] = (
+            WeakKeyDictionary()
+        )
+        self._page_pacers: WeakKeyDictionary[Any, AdaptivePacer] = (
+            WeakKeyDictionary()
+        )
+        self.last_review_count: int | None = None
+        self.last_product_title: str | None = None
+        self.incomplete_reason: str | None = None
+        if fetch_strategy not in ("auto", "navigation", "fetch"):
             raise ValueError(
                 f"Unknown fetch_strategy: {fetch_strategy!r}. "
-                "Use 'navigation' or 'fetch'."
+                "Use 'auto', 'navigation' or 'fetch'."
             )
         self.fetch_strategy = fetch_strategy
 
-    async def _inject_cookies(self, page) -> None:
+    async def _next_session_proxy(self) -> dict[str, str] | None:
+        if self.proxy_pool is None:
+            return self.proxy
+        next_async = getattr(self.proxy_pool, "next_async", None)
+        return cast(
+            dict[str, str] | None,
+            await next_async()
+            if next_async is not None
+            else self.proxy_pool.next(),
+        )
+
+    @asynccontextmanager
+    async def _browser_context(self) -> AsyncIterator[Any]:
+        """Create an Invisible Playwright session for pagination or scroll."""
+        proxy = await self._next_session_proxy()
+        async with _import_invisible_playwright()(
+            proxy=proxy,
+            seed=self.seed,
+            pin=self.pin,
+            humanize=self.humanize,
+        ) as browser:
+            yield browser
+
+    async def _inject_cookies(self, page: Any) -> None:
         """Logged-in session cookies into the page's context BEFORE
         the first navigation (no-op without cookies; a failure is a
         warning, not fatal)."""
@@ -127,21 +154,14 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                 f"cookies ({type(exc).__name__}: {exc})"
             )
 
-    async def _settle_after_goto(self, page) -> None:
-        """Wait after the reviews-HTML goto, before the JSON fetch.
-
-        - ``fetch`` strategy: the full ``settle_ms`` — the page's JS
-          context must be warm before ``fetch()`` runs from it.
-        - ``navigation`` strategy: a short fixed grace (500ms) — the
-          goto to the API URL replaces the page content anyway, so a
-          long settle is pure waste; the grace only lets the page's
-          antibot beacons fire.
-        """
-        if self.fetch_strategy == "fetch":
-            if self.settle_ms > 0:
-                await page.wait_for_timeout(self.settle_ms)
+    async def _settle_after_goto(self, page: Any) -> None:
+        """Do not start fetch on a challenge document or an old context."""
+        if self.fetch_strategy in ("auto", "fetch"):
+            await self._wait_for_reviews_ready(page)
             return
-        await page.wait_for_timeout(500)
+        # The API navigation already returns the response body. Keep only
+        # a small beacon grace period; the old 500 ms was paid per page.
+        await page.wait_for_timeout(150)
 
     async def iter_ozon_reviews_json(
             self,
@@ -151,6 +171,7 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
             max_pages: int | None = None,
             retry_attempts: int = 3,
             extra_query: str = "",
+            page_delay_seconds: float | None = None,
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
         """Paginate the internal Ozon reviews API.
 
@@ -159,17 +180,14 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
         follow Ozon's ``nextPage`` verbatim, so the variant applies
         to the whole stream when Ozon echoes it in nextPage.
         """
-        self.debug_dir.mkdir(
-            parents=True,
-            exist_ok=True,
+        pacer = AdaptivePacer(
+            base_delay=(
+                self.page_delay_seconds
+                if page_delay_seconds is None else page_delay_seconds
+            ),
         )
 
-        async with _import_invisible_playwright()(
-                proxy=self.proxy,
-                seed=self.seed,
-                pin=self.pin,
-                humanize=self.humanize,
-        ) as browser:
+        async with self._browser_context() as browser:
 
             # Page factory: returns a fresh page for retries and
             # recovery paths; the happy path instead REUSES one tab
@@ -192,31 +210,14 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                     except Exception:
                         pass
                 new_page = await browser.new_page()
+                self._page_pacers[new_page] = pacer
                 await self._inject_cookies(new_page)
                 await self._install_resource_blocker(new_page)
-                # Apply stealth init script to every fresh page. This
-                # patches ``navigator.webdriver``, ``chrome.runtime``,
-                # ``Notification.permission``, ``window.outerWidth`` /
-                # ``window.outerHeight`` and other signals that
-                # Cloudflare uses to detect headless / automated
-                # browsers. See ``_STEALTH_INIT_SCRIPT`` for the full
-                # patch list.
-                if self.stealth:
-                    try:
-                        await new_page.add_init_script(
-                            _STEALTH_INIT_SCRIPT,
-                        )
-                    except Exception as exc:
-                        # Don't fail hard — invisible-playwright may
-                        # not support add_init_script in some builds.
-                        print(
-                            "Ozon: warning — не удалось применить "
-                            f"stealth init script: {exc}"
-                        )
                 current_page_holder["page"] = new_page
                 return new_page
 
             page = await page_factory()
+            page_ready_for_api = False
 
             current_path = self._build_initial_path(
                 product_path=product_path,
@@ -261,23 +262,27 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
 
                 seen_paths.add(current_path)
 
+                if processed_pages:
+                    await pacer.wait()
                 reviews_url = self._absolute_url(current_path)
 
-                # _goto_with_retry reuses the current tab on the
-                # first attempt (one user-like tab per stream) and
-                # falls back to a fresh page on retries.
-                page = await self._goto_with_retry(
-                    page_factory=page_factory,
-                    page=page,
-                    reviews_url=reviews_url,
-                    attempts=retry_attempts,
-                    label=(
-                        f"Ozon goto page {processed_pages + 1} "
-                        f"({current_path})"
-                    ),
-                )
-
-                await self._settle_after_goto(page)
+                # Warm the reviews page only once per browser session.
+                # Subsequent pages are internal API navigations/fetches on
+                # the same tab; revisiting the HTML reviews page before every
+                # API request was the largest avoidable latency multiplier.
+                if not page_ready_for_api:
+                    page = await self._goto_with_retry(
+                        page_factory=page_factory,
+                        page=page,
+                        reviews_url=reviews_url,
+                        attempts=retry_attempts,
+                        label=(
+                            f"Ozon warmup page "
+                            f"{processed_pages + 1} ({current_path})"
+                        ),
+                    )
+                    await self._settle_after_goto(page)
+                    page_ready_for_api = True
 
                 # If the fetch fails with an execution-context-lost
                 # style error, recreate the page and retry. This is a
@@ -309,6 +314,7 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                             timeout=self.timeout_ms,
                         )
                         await self._settle_after_goto(page)
+                        page_ready_for_api = True
                         payload = await self._fetch_json_with_retry(
                             page=page,
                             internal_path=current_path,
@@ -320,14 +326,14 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                             ),
                         )
                     except _retryable_errors() as exc2:
-                        print(
-                            f"Ozon: second retry also failed on page "
-                            f"{processed_pages + 1}: {exc2}; "
-                            f"останавливаю сбор для избежания пропусков"
-                        )
-                        return
+                        raise RuntimeError(
+                            f"Ozon: page {processed_pages + 1} "
+                            "failed after browser recreation"
+                        ) from exc2
 
+                self._validate_reviews_payload(payload)
                 processed_pages += 1
+                pacer.record_success()
 
                 await self._save_debug(
                     page=page,
@@ -336,18 +342,21 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                     stream_suffix=stream_suffix,
                 )
 
-                print(
-                    "nextPage:",
-                    payload.get("nextPage"),
+                from infrastructure.marketplaces.ozon_payload import (
+                    extract_ozon_product_title,
+                    extract_ozon_rating_summary,
                 )
-                print(
-                    "pageInfo:",
-                    payload.get("pageInfo"),
-                )
-                print(
-                    "pageToken:",
-                    payload.get("pageToken"),
-                )
+
+                summary = extract_ozon_rating_summary(payload)
+                total = (summary or {}).get("reviews_count")
+                if isinstance(total, int) and not isinstance(total, bool):
+                    self.last_review_count = max(
+                        total, self.last_review_count or 0,
+                    )
+                if not self.last_product_title:
+                    self.last_product_title = extract_ozon_product_title(
+                        payload,
+                    )
 
                 # ------------------------------------------------------
                 # page_key transition detection
@@ -372,6 +381,8 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                     # Ozon handed us a nextPage with a new page_key but
                     # kept the old page=7 counter. The new variant
                     # starts at page=1 — retry with that.
+                    assert prev_page_key is not None
+                    assert current_page_key is not None
                     print(
                         "Ozon: смена page_key ("
                         f"{prev_page_key[:12]}... -> "
@@ -423,7 +434,7 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                         current_path, "page",
                     )
                     try:
-                        next_num = int(current_page_num) + 1
+                        next_num = int(current_page_num or "1") + 1
                     except (TypeError, ValueError):
                         next_num = 2
                     synthesized = self._reset_page_in_path(
@@ -448,6 +459,25 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                     return
 
                 current_path = next_path
+
+    def _validate_reviews_payload(self, payload: dict[str, Any]) -> None:
+        """A layout/error response must not become a successful empty crawl."""
+        if any(name in payload for name in ("incidentId", "challengeURL")):
+            raise RuntimeError("Ozon API returned a challenge, not reviews")
+        if isinstance(payload.get("reviews"), (list, dict)) or isinstance(
+            payload.get("_review_nodes"), list,
+        ):
+            return
+        widgets = payload.get("widgetStates")
+        if isinstance(widgets, dict) and any(
+            "webListReviews" in str(name)
+            or "webReviewProductScore" in str(name)
+            for name in widgets
+        ):
+            return
+        if self._extract_review_nodes_from_payload(payload):
+            return
+        raise RuntimeError("Ozon API returned no review widgets")
 
     # ------------------------------------------------------------------
     # page_key transition detection
@@ -506,15 +536,16 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
         *,
         page_number: int = 1,
     ) -> dict[str, Any]:
-        async for current_page, payload in (
+        async with closing_iterator(
             self.iter_ozon_reviews_json(
                 product_path=product_path,
                 start_page=page_number,
                 max_pages=1,
             )
-        ):
-            if current_page == 1:
-                return payload
+        ) as stream:
+            async for current_page, payload in stream:
+                if current_page == 1:
+                    return payload
 
         raise RuntimeError(
             f"Не удалось получить страницу Ozon {page_number}"
@@ -530,12 +561,7 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
             scroll_step: int = 1800,
             pause_ms: int = 1000,
     ) -> AsyncIterator[list[dict[str, Any]]]:
-        async with _import_invisible_playwright()(
-                proxy=self.proxy,
-                seed=self.seed,
-                pin=self.pin,
-                humanize=self.humanize,
-        ) as browser:
+        async with self._browser_context() as browser:
             page = await browser.new_page()
             await self._inject_cookies(page)
             await self._install_resource_blocker(page)
@@ -551,10 +577,7 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
                 timeout=self.timeout_ms,
             )
 
-            if self.settle_ms > 0:
-                await page.wait_for_timeout(
-                    self.settle_ms,
-                )
+            await self._wait_for_reviews_ready(page)
 
             review_locator = page.locator(
                 "[data-review-uuid]"
@@ -627,8 +650,8 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
     # products. The scroll iterator is slower but more resilient because
     # it reads directly from the page DOM.
     #
-    # ``iter_all_ozon_reviews`` runs BOTH strategies in sequence, in a
-    # single Playwright browser session, and deduplicates review cards
+    # ``iter_all_ozon_reviews`` runs both strategies in sequence with
+    # separate browser sessions, and deduplicates review cards
     # by UUID across the two strategies. The result is a single stream
     # that aims to yield every review visible to a real browser user.
     #
@@ -659,65 +682,54 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
         Deduplication is by review UUID across both strategies.
         """
         from shared.logging import get_logger
-        from shared.pacing import AdaptivePacer
 
         log = get_logger("transports.browser_json")
 
         seen_ids: set[str] = set()
 
-        # Adaptive inter-page pacing (see shared.pacing): shrinks
-        # the delay after clean pages, backs off on challenge
-        # events reported via _notify_pacer_block.
-        self._pacer: AdaptivePacer | None = (
-            AdaptivePacer(base_delay=page_delay_seconds)
-            if page_delay_seconds > 0
-            else None
-        )
-
         # ------------------ pagination ------------------
         pagination_yielded = 0
         try:
-            async for _page_num, payload in self.iter_ozon_reviews_json(
-                product_path=product_path,
-                start_page=pagination_start_page,
-                max_pages=pagination_max_pages,
-                retry_attempts=retry_attempts,
-            ):
-                review_nodes = self._extract_review_nodes_from_payload(
-                    payload,
+            async with closing_iterator(
+                self.iter_ozon_reviews_json(
+                    product_path=product_path,
+                    start_page=pagination_start_page,
+                    max_pages=pagination_max_pages,
+                    retry_attempts=retry_attempts,
+                    page_delay_seconds=page_delay_seconds,
                 )
+            ) as stream:
+                async for _page_num, payload in stream:
+                    review_nodes = self._extract_review_nodes_from_payload(
+                        payload,
+                    )
 
-                for node in review_nodes:
-                    rid = self._review_node_id(node)
-                    if rid and rid in seen_ids:
-                        continue
-                    if rid:
-                        seen_ids.add(rid)
+                    for node in review_nodes:
+                        rid = self._review_node_id(node)
+                        if rid and rid in seen_ids:
+                            continue
+                        if rid:
+                            seen_ids.add(rid)
 
-                    yield "pagination", node
-                    pagination_yielded += 1
+                        yield "pagination", node
+                        pagination_yielded += 1
 
-                    if (
-                        max_reviews is not None
-                        and len(seen_ids) >= max_reviews
-                    ):
-                        log.info(
-                            "Ozon: reached max_reviews={}, stopping",
-                            max_reviews,
-                        )
-                        return
+                        if (
+                            max_reviews is not None
+                            and len(seen_ids) >= max_reviews
+                        ):
+                            log.info(
+                                "Ozon: reached max_reviews={}, stopping",
+                                max_reviews,
+                            )
+                            return
 
-                if self._pacer is not None:
-                    self._pacer.record_success()
-                    await self._pacer.wait()
         except Exception as exc:
             log.warning(
                 "Ozon: pagination failed after {} reviews: {} — "
                 "falling back to scroll",
                 pagination_yielded, exc,
             )
-        finally:
-            self._pacer = None
 
         log.info(
             "Ozon: pagination phase done, {} unique reviews",
@@ -726,35 +738,43 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
 
         if max_reviews is not None and len(seen_ids) >= max_reviews:
             return
+        if (
+            self.last_review_count is not None
+            and len(seen_ids) >= self.last_review_count
+        ):
+            return
 
         # ------------------ scroll (fallback / supplement) ------------------
         scroll_yielded = 0
         try:
-            async for batch in self.iter_ozon_reviews_by_scroll(
-                product_path=product_path,
-                max_reviews=None,
-                max_rounds=scroll_max_rounds,
-                pause_ms=int(scroll_pause_seconds * 1000),
-            ):
-                for card in batch:
-                    rid = card.get("uuid")
-                    if rid and rid in seen_ids:
-                        continue
-                    if rid:
-                        seen_ids.add(rid)
+            async with closing_iterator(
+                self.iter_ozon_reviews_by_scroll(
+                    product_path=product_path,
+                    max_reviews=None,
+                    max_rounds=scroll_max_rounds,
+                    pause_ms=int(scroll_pause_seconds * 1000),
+                )
+            ) as stream:
+                async for batch in stream:
+                    for card in batch:
+                        rid = card.get("uuid")
+                        if rid and rid in seen_ids:
+                            continue
+                        if rid:
+                            seen_ids.add(rid)
 
-                    yield "scroll", card
-                    scroll_yielded += 1
+                        yield "scroll", card
+                        scroll_yielded += 1
 
-                    if (
-                        max_reviews is not None
-                        and len(seen_ids) >= max_reviews
-                    ):
-                        log.info(
-                            "Ozon: reached max_reviews={}, stopping",
-                            max_reviews,
-                        )
-                        return
+                        if (
+                            max_reviews is not None
+                            and len(seen_ids) >= max_reviews
+                        ):
+                            log.info(
+                                "Ozon: reached max_reviews={}, stopping",
+                                max_reviews,
+                            )
+                            return
 
         except Exception as exc:
             log.error(
@@ -779,17 +799,20 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin, OzonTransportMixin):
     async def _save_debug(
         self,
         *,
-        page,
+        page: Any,
         payload: dict[str, Any],
         page_number: int,
         stream_suffix: str = "",
     ) -> None:
+        if not self.debug_dumps:
+            return
         page_dir = self.debug_dir / (
             f"page_{page_number}{stream_suffix}"
         )
         page_dir.mkdir(
             parents=True,
             exist_ok=True,
+            mode=0o700,
         )
 
         (page_dir / "response.json").write_text(

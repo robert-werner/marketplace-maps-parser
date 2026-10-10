@@ -45,7 +45,7 @@ def extract_ozon_product_title(
     Primary source: ``payload["seo"]["title"]`` (``"N отзыв на
     <name> от покупателей"``). Fallback: scan every string in the
     payload for the same pattern — the DOM-page payloads built by
-    the public_page transport repeat it in their meta tags.
+    the browser transport repeat it in their meta tags.
     """
     seo = payload.get("seo")
     title = seo.get("title") if isinstance(seo, dict) else None
@@ -97,7 +97,7 @@ def extract_ozon_rating_summary(
     rows via ``--include-rating-only``).
 
     Returns ``None`` when the payload has no score widget (e.g.
-    DOM-card payloads from the public_page transport).
+    DOM-card payloads from the browser transport).
     """
     widget_states = payload.get("widgetStates")
     if not isinstance(widget_states, dict):
@@ -155,10 +155,7 @@ def extract_reviews_from_ozon_payload(
     result: list[Review] = []
     seen_ids: set[str] = set()
 
-    for node in walk_json(payload):
-        if not isinstance(node, dict):
-            continue
-
+    for node in iter_ozon_review_nodes(payload):
         review = map_ozon_review_node(
             node=node,
             product=product,
@@ -180,6 +177,29 @@ def extract_reviews_from_ozon_payload(
         result.append(review)
 
     return result
+
+
+def iter_ozon_review_nodes(
+    payload: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    """Filter/deduplicate raw nodes without constructing Review objects.
+
+    Pagination needs only a count and IDs. Mapping full Review objects
+    there used to repeat text, media and date parsing in the adapter.
+    Keep the recursive walker as a fallback for all known widget shapes.
+    """
+    seen: set[str] = set()
+    for node in walk_json(payload):
+        if not isinstance(node, dict):
+            continue
+        review_id = extract_review_id(node)
+        if review_id is None or review_id in seen:
+            continue
+        if is_review_node(
+            node=node, review_id=review_id, text=None, rating=None,
+        ):
+            seen.add(review_id)
+            yield node
 
 
 def walk_json(

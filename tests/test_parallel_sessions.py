@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from infrastructure.transports.public_page import PublicPageTransport
+from infrastructure.transports.browser_json import BrowserJsonTransport
 from marketplace_maps_parser.parallel_sessions import (
     _product_child_command,
     estimate_review_pages,
@@ -144,7 +144,7 @@ class _RouteRecordingPage:
 @pytest.mark.asyncio
 async def test_resource_blocker_installed_by_default():
     page = _RouteRecordingPage()
-    await PublicPageTransport()._install_resource_blocker(page)
+    await BrowserJsonTransport()._install_resource_blocker(page)
     # по одному шаблону на каждое расширение ассетов
     assert len(page.routes) == 10
     assert all(p != "**/*" for p, _ in page.routes)
@@ -153,7 +153,7 @@ async def test_resource_blocker_installed_by_default():
 @pytest.mark.asyncio
 async def test_resource_blocker_disabled():
     page = _RouteRecordingPage()
-    await PublicPageTransport(
+    await BrowserJsonTransport(
         block_assets=False,
     )._install_resource_blocker(page)
     assert page.routes == []
@@ -162,37 +162,7 @@ async def test_resource_blocker_disabled():
 @pytest.mark.asyncio
 async def test_resource_blocker_tolerates_pages_without_route():
     # фейковые страницы не имеют route() — не должно падать
-    await PublicPageTransport()._install_resource_blocker(object())
-
-
-class _HydrationPage:
-    """evaluate возвращает 0 (не гидратировано), затем int>0."""
-
-    def __init__(self, answers: list[Any]) -> None:
-        self._answers = list(answers)
-        self.calls = 0
-
-    async def evaluate(self, expression: str, *args) -> Any:
-        self.calls += 1
-        if self._answers:
-            return self._answers.pop(0)
-        return 1
-
-
-@pytest.mark.asyncio
-async def test_hydration_wait_returns_after_svg_appear():
-    page = _HydrationPage([0, 0, 5])
-    await PublicPageTransport()._wait_for_cards_hydrated(page)
-    assert page.calls == 3
-
-
-@pytest.mark.asyncio
-async def test_hydration_wait_falls_through_without_evaluate():
-    class _NoEval:
-        pass
-
-    # объект без evaluate — исключение внутри → выход сразу
-    await PublicPageTransport()._wait_for_cards_hydrated(_NoEval())
+    await BrowserJsonTransport()._install_resource_blocker(object())
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +207,7 @@ def _products_args(**overrides: Any) -> SimpleNamespace:
         products_file="products.txt",
         products_sessions=2,
         output="out.jsonl",
-        transport="public_page",
+        transport="playwright",
         strategy="auto",
         retry_attempts=3,
         max_reviews=None,
@@ -245,11 +215,8 @@ def _products_args(**overrides: Any) -> SimpleNamespace:
         timeout_ms=90000,
         settle_ms=3000,
         debug_dir="debug_ozon",
-        workers=1,
         no_stealth=False,
         no_humanize=False,
-        no_widget_scroll=False,
-        randomize_fingerprint=False,
         proxy_list=None,
         proxy=None,
     )
@@ -270,7 +237,7 @@ def test_product_child_command_forwards_flags():
     assert (
         "--url https://www.ozon.ru/product/a-111" in joined
     )
-    assert "--transport public_page" in joined
+    assert "--transport playwright" in joined
     assert "--strategy auto" in joined
     assert "--proxy http://u:p@1.2.3.4:8080" in joined
     assert "--cookies cookies.json" in joined
@@ -278,24 +245,21 @@ def test_product_child_command_forwards_flags():
     # flags with false values are NOT forwarded
     assert "--no-stealth" not in joined
     assert "--randomize-fingerprint" not in joined
-    assert "--workers" not in joined
 
 
 def test_product_child_command_optional_flags():
     args = _products_args(
         max_reviews=500,
-        workers=2,
         no_stealth=True,
-        randomize_fingerprint=True,
+        no_block_assets=True,
     )
     cmd = _product_child_command(
         args, "u", Path("p"), None,
     )
     joined = " ".join(cmd)
     assert "--max-reviews 500" in joined
-    assert "--workers 2" in joined
     assert "--no-stealth" in joined
-    assert "--randomize-fingerprint" in joined
+    assert "--no-block-assets" in joined
     assert "--proxy" not in joined
 
 

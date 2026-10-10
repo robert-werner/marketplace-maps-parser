@@ -43,6 +43,7 @@ from infrastructure.marketplaces.base import MarketplaceAdapter
 from infrastructure.marketplaces.yandex import (
     normalize_yandex_rating,
 )
+from shared.async_iterators import closing_iterator
 from shared.url_parsers import extract_2gis_branch_id
 
 _ISO_PREFIX_RE = re.compile(
@@ -133,29 +134,32 @@ class TwoGisAdapter(MarketplaceAdapter):
         )
 
         seen: set[str] = set()
-        async for batch in self.transport.iter_review_batches(
-            firm_url,
-        ):
-            self.last_total_count = (
-                self.transport.last_total_count
+        async with closing_iterator(
+            self.transport.iter_review_batches(
+                firm_url,
             )
-            self.last_average_rating = (
-                self.transport.last_average_rating
-            )
-            self.last_product_title = (
-                self.transport.last_product_title
-            )
-            for card in batch:
-                review = self._map_review(card, product)
-                key = (
-                    review.review_id
-                    if review.review_id
-                    else self._fallback_key(review)
+        ) as owned_stream:
+            async for batch in owned_stream:
+                self.last_total_count = (
+                    self.transport.last_total_count
                 )
-                if key in seen:
-                    continue
-                seen.add(key)
-                yield review
+                self.last_average_rating = (
+                    self.transport.last_average_rating
+                )
+                self.last_product_title = (
+                    self.transport.last_product_title
+                )
+                for card in batch:
+                    review = self._map_review(card, product)
+                    key = (
+                        review.review_id
+                        if review.review_id
+                        else self._fallback_key(review)
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    yield review
 
     def _map_review(
         self,

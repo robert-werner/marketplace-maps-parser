@@ -195,6 +195,21 @@ def extract_2gis_firm_path(url: str) -> str:
     return f"/{city}/firm/{match.group('branch_id')}"
 
 
+def extract_avito_profile_id(url: str) -> str:
+    """Only the supported brand/profile route; not listings or search pages."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or parsed.netloc.lower() not in {
+        "www.avito.ru", "avito.ru",
+    }:
+        raise ValueError("Некорректный домен Avito")
+    match = re.fullmatch(
+        r"/brands/(i\d+)(?:/all)?/?", parsed.path,
+    )
+    if match is None:
+        raise ValueError("Ожидается ссылка Avito /brands/i<id>/all")
+    return match.group(1)
+
+
 # marketplace name -> (domain roots, the full URL validator).
 # The validator is the marketplace's own extractor (domain
 # whitelist + path regex), so a look-alike URL of a foreign
@@ -214,6 +229,7 @@ _MARKETPLACE_PROBES: tuple[tuple[str, tuple[str, ...], Any], ...] = (
     ("ozon", ("ozon.ru",), extract_ozon_product_id),
     ("2gis", ("2gis.ru",), extract_2gis_branch_id),
     ("wildberries", ("wildberries.ru",), extract_nm_id),
+    ("avito", ("avito.ru",), extract_avito_profile_id),
 )
 
 

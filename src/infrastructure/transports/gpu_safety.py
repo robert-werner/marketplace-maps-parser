@@ -1,5 +1,5 @@
 # src/infrastructure/transports/gpu_safety.py
-"""GPU-safe browser launching for invisible-playwright sessions.
+"""Opt-in software rendering for hosts with broken GPU drivers.
 
 Scrapers run many long-lived Firefox sessions on commodity hosts and
 cloud VMs where the GPU driver stack is the single most flaky
@@ -63,15 +63,14 @@ GPU_SAFE_PREFS: dict[str, Any] = {
     "webgl.force-enabled": True,
 }
 
-# One-time env switch for opt-out: set MARKETPLACE_GPU_SAFETY to
-# "off"/"0"/"false"/"no" to keep the stock launch behaviour on a
-# host where hardware rendering genuinely works and is wanted.
+# Keep the upstream fingerprint/rendering stack intact by default.
+# An explicit opt-in is appropriate only when the host GPU is broken.
 
 
 def gpu_safety_enabled() -> bool:
-    """Whether GPU-safe prefs should be injected (default: yes)."""
-    raw = os.environ.get("MARKETPLACE_GPU_SAFETY", "on")
-    return raw.strip().lower() not in {"off", "0", "false", "no"}
+    """Whether to override upstream prefs (default: no)."""
+    raw = os.environ.get("MARKETPLACE_GPU_SAFETY", "off")
+    return raw.strip().lower() in {"on", "1", "true", "yes"}
 
 
 def make_gpu_safe[T](browser_cls: type[T]) -> type[T]:

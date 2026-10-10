@@ -1,7 +1,7 @@
 [project]
 name = "marketplace-maps-parser"
 version = "0.1.0"
-description = "Async review scraper for Russian e-commerce marketplaces (Ozon, Wildberries, Yandex Market — planned)."
+description = "Async review collector for marketplaces and maps using Invisible Playwright."
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "Proprietary" }
@@ -9,12 +9,9 @@ authors = [
     { name = "Leonid Kolesnichenko", email = "xperience439@gmail.com" },
 ]
 dependencies = [
-    "curl_cffi>=0.7.0",
     "free-proxy>=1.1.0",
-    "httpx>=0.28.1",
-    "invisible-playwright>=0.14.0",
+    "invisible-playwright>=0.31.0",
     "loguru>=0.7.3",
-    "playwright>=1.62.0",
     "typing_extensions>=4.12",
 ]
 

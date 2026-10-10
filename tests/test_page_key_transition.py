@@ -239,7 +239,7 @@ async def test_page_key_transition_with_zero_reviews_triggers_retry(
         fake_fetch_with_retry,
     )
 
-    # Stub out the browser session so we never actually launch Chromium.
+    # Stub out the session so we never actually launch Invisible Playwright.
     class _FakeBrowser:
         async def __aenter__(self):
             return self

@@ -22,7 +22,8 @@ class DummyBrowser:
         self.kwargs = kwargs
 
 
-def test_returns_subclass_with_merged_prefs():
+def test_returns_subclass_with_merged_prefs(monkeypatch):
+    monkeypatch.setenv("MARKETPLACE_GPU_SAFETY", "on")
     safe_cls = make_gpu_safe(DummyBrowser)
 
     assert issubclass(safe_cls, DummyBrowser)
@@ -35,7 +36,8 @@ def test_returns_subclass_with_merged_prefs():
         assert merged[key] == value
 
 
-def test_caller_prefs_win_per_key():
+def test_caller_prefs_win_per_key(monkeypatch):
+    monkeypatch.setenv("MARKETPLACE_GPU_SAFETY", "on")
     safe_cls = make_gpu_safe(DummyBrowser)
 
     instance = safe_cls(
@@ -76,4 +78,4 @@ def test_gpu_safety_enabled_env_variants(monkeypatch):
     assert gpu_safety_enabled() is False
 
     monkeypatch.delenv("MARKETPLACE_GPU_SAFETY", raising=False)
-    assert gpu_safety_enabled() is True
+    assert gpu_safety_enabled() is False

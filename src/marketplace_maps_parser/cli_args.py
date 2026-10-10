@@ -14,7 +14,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="marketplace-maps-parser",
         description=(
             "Async review scraper for Ozon, Wildberries, "
-            "and Yandex Market (planned)."
+            "Yandex Market, Yandex Maps, 2GIS and Avito profiles."
         ),
     )
     parser.add_argument(
@@ -25,13 +25,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "yandex",
             "yandex_maps",
             "2gis",
+            "avito",
         ),
         default=None,
         help=(
             "Target marketplace. OPTIONAL when --url is given: "
             "detected from the URL (market.yandex.ru -> yandex, "
             "yandex.ru/maps -> yandex_maps, ozon.ru -> ozon, "
-            "wildberries.ru -> wildberries, 2gis.ru -> 2gis). "
+            "wildberries.ru -> wildberries, 2gis.ru -> 2gis, "
+            "avito.ru/brands -> avito). "
             "Required with --products-file (ozon only)."
         ),
     )
@@ -42,7 +44,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Output format (default: json). 'json' — the unified "
             "document: {reviews: […10 shared fields…], diagnostics: "
-            "{status, error, …}}; errors (captcha, blocks, "
+            "{status: complete/partial/failed, error, …}}; "
+            "errors (captcha, blocks, "
             "transport failures) land in diagnostics, never as "
             "review records. 'jsonl' — the legacy one-record-per-"
             "line stream."
@@ -84,8 +87,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default="reviews.jsonl",
-        help="Output JSONL path (default: reviews.jsonl).",
+        default=None,
+        help="Output path (default: reviews.json or reviews.jsonl).",
     )
     parser.add_argument(
         "--strategy",
@@ -135,12 +138,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=100,
+        help=(
+            "Flush the append-only checkpoint after this many new reviews "
+            "(default: 100). Lower values reduce loss on interruption "
+            "but increase disk I/O."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-seconds",
+        type=float,
+        default=5.0,
+        help=(
+            "Flush checkpoints every N seconds while collecting (default: 5)."
+        ),
+    )
+    parser.add_argument(
         "--debug-dir",
         default=None,
         help=(
             "Directory for HTML/JSON debug dumps. Default: "
             "debug_ozon (ozon), debug_yandex (yandex), "
             "debug_yandex_maps (yandex_maps)."
+        ),
+    )
+    parser.add_argument(
+        "--debug-dumps",
+        action="store_true",
+        help=(
+            "Ozon: save raw JSON/HTML on every page (off by default). "
+            "Slower and may contain account data; keep dumps private."
         ),
     )
     parser.add_argument(
@@ -152,8 +181,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--settle-ms",
         type=int,
-        default=2_000,
-        help="Wait after page load before scraping (default: 2000).",
+        default=750,
+        help=(
+            "Readiness grace after browser navigation "
+            "(default: 750 ms)."
+        ),
     )
     parser.add_argument(
         "--no-humanize",
@@ -163,19 +195,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--page-delay-seconds",
         type=float,
-        default=1.5,
+        default=0.8,
         help=(
             "Jittered delay between pagination page fetches in "
-            "seconds (default: 1.5)."
+            "seconds (default: 0.8)."
         ),
     )
     parser.add_argument(
         "--scroll-pause-seconds",
         type=float,
-        default=1.0,
+        default=0.5,
         help=(
             "Pause between scroll steps in seconds "
-            "(default: 1.0)."
+            "(default: 0.5)."
         ),
     )
     parser.add_argument(
@@ -189,66 +221,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--fetch-strategy",
-        choices=("navigation", "fetch"),
-        default="navigation",
+        "--no-browser-api",
+        action="store_true",
         help=(
-            "Ozon only: 'navigation' opens the API URL directly "
-            "in the browser tab (default, Cloudflare-friendly); "
-            "'fetch' calls fetch() from the page's JS context "
-            "(legacy, faster but Cloudflare blocks it more "
-            "aggressively)."
+            "Disable optional API fast paths for WB, Yandex.Market, "
+            "Avito, Maps and 2GIS; keep browser DOM/SSR for comparison."
+        ),
+    )
+    parser.add_argument(
+        "--fetch-strategy",
+        choices=("auto", "navigation", "fetch"),
+        default="auto",
+        help=(
+            "Ozon: 'auto' (default) uses in-page fetch after review "
+            "readiness, falling back to API navigation per tab. "
+            "'fetch' and 'navigation' force one browser-only path."
         ),
     )
     parser.add_argument(
         "--no-stealth",
         action="store_true",
         help=(
-            "Disable stealth init script (default: stealth enabled). "
-            "Stealth patches navigator.webdriver, chrome.runtime, "
-            "Notification.permission and other signals Cloudflare "
-            "uses to detect automated browsers. Disable for "
-            "debugging or when stealth causes issues."
+            "Deprecated compatibility flag. Invisible Playwright owns "
+            "the fingerprint in its browser engine; this flag does not "
+            "inject or remove a page-level JavaScript shim."
         ),
     )
     parser.add_argument(
         "--transport",
-        choices=("playwright", "curl_cffi", "hybrid", "public_page"),
-        default="public_page",
+        choices=("playwright",),
+        default="playwright",
         help=(
-            "Ozon only: 'public_page' (default) scrapes the "
-            "public review page DOM — least Cloudflare friction, "
-            "no internal API; 'playwright' uses invisible-playwright "
-            "to drive a real browser hitting the internal API; "
-            "'curl_cffi' uses curl_cffi which mimics the TLS "
-            "fingerprint of real Chrome/Firefox — faster, lighter, "
-            "but cannot solve Cloudflare JS challenges and does not "
-            "support --strategy scroll. 'hybrid' tries curl_cffi "
-            "first and falls back to playwright on persistent "
-            "Cloudflare challenge."
-        ),
-    )
-    parser.add_argument(
-        "--impersonate",
-        default="chrome120",
-        help=(
-            "curl_cffi only: which browser TLS fingerprint to "
-            "impersonate (default: chrome120). Examples: "
-            "chrome120, chrome119, firefox120, safari17_0. See "
-            "curl_cffi docs for the full list."
-        ),
-    )
-    parser.add_argument(
-        "--randomize-fingerprint",
-        action="store_true",
-        help=(
-            "public_page only: create a fresh "
-            "InvisiblePlaywright browser for each page instead of "
-            "reusing one. Each new browser gets a new random "
-            "fingerprint (seed=None → secrets.randbits(31)), so "
-            "every page looks like a different browser to "
-            "Cloudflare. Slower (~2-5s browser startup per page) "
-            "but maximally stealthy."
+            "Ozon: Invisible Playwright browser transport."
         ),
     )
     parser.add_argument(
@@ -271,6 +275,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "proxy receives a Cloudflare block, it's marked "
             "blocked and skipped on the next rotation. Use "
             "residential proxies for best results."
+        ),
+    )
+    parser.add_argument(
+        "--proxy-attempts",
+        type=int,
+        default=3,
+        help=(
+            "Ozon with --proxy-list: retry an errored collection with "
+            "a new browser session and the next proxy (default: 3 "
+            "distinct entries, bounded). Does not rotate mid-session."
         ),
     )
     parser.add_argument(
@@ -316,40 +330,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help=(
-            "public_page only: parallel widget-flow workers — "
-            "browser tabs of one session sharding the review pages "
-            "(default: 1 = sequential). NOTE (measured 2026-09-15): "
-            "tabs of one browser session serialize on Ozon's side / "
-            "the single proxy tunnel, so wall time stays roughly "
-            "the same; kept as the foundation for multi-session "
-            "sharding. For a real speedup today run several "
-            "processes with different --proxy ports."
-        ),
-    )
-    parser.add_argument(
         "--parallel-sessions",
         type=int,
         default=1,
         help=(
-            "Run N collection sessions with disjoint --start-page/"
-            "--max-pages chunks, then merge with review_id dedup. "
-            "Ozon: requires --max-pages; N child PROCESSES (one "
-            "proxy from --proxy-list per process). NOTE "
-            "(measured): naked ?page=N caps at ~5 productive "
-            "pages per Ozon session even with cookies, so for ONE "
-            "Ozon product this only parallelizes the first ~5 "
-            "pages — the deep widget flow stays sequential. "
-            "Yandex.Market: --max-pages OPTIONAL — a single probe "
-            "session reads the review counter first and sizes the "
-            "ranges automatically; N in-process browser sessions "
-            "walk disjoint ?page=N ranges (~10 reviews/page; one "
-            "pinned proxy per session from --proxy-list — "
-            "without proxies all sessions share one IP and the "
-            "captcha risk multiplies)."
+            "Ozon/Yandex: independent Invisible Playwright sessions over "
+            "disjoint page ranges (default: 1). Ozon requires --max-pages; "
+            "Yandex can probe the total first. Each session uses a proxy "
+            "from --proxy-list when provided."
         ),
     )
     parser.add_argument(
@@ -359,8 +347,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Do not abort image/font/media requests on scraper "
             "pages (blocking them is the default: review photos "
             "dominate the ~880KB page and we only need their src "
-            "urls). Applies to public_page AND playwright "
-            "transports."
+            "urls). Applies to the Ozon Invisible Playwright transport."
         ),
     )
     parser.add_argument(
@@ -368,20 +355,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Save a full-page screenshot into the debug dir on "
-            "every debug dump (public_page/playwright transports). "
+            "every debug dump (Ozon browser transport). "
             "OFF by default: screenshots of a logged-in session "
-            "are a PII hazard and slow every page down; HTML/JSON "
-            "dumps are written regardless."
-        ),
-    )
-    parser.add_argument(
-        "--no-widget-scroll",
-        action="store_true",
-        help=(
-            "Disable the scroll-mix phase of the widget flow (the "
-            "default scrolls each review page like a reader, waits "
-            "up to 1.5s for lazily appended cards, then moves to "
-            "the next page)."
+            "are a PII hazard and slow every page down. "
+            "Also enables --debug-dumps."
         ),
     )
     parser.add_argument(
@@ -419,6 +396,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--parallel-streams",
         action="store_true",
+        default=True,
         help=(
             "Ozon pagination only: run all review streams "
             "(default, score_asc, score_desc) CONCURRENTLY — each "
@@ -428,6 +406,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "request rate from Ozon's perspective; debug dumps go "
             "into per-stream page_N_<sort> directories."
         ),
+    )
+    parser.add_argument(
+        "--serial-streams",
+        dest="parallel_streams",
+        action="store_false",
+        help="Ozon: disable concurrent review-stream workers.",
     )
     parser.add_argument(
         "--filter-streams",
@@ -458,11 +442,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--maps-api-concurrency",
         type=int,
-        default=3,
+        default=5,
         help=(
             "yandex_maps direct API: how many review streams "
             "(ranking × aspect windows) walk CONCURRENTLY "
-            "(default: 3). Each stream keeps its own request "
+            "(default: 5). Each stream keeps its own request "
             "pacing, so the server sees several slow scrollers "
             "rather than one fast bot; 1 restores the strictly "
             "serial walk."
@@ -471,10 +455,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--maps-api-pacing",
         type=float,
-        default=0.8,
+        default=0.35,
         help=(
             "yandex_maps direct API: pause between requests "
-            "within ONE stream, seconds (default: 0.8). Lower = "
+            "within ONE stream, seconds (default: 0.35). Lower = "
             "faster but less polite."
         ),
     )
@@ -504,6 +488,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parsed = parser.parse_args(argv)
+    if parsed.output is None:
+        parsed.output = f"reviews.{parsed.format}"
+    for name in (
+        "checkpoint_interval", "checkpoint_seconds", "timeout_ms",
+        "parallel_sessions", "products_sessions", "start_page",
+        "retry_attempts", "maps_api_concurrency", "proxy_attempts",
+    ):
+        if getattr(parsed, name) <= 0:
+            parser.error(f"--{name.replace('_', '-')} must be positive")
+    for name in ("max_reviews", "max_pages"):
+        value = getattr(parsed, name)
+        if value is not None and value <= 0:
+            parser.error(f"--{name.replace('_', '-')} must be positive")
+    for name in (
+        "settle_ms", "page_delay_seconds", "scroll_pause_seconds",
+        "maps_api_pacing", "dup_streak_stop", "dup_pages_stop",
+    ):
+        if getattr(parsed, name) < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative")
 
     if not parsed.url and not parsed.products_file:
         parser.error(
@@ -539,5 +542,3 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--products-file supports only --marketplace ozon"
         )
     return parsed
-
-

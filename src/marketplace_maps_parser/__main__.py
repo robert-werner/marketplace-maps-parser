@@ -2,7 +2,7 @@
 
 Consolidates the four legacy ``main*.py`` scripts into a single argparse-driven
 program supporting the Ozon pagination strategy, Ozon DOM-scroll strategy, and
-the Wildberries public-API adapter.
+the Wildberries DOM adapter.
 
 Heavy browser transports (``invisible-playwright``) are imported
 lazily inside the collectors (see ``marketplace_maps_parser
@@ -42,6 +42,7 @@ from marketplace_maps_parser.collectors import (
 async def _run(args: argparse.Namespace) -> int:
     from marketplace_maps_parser.collectors import (
         _collect_2gis,
+        _collect_avito,
         _collect_ozon,
         _collect_wildberries,
         _collect_yandex,
@@ -58,7 +59,18 @@ async def _run(args: argparse.Namespace) -> int:
         return await _collect_yandex_maps(args)
     if args.marketplace == "2gis":
         return await _collect_2gis(args)
+    if args.marketplace == "avito":
+        return await _collect_avito(args)
     raise SystemExit(f"Unknown marketplace: {args.marketplace}")
+
+
+def _exit_code_for_status(status: str | None) -> int:
+    """Return a non-zero code when the output is not complete."""
+    if status == "failed":
+        return 2
+    if status == "partial":
+        return 3
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,9 +82,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             count = asyncio.run(run_products_parallel(args))
             print(f"Собрано отзывов: {count}")
-            return 0
+            return _exit_code_for_status(
+                getattr(args, "_run_status", None),
+            )
 
-        # Ozon: page-range CHILD PROCESSES (public_page chunks).
+        # Ozon: page-range CHILD PROCESSES (API pagination chunks).
         # Yandex handles --parallel-sessions in-process inside its
         # collector (independent browser launches per range).
         if (
@@ -84,7 +98,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             count = asyncio.run(run_parallel_sessions(args))
             print(f"Собрано отзывов: {count}")
-            return 0
+            return _exit_code_for_status(
+                getattr(args, "_run_status", None),
+            )
 
         count = asyncio.run(_run(args))
     except KeyboardInterrupt:
@@ -92,7 +108,9 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
     print(f"Сбор завершён. Всего отзывов: {count}")
-    return 0
+    return _exit_code_for_status(
+        getattr(args, "_run_status", None),
+    )
 
 
 if __name__ == "__main__":

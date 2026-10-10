@@ -22,8 +22,7 @@ This module provides:
   (``{"server": "...", "username": "...", "password": "..."}``).
 - ``proxy_to_url`` — the inverse of ``parse_proxy_line``: renders
   a proxy dict as a ``scheme://user:pass@host:port`` URL string
-  for transports that take a plain proxy URL (curl_cffi, CLI
-  child processes).
+  for CLI child processes that accept a proxy URL.
 - ``mask_proxy_url`` — same URL with the password replaced by
   ``***``, safe for logs.
 """

@@ -1,7 +1,7 @@
-"""Wildberries review cards from the live browser DOM, not JSON APIs.
+"""Wildberries review cards via observed browser JSON or live DOM.
 
 Open the product first so the review route inherits the same browser session.
-Only visible page markup is read; scrolling triggers the site's own loading.
+No guessed product-root/shard mapping; API URLs come from this page's traffic.
 """
 from __future__ import annotations
 
@@ -10,9 +10,21 @@ from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
+from infrastructure.transports.browser_api import ResponseCapture
 from infrastructure.transports.browser_common import (
     import_invisible_playwright,
 )
+from infrastructure.transports.browser_waits import (
+    card_signature,
+    wait_for_card_change,
+)
+from infrastructure.transports.wb_api import (
+    feedback_cards,
+    feedback_next_url,
+    fetch_feedback_page,
+    is_feedback_url,
+)
+from shared.async_iterators import closing_iterator
 from shared.url_parsers import extract_nm_id
 
 _READ_PAGE_JS = """() => {
@@ -82,6 +94,9 @@ class WildberriesBrowserTransport:
         proxy: dict[str, str] | None = None,
         humanize: bool = True,
         max_scrolls: int = 200,
+        cookies: list[dict[str, Any]] | None = None,
+        use_api: bool = True,
+        max_pages: int | None = None,
     ) -> None:
         self.product_url = product_url
         self.timeout_ms = timeout_ms
@@ -89,9 +104,15 @@ class WildberriesBrowserTransport:
         self.proxy = proxy
         self.humanize = humanize
         self.max_scrolls = max_scrolls
+        self.cookies = cookies
+        self.use_api = use_api
+        self.max_pages = max_pages
+        self.collection_path = "dom"
+        self._capture: ResponseCapture | None = None
         self.last_product_title: str | None = None
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
+        self.incomplete_reason: str | None = None
         self._page: Any = None
         self._browser_ctx: Any = None
 
@@ -103,6 +124,10 @@ class WildberriesBrowserTransport:
         try:
             browser = await self._browser_ctx.__aenter__()
             self._page = await browser.new_page()
+            if self.cookies:
+                await self._page.context.add_cookies(self.cookies)
+            self._capture = ResponseCapture(self._page, is_feedback_url)
+            self._capture.__enter__()
             return self
         except BaseException:
             await self.__aexit__(None, None, None)
@@ -110,24 +135,52 @@ class WildberriesBrowserTransport:
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         try:
+            if self._capture is not None:
+                self._capture.__exit__()
             if self._browser_ctx is not None:
                 await self._browser_ctx.__aexit__(exc_type, exc, tb)
         finally:
             self._page = None
             self._browser_ctx = None
+            self._capture = None
 
     async def iter_review_batches(
         self, product_url: str,
     ) -> AsyncIterator[list[dict[str, Any]]]:
         if self._page is None:
-            raise RuntimeError('Wildberries browser is not open')
+            async with self:
+                async with closing_iterator(
+                    self.iter_review_batches(product_url),
+                ) as stream:
+                    async for batch in stream:
+                        yield batch
+            return
         nm_id = extract_nm_id(product_url)
         page = self._page
-        await page.goto(
+        product_response = await page.goto(
             product_url, timeout=self.timeout_ms,
             wait_until='domcontentloaded',
         )
-        await page.wait_for_timeout(self.settle_ms)
+        # Wait for the route link rather than an unconditional page sleep.
+        link = page.locator(f'a[href*="/catalog/{nm_id}/feedbacks"]').first
+        if self.settle_ms > 0 or (
+            product_response is not None and product_response.status >= 400
+        ):
+            try:
+                # Don't replace an interstitial before the site completes
+                # its own redirect. Ready pages pay no extra fixed delay.
+                await link.wait_for(
+                    state="attached",
+                    timeout=min(self.timeout_ms, 8_000),
+                )
+            except Exception as exc:
+                if product_response is not None and (
+                    product_response.status >= 400
+                ):
+                    raise RuntimeError(
+                        "Wildberries product blocked "
+                        f"(HTTP {product_response.status})",
+                    ) from exc
         if not urlsplit(page.url).path.rstrip('/').endswith('/feedbacks'):
             title = page.locator('h1').first
             if await title.count():
@@ -138,7 +191,7 @@ class WildberriesBrowserTransport:
                 await link.get_attribute('href')
                 if await link.count() else None
             )
-            await page.goto(
+            response = await page.goto(
                 urljoin(
                     product_url,
                     feedback_url or f'/catalog/{nm_id}/feedbacks',
@@ -146,7 +199,20 @@ class WildberriesBrowserTransport:
                 timeout=self.timeout_ms,
                 wait_until='domcontentloaded',
             )
-            await page.wait_for_timeout(self.settle_ms)
+            if response is not None and response.status >= 400:
+                # Allow the site a bounded chance to finish a redirect, but
+                # never mistake an empty challenge document for EOF.
+                try:
+                    await page.locator(
+                        '[data-testid="feedbacks-list-item"]',
+                    ).first.wait_for(
+                        state="attached",
+                        timeout=min(8_000, self.timeout_ms),
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Wildberries blocked (HTTP {response.status})",
+                    ) from exc
         selector = '[data-testid="feedbacks-list-item"]'
         cards = page.locator(selector)
         try:
@@ -157,6 +223,47 @@ class WildberriesBrowserTransport:
             raise RuntimeError(
                 'Wildberries: карточки отзывов не загрузились'
             ) from exc
+        if self.use_api and self._capture is not None:
+            for response in reversed(self._capture.responses):
+                try:
+                    if response.status != 200:
+                        continue
+                    payload = await response.json()
+                    initial = feedback_cards(payload, nm_id)
+                except Exception:
+                    continue
+                if not initial:
+                    continue
+                self.collection_path = "api"
+                seen_api: set[str] = set()
+                seen_urls: set[str] = set()
+                current = response.url
+                for _ in range(self.max_pages or 100):
+                    if current in seen_urls:
+                        raise RuntimeError("WB repeated API cursor")
+                    seen_urls.add(current)
+                    api_cards = feedback_cards(payload, nm_id)
+                    fresh = []
+                    for card in api_cards:
+                        if card["id"] not in seen_api:
+                            seen_api.add(card["id"])
+                            fresh.append(card)
+                    # Small batches keep --max-reviews/cancellation cheap
+                    # even if WB delivered a large cached response.
+                    for offset in range(0, len(fresh), 100):
+                        yield fresh[offset:offset + 100]
+                    next_url = feedback_next_url(current, payload)
+                    if not next_url or not fresh:
+                        self.incomplete_reason = (
+                            "WB API window: full review coverage unverified"
+                        )
+                        return
+                    current = next_url
+                    payload = await fetch_feedback_page(
+                        page, current, timeout_ms=self.timeout_ms,
+                    )
+                self.incomplete_reason = "WB API page limit reached"
+                return
         if not self.last_product_title:
             product_link = page.locator(
                 f'a[class*="productLineName"]'
@@ -182,7 +289,7 @@ class WildberriesBrowserTransport:
                 raise RuntimeError('Wildberries: DOM отзывов недоступен')
             self.last_total_count = snapshot.get('total')
             self.last_average_rating = snapshot.get('average')
-            fresh: list[dict[str, Any]] = []
+            dom_fresh: list[dict[str, Any]] = []
             for item in snapshot.get('cards') or []:
                 if not isinstance(item, dict):
                     continue
@@ -193,21 +300,31 @@ class WildberriesBrowserTransport:
                             item.get('sections')))
                 if key not in seen:
                     seen.add(key)
-                    fresh.append(item)
-            if fresh:
+                    dom_fresh.append(item)
+            if dom_fresh:
                 stalled = 0
-                yield fresh
+                yield dom_fresh
             else:
                 stalled += 1
             if stalled >= 3:
                 break
+            try:
+                before = await card_signature(page, selector)
+            except (AttributeError, TypeError):
+                before = ""
             count = await cards.count()
             if count:
                 await cards.nth(count - 1).scroll_into_view_if_needed()
             await page.evaluate("window.scrollBy(0, window.innerHeight)")
-            await page.wait_for_timeout(
-                max(self.settle_ms, 500),
-            )
+            try:
+                await wait_for_card_change(
+                    page, selector=selector, previous=before,
+                    timeout_ms=max(self.settle_ms, 500),
+                )
+            except (AttributeError, TypeError):
+                await page.wait_for_timeout(max(self.settle_ms, 500))
+        else:
+            self.incomplete_reason = "Wildberries: max_scrolls reached"
 
 
 __all__ = ['WildberriesBrowserTransport']

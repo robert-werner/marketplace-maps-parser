@@ -1,7 +1,6 @@
 """Shared helpers and constants for the Ozon transports.
 
-The Ozon transport implementations (``browser_json``, ``curl_cffi``,
-``hybrid``, ``public_page``) iterate the same review stream and parse
+The Ozon browser JSON transport iterates the review stream and parses
 the same payloads. This module holds the pieces they would otherwise
 copy-paste:
 
@@ -15,6 +14,7 @@ call sites and class-level test calls keep working.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 from urllib.parse import urlencode
 
@@ -73,6 +73,11 @@ class OzonTransportMixin:
     @staticmethod
     def _review_node_id(node: dict[str, Any]) -> str | None:
         """Best-effort extraction of a stable id from a review node."""
+        from infrastructure.marketplaces.ozon_payload import extract_review_id
+
+        review_id = extract_review_id(node)
+        if review_id:
+            return review_id
         for key in (
             "reviewId",
             "review_id",
@@ -93,40 +98,25 @@ class OzonTransportMixin:
         """Pull every dict that looks like a review out of a raw
         Ozon pagination payload.
 
-        Reuses ``walk_json`` semantics from the adapter without
-        duplicating its fuzzy matcher — this is intentionally a thin
-        pass-through that just surfaces raw candidate nodes.
+        Reuses the payload parser's matcher without constructing the full
+        Review objects a second time just to count pagination results.
         """
-        # Local import to avoid a hard dep cycle with the adapter module.
-        from domain.entities import ProductRef
-        from infrastructure.marketplaces.ozon import (
-            extract_reviews_from_ozon_payload,
+        from infrastructure.marketplaces.ozon_payload import (
+            iter_ozon_review_nodes,
         )
 
-        # extract_reviews_from_ozon_payload needs a ProductRef for
-        # building Review objects, but we only need the raw node
-        # identification logic. Pass a minimal placeholder.
-        placeholder = ProductRef(
-            marketplace="ozon",
-            source_url="",
-            product_id="_placeholder",
-        )
-        reviews = extract_reviews_from_ozon_payload(
-            payload, placeholder,
-        )
-        # ``raw`` field on each Review is the original node dict
-        return [r.raw for r in reviews if isinstance(r.raw, dict)]
+        return list(iter_ozon_review_nodes(payload))
 
-    def _notify_pacer_block(self) -> None:
+    def _notify_pacer_block(self, page: Any = None) -> None:
         """Feed an antibot/challenge event to the run's pacer.
 
-        ``iter_all_ozon_reviews`` implementations store an
-        :class:`~shared.pacing.AdaptivePacer` on ``self._pacer``
-        (created from ``page_delay_seconds``); antibot detection
-        paths call this hook so the inter-page delay backs off
-        after challenges. No-op when no pacer is active.
+        Each API tab owns its pacer, so a failure in one sort cannot
+        overwrite another sort's delay. The legacy ``_pacer`` attribute
+        remains supported for callers that use a single iterator.
         """
         pacer = getattr(self, "_pacer", None)
+        if page is not None:
+            pacer = getattr(self, "_page_pacers", {}).get(page, pacer)
         if pacer is not None:
             pacer.record_block()
 
@@ -148,6 +138,18 @@ class OzonTransportMixin:
         """
         if not body:
             return False
+        if body.lstrip().startswith(("{", "[")):
+            try:
+                payload = json.loads(body)
+            except ValueError:
+                pass
+            else:
+                # Review text may mention JavaScript/challenges; only
+                # top-level challenge metadata is a JSON interstitial.
+                return isinstance(payload, dict) and bool(
+                    {"challengeurl", "incidentid"}
+                    & {str(key).lower() for key in payload}
+                )
         body_lower = body.lower()
         return (
             "challengeurl" in body_lower

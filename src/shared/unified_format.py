@@ -138,6 +138,9 @@ def build_unified_review(
 ) -> dict[str, Any]:
     text = compose_review_text(review)
     created_at = review.created_at
+    raw = dict(review.raw)
+    if review.review_id and not any(raw.get(key) for key in _RAW_ID_KEYS):
+        raw["review_id"] = review.review_id
     return {
         "source_url": review.product.source_url,
         "platform": review.product.marketplace,
@@ -152,7 +155,7 @@ def build_unified_review(
         "photos": len(review.photos or []),
         "video_len": video_len_from_raw(review.raw or {}),
         "text_len": len(text.strip()) if text else 0,
-        "raw": review.raw,
+        "raw": raw,
     }
 
 
@@ -160,17 +163,24 @@ def build_unified_document(
     reviews: list[dict[str, Any]],
     *,
     error: str | None = None,
+    status: str | None = None,
     **diagnostics: Any,
 ) -> dict[str, Any]:
     """The run document: ``reviews`` + ``diagnostics``.
 
-    ``status`` is ``"error"`` when an error reason is given (the
-    reviews list may still hold the partial batch collected before
-    the failure)."""
+    ``status`` is one of ``complete``, ``partial`` or ``failed``.
+    The caller may provide a stronger completeness decision when it
+    knows the source-side total; otherwise errors are classified from
+    whether any records survived."""
+    if status is None:
+        if error:
+            status = "partial" if reviews else "failed"
+        else:
+            status = "complete"
     document: dict[str, Any] = {
         "reviews": reviews,
         "diagnostics": {
-            "status": "error" if error else "ok",
+            "status": status,
             "error": error,
             **diagnostics,
         },

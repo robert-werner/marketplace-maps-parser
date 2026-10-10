@@ -1,7 +1,6 @@
 """Tests for the Yandex.Market browser transport.
 
-Uses a fake page/browser (the same pattern as
-test_public_page_transport.py) — no network, no real browser.
+Uses a fake page/browser — no network, no real browser.
 """
 from __future__ import annotations
 

@@ -224,7 +224,7 @@ def test_parse_ozon_date_handles_unix_ms() -> None:
 
 
 def test_parse_ozon_date_handles_unix_timestamp_string() -> None:
-    """PublicPageTransport reads ``publishedat`` from the DOM."""
+    """the browser transport reads ``publishedat`` from the DOM."""
     result = parse_ozon_date("1704067200")
     assert result == datetime(2024, 1, 1, tzinfo=UTC)
 
@@ -298,7 +298,7 @@ def test_extract_ozon_rating_summary_parses_histogram() -> None:
 
 def test_extract_ozon_rating_summary_returns_none_without_widget() -> None:
     """Payloads without widgetStates (e.g. DOM-card payloads from
-    the public_page transport) must yield None, not an error."""
+    the browser transport) must yield None, not an error."""
     assert extract_ozon_rating_summary({"reviews": []}) is None
     assert extract_ozon_rating_summary(
         {"widgetStates": {"webListReviews-1-default-1": "{}"}},

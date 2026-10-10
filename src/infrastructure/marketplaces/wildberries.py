@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from domain.entities import ProductRef, Review, ReviewPage
 from infrastructure.marketplaces.base import MarketplaceAdapter
+from shared.async_iterators import closing_iterator
 from shared.url_parsers import extract_nm_id
 
 _MONTHS = {
@@ -63,15 +64,18 @@ class WildberriesAdapter(MarketplaceAdapter):
             self.name, product_url, str(extract_nm_id(product_url)),
         )
         seen: set[str] = set()
-        async for batch in self.transport.iter_review_batches(product_url):
-            self.last_product_title = self.transport.last_product_title
-            self.last_total_count = self.transport.last_total_count
-            self.last_average_rating = self.transport.last_average_rating
-            for item in batch:
-                review = self._map_review(item, product)
-                if review.review_id not in seen:
-                    seen.add(review.review_id or '')
-                    yield review
+        async with closing_iterator(
+            self.transport.iter_review_batches(product_url)
+        ) as owned_stream:
+            async for batch in owned_stream:
+                self.last_product_title = self.transport.last_product_title
+                self.last_total_count = self.transport.last_total_count
+                self.last_average_rating = self.transport.last_average_rating
+                for item in batch:
+                    review = self._map_review(item, product)
+                    if review.review_id not in seen:
+                        seen.add(review.review_id or '')
+                        yield review
         self.last_product_title = self.transport.last_product_title
         self.last_total_count = self.transport.last_total_count
         self.last_average_rating = self.transport.last_average_rating
@@ -85,8 +89,8 @@ class WildberriesAdapter(MarketplaceAdapter):
             if isinstance(section, dict)
         }
         text = sections.get('комментарий') or item.get('text')
-        pros = sections.get('достоинства')
-        cons = sections.get('недостатки')
+        pros = sections.get('достоинства') or item.get('pros')
+        cons = sections.get('недостатки') or item.get('cons')
         raw_date = str(item.get('date') or '')
         created_at = WildberriesAdapter._parse_date(raw_date)
         date_key = raw_date
@@ -103,8 +107,10 @@ class WildberriesAdapter(MarketplaceAdapter):
             product.product_id, item.get('author'), date_key,
             item.get('rating'), text, pros, cons,
         ))
-        review_id = hashlib.sha256(identity.encode('utf-8')).hexdigest()
-        raw = {**item, 'id': review_id, 'dom': True}
+        review_id = str(item.get('id') or hashlib.sha256(
+            identity.encode('utf-8'),
+        ).hexdigest())
+        raw = {**item, 'id': review_id, 'dom': not item.get('api', False)}
         return Review(
             review_id=review_id,
             product=product,
@@ -121,6 +127,11 @@ class WildberriesAdapter(MarketplaceAdapter):
 
     @staticmethod
     def _parse_date(value: str) -> datetime | None:
+        if re.match(r"^\d{4}-\d{2}-\d{2}", value):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
         match = _DATE_RE.search(value)
         if not match:
             return None

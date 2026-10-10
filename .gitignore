@@ -65,6 +65,9 @@ data/
 debug_*/
 debug_*.html
 *.jsonl
+*.checkpoint.jsonl
+*.status.json
+*.part*.jsonl
 *.log
 result.json
 *_reviews*.json
@@ -76,4 +79,4 @@ result.json
 # Session cookie files (never commit!)
 # Broad pattern: cookies.json, ozon_cookies.json,
 # yandex_cookies_live.json, *_cookies.json …
-*cookies*.json
+*cookie*.json

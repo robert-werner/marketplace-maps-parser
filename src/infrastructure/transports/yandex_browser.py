@@ -101,9 +101,9 @@ from urllib.parse import parse_qsl, urlsplit
 
 from infrastructure.transports.browser_common import (
     import_invisible_playwright,
-    _STEALTH_INIT_SCRIPT,
     install_resource_blocker,
 )
+from shared.async_iterators import closing_iterator
 from shared.pacing import AdaptivePacer
 from shared.url_parsers import extract_yandex_market_card_path
 
@@ -188,9 +188,6 @@ class YandexNotFoundError(RuntimeError):
 def _import_invisible_playwright() -> type:
     """Lazy import (same pattern as the Ozon transports); wrapped
     with GPU-safe software-rendering prefs (gpu_safety.py)."""
-    from infrastructure.transports.browser_common import (
-        import_invisible_playwright,
-    )
     return import_invisible_playwright()
 
 
@@ -414,6 +411,7 @@ class YandexBrowserTransport:
         start_page: int = 1,
         max_pages: int | None = None,
         dup_pages_stop: int = 3,
+        use_api: bool = True,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
@@ -447,6 +445,9 @@ class YandexBrowserTransport:
         #: cards); a streak means the end. 0 = walk to the bitter
         #: end (empty page / max_pages) — the old, slow behaviour.
         self.dup_pages_stop = max(0, int(dup_pages_stop))
+        self.use_api = use_api
+        self.collection_path = "dom"
+        self.incomplete_reason: str | None = None
 
         self.last_total_count: int | None = None
         self.last_average_rating: float | None = None
@@ -497,10 +498,13 @@ class YandexBrowserTransport:
             # first launch self.cookies is the user-supplied jar.
             restart_cookies = None if restarts else self.cookies
             try:
-                async for batch in self._iter_with_browser(
-                    browser_cls, card_path, restart_cookies, state,
-                ):
-                    yield batch
+                async with closing_iterator(
+                    self._iter_with_browser(
+                        browser_cls, card_path, restart_cookies, state,
+                    )
+                ) as owned_stream:
+                    async for batch in owned_stream:
+                        yield batch
                 return
             except YandexCaptchaError as exc:
                 restarts += 1
@@ -639,6 +643,24 @@ class YandexBrowserTransport:
             self._pacer = pacer
 
             try:
+                if self.use_api and hasattr(page, "wait_for_function"):
+                    from infrastructure.transports.yandex_market_fast import (
+                        iter_market_state,
+                    )
+
+                    try:
+                        async with closing_iterator(iter_market_state(
+                            self, page, card_path, state,
+                        )) as fast:
+                            async for batch in fast:
+                                yield batch
+                        return
+                    except Exception as exc:
+                        print(
+                            "Я.Маркет: быстрый state-fetch недоступен "
+                            f"({type(exc).__name__}); продолжаю DOM",
+                        )
+                        self.collection_path = "dom_fallback"
                 canonical = await self._warmup(page, card_path)
                 self._set_current_product(canonical)
 
@@ -806,7 +828,9 @@ class YandexBrowserTransport:
                     # empty page, so without the streak counter the
                     # walk grinds through duplicate pages forever.
                     if total_cards_on_page == 0:
-                        print(f"Я.Маркет: страница {page_no} пуста, конец списка")
+                        print(
+                            f"Я.Маркет: страница {page_no} пуста, конец списка"
+                        )
                         # Debug-first: the walk-ending empty page is
                         # worth a postmortem dump (the healthy read
                         # skipped page.content()).
@@ -973,7 +997,11 @@ class YandexBrowserTransport:
         """
         url = f"{YANDEX_MARKET_BASE}{card_path}"
         try:
-            await page.goto(url, timeout=self.timeout_ms)
+            await page.goto(
+                url,
+                timeout=self.timeout_ms,
+                wait_until="domcontentloaded",
+            )
         except Exception as exc:
             print(f"[warn] Я.Маркет: warmup не удался: {exc}")
             return card_path
@@ -1092,6 +1120,7 @@ class YandexBrowserTransport:
                         url,
                         timeout=self.timeout_ms,
                         referer=referer,
+                        wait_until="domcontentloaded",
                     )
             else:
                 # A challenged page has no pager left to click —
@@ -1100,20 +1129,38 @@ class YandexBrowserTransport:
                     url,
                     timeout=self.timeout_ms,
                     referer=referer,
+                    wait_until="domcontentloaded",
                 )
-            # Human dwell, right-skewed: a tight ±20% band around
-            # the base settle is a metronome of its own; most pages
-            # read faster, some much slower («зачитался»).
-            settle = self.settle_ms
-            if settle > 0:
-                factor = random.uniform(0.6, 1.8)
-                if random.random() < 0.15:
-                    factor += random.uniform(0.8, 2.2)
-                await page.wait_for_timeout(
-                    int(settle * factor),
-                )
-
             snapshot = await self._read_cards(page)
+            # Healthy SSR pages are ready immediately. On a slow page, wait
+            # inside the browser for the first review/JSON-LD marker instead
+            # of paying the full human-dwell timeout on every page.
+            if not (
+                snapshot.get("cards")
+                or snapshot.get("ld_reviews")
+                or snapshot.get("total_count") is not None
+            ) and self.settle_ms > 0:
+                wait_for_function = getattr(
+                    page, "wait_for_function", None,
+                )
+                if wait_for_function is not None:
+                    try:
+                        handle = await wait_for_function(
+                            "() => Boolean(document.querySelector("
+                            "'[data-auto=\"review-item\"], "
+                            "script[type=\"application/ld+json\"]'))",
+                            timeout=max(
+                                250, min(self.settle_ms, 2_000),
+                            ),
+                        )
+                        await handle.dispose()
+                    except Exception:
+                        pass
+                else:
+                    await page.wait_for_timeout(
+                        min(self.settle_ms, 500),
+                    )
+                snapshot = await self._read_cards(page)
             page_url = str(getattr(page, "url", "") or "")
 
             kind = self._classify(
@@ -1930,19 +1977,8 @@ class YandexBrowserTransport:
     # ------------------------------------------------------------------
 
     async def _install_stealth(self, page: Any) -> None:
-        """The same stealth init script the Ozon transports use:
-        patches navigator.webdriver, plugins, languages and the
-        other classic headless tells before any site JS runs."""
-        from infrastructure.transports.browser_common import (
-            _STEALTH_INIT_SCRIPT,
-        )
-        try:
-            await page.add_init_script(_STEALTH_INIT_SCRIPT)
-        except Exception:
-            # Some builds do not support add_init_script; the
-            # invisible-playwright fingerprint still carries most
-            # of the stealth load.
-            pass
+        """Compatibility no-op: the engine owns the fingerprint."""
+        return None
 
     async def _install_resource_blocker(self, page: Any) -> None:
         """Abort image/font/media requests when ``block_assets``.
@@ -1951,9 +1987,6 @@ class YandexBrowserTransport:
         loads images and fonts, and SmartCaptcha weighs exactly
         that. Opt in once the session is trusted.
         """
-        from infrastructure.transports.browser_common import (
-            install_resource_blocker,
-        )
         await install_resource_blocker(
             page, enabled=self.block_assets,
         )

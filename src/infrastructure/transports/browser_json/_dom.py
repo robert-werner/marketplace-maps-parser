@@ -1,14 +1,29 @@
 """Mixin."""
 from __future__ import annotations
+
+from pathlib import Path
 from typing import Any
-import infrastructure.transports.browser_json as _mod
+
+_READ_CARDS_JS = Path(__file__).with_name("read_cards.js").read_text(
+    encoding="utf-8",
+)
 
 
 class CardReadingMixin:
     async def _read_review_cards(
             self,
-            review_locator,
+            review_locator: Any,
     ) -> list[dict[str, Any]]:
+        # Fetch the whole card set in a single browser round-trip.
+        evaluate_all = getattr(review_locator, "evaluate_all", None)
+        if evaluate_all is not None:
+            result = await evaluate_all(_READ_CARDS_JS)
+            if isinstance(result, list) and all(
+                isinstance(card, dict) for card in result
+            ):
+                return result
+            raise ValueError("Invalid batch DOM card result")
+        # Compatibility with wrappers/test doubles lacking evaluate_all.
         result: list[dict[str, Any]] = []
 
         for index in range(await review_locator.count()):
@@ -33,7 +48,7 @@ class CardReadingMixin:
 
         return result
 
-    async def _read_review_rating(self, card) -> int | None:
+    async def _read_review_rating(self, card: Any) -> int | None:
         """Read the per-review star rating from the DOM card.
 
         Each star is an SVG; the filled vs unfilled star has a
@@ -41,9 +56,7 @@ class CardReadingMixin:
         yellow (filled) stars. The selector matches the rating
         container that Ozon wraps around the stars.
 
-        Mirrors ``BrowserDomTransport._read_review_rating`` — kept
-        duplicated (not shared) to avoid coupling the two transport
-        classes together.
+        This locator reader remains a compatibility fallback.
         """
         rating_container = card.locator(
             '[class*="rpProducta9c"]'
@@ -96,8 +109,7 @@ class CardReadingMixin:
     @staticmethod
     def _is_filled_star(color: dict[str, Any] | None) -> bool:
         """Heuristic for deciding whether a star SVG is filled yellow
-        (counted) or unfilled grey (not counted). Mirrors
-        ``BrowserDomTransport._is_filled_star``.
+        (counted) or unfilled grey (not counted).
         """
         if not color:
             return False
@@ -130,7 +142,7 @@ class CardReadingMixin:
 
     async def _read_images(
             self,
-            card,
+            card: Any,
     ) -> list[str]:
         result: list[str] = []
         images = card.locator("img")

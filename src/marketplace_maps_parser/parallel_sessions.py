@@ -26,9 +26,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any
+
+from marketplace_maps_parser.merging import merge_parts
+from marketplace_maps_parser.run_state import status_path
 
 
 def estimate_review_pages(
@@ -156,139 +160,117 @@ def _proxy_urls_for_sessions(
 
 
 def _child_command(
-    args: Any,
-    part_path: Path,
-    start_page: int,
-    max_pages: int,
-    proxy_url: str | None,
+    args: Any, part_path: Path, start_page: int,
+    max_pages: int, proxy_url: str | None,
 ) -> list[str]:
-    cmd = [
-        sys.executable, "-m", "marketplace_maps_parser",
-        "--marketplace", "ozon",
-        "--url", args.url,
-        "--output", str(part_path),
-        "--transport", "public_page",
-        "--strategy", "pagination",
-        "--start-page", str(start_page),
-        "--max-pages", str(max_pages),
-        "--workers", "1",
-        "--retry-attempts", str(min(args.retry_attempts, 20)),
+    cmd = _product_child_command(args, args.url, part_path, proxy_url)
+    # Override parent scope: each child owns precisely one page range.
+    cmd += [
+        "--strategy", "pagination", "--start-page", str(start_page),
+        "--max-pages", str(max_pages), "--no-extra-streams",
     ]
-    if proxy_url:
-        cmd += ["--proxy", proxy_url]
-    if args.cookies:
-        cmd += ["--cookies", args.cookies]
-    if args.timeout_ms:
-        cmd += ["--timeout-ms", str(args.timeout_ms)]
-    if args.settle_ms:
-        cmd += ["--settle-ms", str(args.settle_ms)]
-    if args.debug_dir:
-        cmd += ["--debug-dir", str(args.debug_dir)]
-    if args.no_stealth:
-        cmd += ["--no-stealth"]
-    if args.no_humanize:
-        cmd += ["--no-humanize"]
-    if args.no_widget_scroll:
-        cmd += ["--no-widget-scroll"]
     return cmd
 
 
-async def run_parallel_sessions(args: Any) -> int:
-    """Spawn one CLI child per page chunk, wait for all, merge the
-    parts into ``args.output`` (dedup by review_id). Returns the
-    unique review count."""
-    sessions = args.parallel_sessions
-    if args.marketplace != "ozon":
-        raise SystemExit(
-            "--parallel-sessions поддерживает только --marketplace ozon"
-        )
-    if args.transport != "public_page":
-        raise SystemExit(
-            "--parallel-sessions работает с --transport public_page"
-        )
-    if args.max_pages is None:
-        raise SystemExit(
-            "--parallel-sessions требует --max-pages (общее число "
-            "страниц: ~отзывы/30); диапазоны делятся между сессиями"
-        )
-    if not args.cookies:
-        print(
-            "WARNING: --parallel-sessions без --cookies: анонимный "
-            "доступ ограничен ~5 страницами на сессию"
-        )
+async def _stop_child(proc: Any) -> None:
+    """Give the child time to checkpoint on SIGINT, then reap it."""
+    if proc.returncode is not None:
+        return
+    try:
+        proc.send_signal(signal.SIGINT)
+    except (ProcessLookupError, OSError):
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=10)
+    except TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
 
+
+async def _run_child(cmd: list[str], env: dict[str, str]) -> int:
+    spawning = asyncio.create_task(asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=None, env=env,
+    ))
+    proc: Any = None
+    try:
+        # Cancellation between process creation and handle delivery must
+        # not orphan a browser process.
+        proc = await asyncio.shield(spawning)
+        return int(await proc.wait())
+    except asyncio.CancelledError:
+        if proc is None:
+            proc = await spawning
+        await _stop_child(proc)
+        raise
+
+
+def _cleanup_parts(parts: list[Path], status: str) -> None:
+    if status != "complete":
+        return  # keep partial parts for diagnosis/recovery
+    for path in parts:
+        path.unlink(missing_ok=True)
+        status_path(path).unlink(missing_ok=True)
+
+
+def _prepare_part(path: Path, resume: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not resume:
+        # Never let an old part masquerade as a newly failed child.
+        path.unlink(missing_ok=True)
+        status_path(path).unlink(missing_ok=True)
+        Path(f"{path}.checkpoint.jsonl").unlink(missing_ok=True)
+
+
+async def run_parallel_sessions(args: Any) -> int:
+    """Run bounded Ozon page ranges and merge in the requested format."""
+    if args.marketplace != "ozon":
+        raise SystemExit("--parallel-sessions supports only Ozon")
+    if args.max_pages is None:
+        raise SystemExit("--parallel-sessions requires --max-pages")
     chunks = split_page_range(
-        args.start_page or 1, args.max_pages, sessions,
+        args.start_page, args.max_pages, args.parallel_sessions,
     )
     proxies = _proxy_urls_for_sessions(args, len(chunks))
-    out_path = Path(args.output)
-    part_paths = [
-        out_path.with_name(
-            f"{out_path.name}.part{i}.jsonl"
-        )
-        for i in range(len(chunks))
-    ]
+    out = Path(args.output)
+    parts = [out.with_name(f"{out.name}.part{i}.jsonl")
+             for i in range(len(chunks))]
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    exits: list[int | None] = [None] * len(parts)
 
-    env = dict(os.environ)
-    env.setdefault("PYTHONIOENCODING", "utf-8")
-
-    print(
-        f"parallel-sessions: {len(chunks)} процессов по страницам "
-        + ", ".join(
-            f"[{s}..{s + n - 1}]"
-            for (s, n), _ in zip(
-                chunks, part_paths, strict=False
-            )
-        )
-    )
-
-    tasks = []
-    for (start, size), part_path, proxy_url in zip(
-        chunks, part_paths, proxies, strict=False
-    ):
-        cmd = _child_command(
-            args, part_path, start, size, proxy_url
-        )
-        part_path.parent.mkdir(parents=True, exist_ok=True)
-        from infrastructure.transports.proxy_pool import (
-            mask_proxy_url,
-        )
-
-        print(
-            f"  часть {part_path.name}: страницы {start}.."
-            f"{start + size - 1}, proxy: "
-            f"{mask_proxy_url(proxy_url) if proxy_url else 'напрямую'}"
-        )
-        tasks.append(
-            asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=None,  # наследуем stderr родителя
-                env=env,
-            )
-        )
-    procs = await asyncio.gather(*tasks)
-
-    for (start, size), proc in zip(
-        chunks, procs, strict=False
-    ):
-        if proc.returncode not in (0, None):
-            print(
-                f"WARNING: часть страниц {start}..{start + size - 1} "
-                f"завершилась с кодом {proc.returncode}"
-            )
-    await asyncio.gather(
-        *(p.wait() for p in procs), return_exceptions=True
-    )
-
-    count = merge_jsonl_dedup(
-        part_paths, out_path, max_reviews=args.max_reviews,
-    )
-    for part_path in part_paths:
+    async def run_one(i: int) -> None:
+        _prepare_part(parts[i], getattr(args, "resume", False))
+        start, size = chunks[i]
         try:
-            part_path.unlink()
-        except OSError:
-            pass
+            exits[i] = await _run_child(
+                _child_command(args, parts[i], start, size, proxies[i]), env,
+            )
+        except OSError as exc:
+            print(f"Child {i} could not start: {exc}")
+            exits[i] = -1
+
+    tasks = [asyncio.create_task(run_one(i)) for i in range(len(parts))]
+    interrupted = False
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        interrupted = True
+        raise
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        count, status = merge_parts(
+            parts, out, output_format=getattr(args, "format", "jsonl"),
+            exit_codes=exits, max_reviews=args.max_reviews,
+            resume=getattr(args, "resume", False),
+            interrupted=interrupted, page_ranges=True,
+        )
+        args._run_status = status
+        _cleanup_parts(parts, status)
     return count
 
 
@@ -322,43 +304,39 @@ def read_products_file(path: str | Path) -> list[str]:
 
 
 def _product_child_command(
-    args: Any,
-    url: str,
-    part_path: Path,
-    proxy_url: str | None,
+    args: Any, url: str, part_path: Path, proxy_url: str | None,
 ) -> list[str]:
-    """One CLI child per product, honoring the caller's flags."""
+    """Forward browser/output settings, but never recurse into supervisors."""
     cmd = [
         sys.executable, "-m", "marketplace_maps_parser",
-        "--marketplace", "ozon",
-        "--url", url,
+        "--marketplace", "ozon", "--url", url,
         "--output", str(part_path),
-        "--transport", args.transport,
-        "--strategy", args.strategy,
-        "--retry-attempts", str(min(args.retry_attempts, 20)),
+        "--format", getattr(args, "format", "jsonl"),
+        "--transport", args.transport, "--strategy", args.strategy,
     ]
     if proxy_url:
         cmd += ["--proxy", proxy_url]
-    if args.max_reviews is not None:
-        cmd += ["--max-reviews", str(args.max_reviews)]
-    if args.cookies:
-        cmd += ["--cookies", args.cookies]
-    if args.timeout_ms:
-        cmd += ["--timeout-ms", str(args.timeout_ms)]
-    if args.settle_ms:
-        cmd += ["--settle-ms", str(args.settle_ms)]
-    if args.debug_dir:
-        cmd += ["--debug-dir", str(args.debug_dir)]
-    if getattr(args, "workers", 1) != 1:
-        cmd += ["--workers", str(args.workers)]
-    if args.no_stealth:
-        cmd += ["--no-stealth"]
-    if args.no_humanize:
-        cmd += ["--no-humanize"]
-    if args.no_widget_scroll:
-        cmd += ["--no-widget-scroll"]
-    if getattr(args, "randomize_fingerprint", False):
-        cmd += ["--randomize-fingerprint"]
+    for name in (
+        "cookies", "timeout_ms", "settle_ms", "retry_attempts",
+        "max_reviews", "max_pages", "start_page", "fetch_strategy",
+        "page_delay_seconds", "scroll_pause_seconds", "dup_streak_stop",
+        "checkpoint_interval", "checkpoint_seconds",
+        "proxy_attempts",
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            cmd += ["--" + name.replace("_", "-"), str(value)]
+    debug_root = getattr(args, "debug_dir", None) or "debug_ozon"
+    cmd += ["--debug-dir", str(Path(debug_root) / part_path.name)]
+    for name in (
+        "no_stealth", "no_humanize", "no_block_assets", "screenshots",
+        "no_extra_streams", "parallel_streams", "filter_streams",
+        "include_rating_only", "resume", "debug_dumps",
+    ):
+        if getattr(args, name, False):
+            cmd.append("--" + name.replace("_", "-"))
+    if not getattr(args, "parallel_streams", True):
+        cmd.append("--serial-streams")
     return cmd
 
 
@@ -371,96 +349,69 @@ def _count_jsonl_lines(path: Path) -> int:
         return 0
 
 
+def _count_child_records(path: Path) -> int:
+    """Count records in either a unified JSON or JSONL child part."""
+    try:
+        text = path.read_text(encoding="utf-8")
+        document = json.loads(text)
+    except (OSError, json.JSONDecodeError):
+        return _count_jsonl_lines(path)
+    if isinstance(document, dict) and isinstance(
+        document.get("reviews"), list,
+    ):
+        return len(document["reviews"])
+    return _count_jsonl_lines(path)
+
+
 async def run_products_parallel(args: Any) -> int:
-    """Collect reviews for MANY products in parallel.
-
-    One CLI child process per product URL from ``--products-file``,
-    at most ``--products-sessions`` children running at a time, each
-    with its own proxy from ``--proxy-list`` (round-robin; falls
-    back to the single ``--proxy`` / direct). Review ids are
-    globally unique, so all parts merge safely into ``--output``
-    with review_id dedup. Failed children still contribute whatever
-    they collected before failing. Returns the total unique review
-    count.
-    """
+    """One process per product, bounded by --products-sessions."""
     if args.marketplace != "ozon":
-        raise SystemExit(
-            "--products-file поддерживает только --marketplace ozon"
-        )
+        raise SystemExit("--products-file supports only --marketplace ozon")
     urls = read_products_file(args.products_file)
-    sessions = max(1, getattr(args, "products_sessions", 3) or 1)
-
-    out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    part_paths = [
-        out_path.with_name(f"{out_path.name}.p{i:03d}.jsonl")
-        for i in range(len(urls))
-    ]
+    sessions = max(1, getattr(args, "products_sessions", 3))
+    out = Path(args.output)
+    parts = [out.with_name(f"{out.name}.p{i:03d}.jsonl")
+             for i in range(len(urls))]
     proxies = _proxy_urls_for_sessions(args, len(urls))
-
-    env = dict(os.environ)
-    env.setdefault("PYTHONIOENCODING", "utf-8")
-
-    from infrastructure.transports.proxy_pool import (
-        mask_proxy_url,
-    )
-
-    print(
-        f"products: {len(urls)} товаров, "
-        f"параллельно до {sessions} процессов"
-    )
-
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    exits: list[int | None] = [None] * len(urls)
     sem = asyncio.Semaphore(sessions)
-    exit_codes: list[int | None] = [None] * len(urls)
+    # Invalidate stale files even for children still waiting on the semaphore.
+    for part in parts:
+        _prepare_part(part, getattr(args, "resume", False))
 
-    async def _run_one(i: int) -> None:
+    async def run_one(i: int) -> None:
         async with sem:
-            cmd = _product_child_command(
-                args, urls[i], part_paths[i], proxies[i],
-            )
-            print(
-                f"  [{i + 1}/{len(urls)}] {urls[i]} — proxy: "
-                + (
-                    mask_proxy_url(proxies[i])
-                    if proxies[i] else "напрямую"
-                )
-            )
+            print(f"[{i + 1}/{len(urls)}] {urls[i]}")
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=None,  # наследуем stderr родителя
-                    env=env,
+                exits[i] = await _run_child(
+                    _product_child_command(
+                        args, urls[i], parts[i], proxies[i],
+                    ),
+                    env,
                 )
             except OSError as exc:
-                print(
-                    f"  [{i + 1}/{len(urls)}] запуск не удался: "
-                    f"{exc}"
-                )
-                exit_codes[i] = -1
-                return
-            exit_codes[i] = await proc.wait()
+                print(f"Child {i} could not start: {exc}")
+                exits[i] = -1
 
-    await asyncio.gather(
-        *(_run_one(i) for i in range(len(urls)))
-    )
-
-    for i, (url, part, code) in enumerate(
-        zip(urls, part_paths, exit_codes, strict=True)
-    ):
-        status = "OK" if code == 0 else f"код {code}"
-        print(
-            f"  [{i + 1}/{len(urls)}] {url}: "
-            f"{_count_jsonl_lines(part)} отзывов ({status})"
+    tasks = [asyncio.create_task(run_one(i)) for i in range(len(urls))]
+    interrupted = False
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        interrupted = True
+        raise
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        count, status = merge_parts(
+            parts, out, output_format=getattr(args, "format", "jsonl"),
+            exit_codes=exits, resume=getattr(args, "resume", False),
+            interrupted=interrupted,
         )
-
-    total = merge_jsonl_dedup(part_paths, out_path)
-    for part_path in part_paths:
-        try:
-            part_path.unlink()
-        except OSError:
-            pass
-    print(
-        f"products: слито в {out_path} — {total} уникальных отзывов"
-    )
-    return total
+        args._run_status = status
+        _cleanup_parts(parts, status)
+    print(f"products: {count} reviews → {out} ({status})")
+    return count

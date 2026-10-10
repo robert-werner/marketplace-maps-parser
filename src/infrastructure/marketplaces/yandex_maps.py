@@ -47,6 +47,7 @@ from infrastructure.marketplaces.yandex import (
     normalize_yandex_rating,
     parse_yandex_date,
 )
+from shared.async_iterators import closing_iterator
 from shared.url_parsers import extract_yandex_maps_org_id
 
 
@@ -122,34 +123,37 @@ class YandexMapsAdapter(MarketplaceAdapter):
         )
 
         seen: set[str] = set()
-        async for batch in self.transport.iter_review_batches(
-            org_url,
-        ):
-            # Refresh the totals on every batch so they survive an
-            # early break (the CLI reads them right after its loop).
-            self.last_total_count = (
-                self.transport.last_total_count
+        async with closing_iterator(
+            self.transport.iter_review_batches(
+                org_url,
             )
-            self.last_average_rating = (
-                self.transport.last_average_rating
-            )
-            self.last_rating_count = (
-                self.transport.last_rating_count
-            )
-            self.last_product_title = (
-                self.transport.last_product_title
-            )
-            for card in batch:
-                review = self._map_review(card, product)
-                key = (
-                    review.review_id
-                    if review.review_id
-                    else self._fallback_key(review)
+        ) as owned_stream:
+            async for batch in owned_stream:
+                # Refresh the totals on every batch so they survive an
+                # early break (the CLI reads them right after its loop).
+                self.last_total_count = (
+                    self.transport.last_total_count
                 )
-                if key in seen:
-                    continue
-                seen.add(key)
-                yield review
+                self.last_average_rating = (
+                    self.transport.last_average_rating
+                )
+                self.last_rating_count = (
+                    self.transport.last_rating_count
+                )
+                self.last_product_title = (
+                    self.transport.last_product_title
+                )
+                for card in batch:
+                    review = self._map_review(card, product)
+                    key = (
+                        review.review_id
+                        if review.review_id
+                        else self._fallback_key(review)
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    yield review
 
     def _map_review(
         self,

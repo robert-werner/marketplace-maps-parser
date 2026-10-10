@@ -47,6 +47,7 @@ from infrastructure.marketplaces.ozon_payload import (
 from infrastructure.marketplaces.ozon_payload import (
     walk_json as walk_json,
 )
+from shared.async_iterators import closing_iterator
 from shared.url_parsers import (
     extract_ozon_product_id,
     extract_ozon_product_path,
@@ -54,8 +55,10 @@ from shared.url_parsers import (
 
 
 class OzonBrowserTransport(Protocol):
-    """Subset of BrowserJsonTransport / BrowserDomTransport
+    """Subset of BrowserJsonTransport
     used by OzonAdapter."""
+
+    incomplete_reason: str | None
 
     def iter_ozon_reviews_json(
         self,
@@ -97,6 +100,10 @@ class OzonBrowserTransport(Protocol):
     ]: ...
 
 
+class OzonParallelStreamsError(RuntimeError):
+    """At least one concurrent Ozon stream failed."""
+
+
 class OzonAdapter(MarketplaceAdapter):
     name = "ozon"
 
@@ -115,7 +122,7 @@ class OzonAdapter(MarketplaceAdapter):
         # — from the pdp_reviews seo block ("N отзыв на <name>").
         self.last_product_title: str | None = None
         # Total number of reviews advertised by Ozon. API transports
-        # expose it through webReviewProductScore; PublicPageTransport
+        # expose it through webReviewProductScore; the browser transport
         # reads it from the product/reviews page during warmup.
         self.last_review_count: int | None = None
 
@@ -234,6 +241,7 @@ class OzonAdapter(MarketplaceAdapter):
             start_page: int = 1,
             max_pages: int | None = None,
             extra_query: str = "",
+            retry_attempts: int | None = None,
     ) -> AsyncIterator[Review]:
         """Walk ONE reviews stream (``extra_query`` selects the
         stream variant, e.g. ``&sort=score_asc``).
@@ -256,62 +264,61 @@ class OzonAdapter(MarketplaceAdapter):
         fetch_kwargs: dict[str, Any] = {}
         if extra_query:
             fetch_kwargs["extra_query"] = extra_query
+        if retry_attempts is not None:
+            fetch_kwargs["retry_attempts"] = retry_attempts
 
-        async for page_number, payload in (
-                self.browser_transport.iter_ozon_reviews_json(
-                    product_path=product_path,
-                    start_page=start_page,
-                    max_pages=max_pages,
-                    **fetch_kwargs,
-                )
-        ):
-
-            # The first page of every stream carries the rating
-            # histogram (webReviewProductScore widget); keep the
-            # freshest copy for the run summary / --include-rating-only.
-            summary = extract_ozon_rating_summary(
-                payload,
-                product_id=str(product_id),
-                product_url=product_url,
+        async with closing_iterator(
+            self.browser_transport.iter_ozon_reviews_json(
+                product_path=product_path,
+                start_page=start_page,
+                max_pages=max_pages,
+                **fetch_kwargs,
             )
-            if summary is not None:
-                self.last_rating_summary = summary
-                self._reported_review_count()
-
-            if self.last_product_title is None:
-                self.last_product_title = (
-                    extract_ozon_product_title(payload)
+        ) as stream:
+            async for page_number, payload in stream:
+                summary = extract_ozon_rating_summary(
+                    payload,
+                    product_id=str(product_id),
+                    product_url=product_url,
                 )
+                if summary is not None:
+                    self.last_rating_summary = summary
+                    self._reported_review_count()
 
-            reviews = extract_reviews_from_ozon_payload(
-                payload=payload,
-                product=product,
-            )
-
-            new_count = 0
-
-            for position, review in enumerate(reviews):
-                key = review.review_id
-
-                if not key:
-                    key = build_review_key(
-                        review,
-                        page_number=page_number,
-                        position=position,
+                if self.last_product_title is None:
+                    self.last_product_title = (
+                        extract_ozon_product_title(payload)
                     )
 
-                if key in seen_keys:
-                    continue
+                reviews = extract_reviews_from_ozon_payload(
+                    payload=payload,
+                    product=product,
+                )
 
-                seen_keys.add(key)
-                new_count += 1
-                yield review
+                new_count = 0
 
-            print(
-                f"Ozon: страница {page_number}; "
-                f"получено={len(reviews)}; "
-                f"новых={new_count}"
-            )
+                for position, review in enumerate(reviews):
+                    key = review.review_id
+
+                    if not key:
+                        key = build_review_key(
+                            review,
+                            page_number=page_number,
+                            position=position,
+                        )
+
+                    if key in seen_keys:
+                        continue
+
+                    seen_keys.add(key)
+                    new_count += 1
+                    yield review
+
+                print(
+                    f"Ozon: страница {page_number}; "
+                    f"получено={len(reviews)}; "
+                    f"новых={new_count}"
+                )
 
     def parse_ozon_dom_card(self,
             card: dict[str, Any],
@@ -340,7 +347,7 @@ class OzonAdapter(MarketplaceAdapter):
             )
 
         # Rating: DOM transport extracts it from SVG star colors
-        # (BrowserDomTransport._read_review_rating). When the scroll
+        # (BrowserJsonTransport._read_review_rating). When the scroll
         # mode in browser_json.py is used, rating is not extracted
         # (see _read_review_cards in browser_json.py); we fall back to
         # the explicit "rating" key in the card dict if present.
@@ -380,20 +387,21 @@ class OzonAdapter(MarketplaceAdapter):
             product_id=str(product_id),
         )
 
-        async for cards in (
-                self.browser_transport.iter_ozon_reviews_by_scroll(
-                    product_path=product_path,
-                    max_reviews=max_reviews,
-                )
-        ):
-            for _position, card in enumerate(cards):
-                review = self.parse_ozon_dom_card(
-                    card=card,
-                    product=product,
-                )
+        async with closing_iterator(
+            self.browser_transport.iter_ozon_reviews_by_scroll(
+                product_path=product_path,
+                max_reviews=max_reviews,
+            )
+        ) as stream:
+            async for cards in stream:
+                for _position, card in enumerate(cards):
+                    review = self.parse_ozon_dom_card(
+                        card=card,
+                        product=product,
+                    )
 
-                if review is not None:
-                    yield review
+                    if review is not None:
+                        yield review
 
     # ------------------------------------------------------------------
     # Unified "collect ALL reviews" stream
@@ -459,11 +467,10 @@ class OzonAdapter(MarketplaceAdapter):
         earlier streams — this is what lifts the collection beyond
         the default ~1000-review window.
 
-        ``parallel_streams=True`` (pagination strategy only) runs all
+        ``parallel_streams=True`` runs the API
         streams CONCURRENTLY — each opens its own browser session and
-        walks its nextPage chain independently, so wall time ≈ the
-        slowest stream instead of the sum (~3x for default +
-        score_asc + score_desc).
+        walks its nextPage chain independently. The actual speedup depends
+        on browser startup, the proxy and server responses.
 
         Always streams — never materializes the full set in memory.
         """
@@ -502,14 +509,18 @@ class OzonAdapter(MarketplaceAdapter):
                     for query, label in self._FILTER_STREAMS
                 ]
             if parallel_streams and len(streams) > 1:
-                async for item in self._iter_streams_concurrently(
-                    product_url=product_url,
-                    streams=streams,
-                    max_reviews=max_reviews,
-                    pagination_max_pages=pagination_max_pages,
-                    dup_streak_stop=dup_streak_stop,
-                ):
-                    yield item
+                async with closing_iterator(
+                    self._iter_streams_concurrently(
+                        product_url=product_url,
+                        streams=streams,
+                        max_reviews=max_reviews,
+                        pagination_max_pages=pagination_max_pages,
+                        dup_streak_stop=dup_streak_stop,
+                        retry_attempts=retry_attempts,
+                    )
+                ) as stream:
+                    async for item in stream:
+                        yield item
                 return
             for extra_query, label, start_page in streams:
                 if (
@@ -541,41 +552,48 @@ class OzonAdapter(MarketplaceAdapter):
                 # an ignored filter param) — stop it instead of
                 # walking hundreds of duplicate pages.
                 dup_streak = 0
-                async for stream_review in self.iter_reviews(
-                    product_url=product_url,
-                    start_page=start_page,
-                    max_pages=pagination_max_pages,
-                    extra_query=extra_query,
-                ):
-                    key = (
-                        stream_review.review_id
-                        or build_review_key(
-                            stream_review,
-                            page_number=0,
-                            position=yielded,
-                        )
+                async with closing_iterator(
+                    self.iter_reviews(
+                        product_url=product_url,
+                        start_page=start_page,
+                        max_pages=pagination_max_pages,
+                        extra_query=extra_query,
+                        retry_attempts=retry_attempts,
                     )
-                    if key in seen_keys:
-                        if dup_streak_stop > 0:
-                            dup_streak += 1
-                            if dup_streak >= dup_streak_stop:
-                                print(
-                                    f"Ozon: стрим {label}: "
-                                    f"{dup_streak} подряд дубликатов "
-                                    f"— останавливаю стрим"
-                                )
-                                break
-                        continue
-                    dup_streak = 0
-                    seen_keys.add(key)
-                    stream_new += 1
-                    yielded += 1
-                    yield stream_review
-                    if (
-                        max_reviews is not None
-                        and yielded >= max_reviews
-                    ):
-                        return
+                ) as stream:
+                    async for stream_review in stream:
+                        key = (
+                            stream_review.review_id
+                            or build_review_key(
+                                stream_review,
+                                page_number=0,
+                                position=yielded,
+                            )
+                        )
+                        if key in seen_keys:
+                            if dup_streak_stop > 0:
+                                dup_streak += 1
+                                if dup_streak >= dup_streak_stop:
+                                    print(
+                                        f"Ozon: стрим {label}: "
+                                        f"{dup_streak} подряд дубликатов "
+                                        f"— останавливаю стрим"
+                                    )
+                                    break
+                            continue
+                        dup_streak = 0
+                        seen_keys.add(key)
+                        stream_new += 1
+                        yielded += 1
+                        yield stream_review
+                        if (
+                            max_reviews is not None
+                            and yielded >= max_reviews
+                        ):
+                            return
+                        if self._has_collected_reported_total(yielded):
+                            self._print_total_reached(yielded)
+                            return
                 print(
                     f"Ozon: стрим {label}: +{stream_new} новых "
                     f"(всего уникальных: {yielded})"
@@ -583,11 +601,14 @@ class OzonAdapter(MarketplaceAdapter):
             return
 
         if strategy == "scroll":
-            async for scroll_review in self.iter_reviews_by_scroll(
-                product_url=product_url,
-                max_reviews=max_reviews,
-            ):
-                yield scroll_review
+            async with closing_iterator(
+                self.iter_reviews_by_scroll(
+                    product_url=product_url,
+                    max_reviews=max_reviews,
+                )
+            ) as stream:
+                async for scroll_review in stream:
+                    yield scroll_review
             return
 
         if strategy != "auto":
@@ -597,6 +618,87 @@ class OzonAdapter(MarketplaceAdapter):
             )
 
         # ------------------ auto: pagination + scroll ------------------
+        # In the speed-oriented mode, walk all API windows concurrently
+        # first, then use DOM scroll only as a supplement. This preserves
+        # the old auto semantics while avoiding the previous
+        # default-window -> score_asc -> score_desc serial chain.
+        if parallel_streams:
+            streams = [("", "default", pagination_start_page)]
+            if extra_streams:
+                streams.extend(
+                    (f"&sort={sort}", sort, 1)
+                    for sort in self._EXTRA_STREAMS
+                )
+            if filter_streams:
+                streams.extend(
+                    (query, label, 1)
+                    for query, label in self._FILTER_STREAMS
+                )
+            try:
+                async with closing_iterator(
+                    self._iter_streams_concurrently(
+                        product_url=product_url,
+                        streams=streams,
+                        max_reviews=max_reviews,
+                        pagination_max_pages=pagination_max_pages,
+                        dup_streak_stop=dup_streak_stop,
+                        retry_attempts=retry_attempts,
+                    )
+                ) as stream:
+                    async for stream_review in stream:
+                        key = (
+                            stream_review.review_id
+                            or build_review_key(
+                                stream_review,
+                                page_number=0,
+                                position=yielded,
+                            )
+                        )
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        yielded += 1
+                        yield stream_review
+                        if max_reviews is not None and yielded >= max_reviews:
+                            return
+            except OzonParallelStreamsError as exc:
+                log.warning("Ozon: API streams failed; trying scroll: {}", exc)
+                self.browser_transport.incomplete_reason = "api_stream_failure"
+
+            if max_reviews is not None and yielded >= max_reviews:
+                return
+            if self._has_collected_reported_total(yielded):
+                self._print_total_reached(yielded)
+                self.browser_transport.incomplete_reason = None
+                return
+            async with closing_iterator(
+                self.iter_reviews_by_scroll(
+                    product_url=product_url,
+                    max_reviews=max_reviews,
+                )
+            ) as stream:
+                async for scroll_review in stream:
+                    key = (
+                        scroll_review.review_id
+                        or build_review_key(
+                            scroll_review,
+                            page_number=0,
+                            position=yielded,
+                        )
+                    )
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    yielded += 1
+                    yield scroll_review
+                    if max_reviews is not None and yielded >= max_reviews:
+                        return
+                    if self._has_collected_reported_total(yielded):
+                        self._print_total_reached(yielded)
+                        self.browser_transport.incomplete_reason = None
+                        return
+            return
+
         if not hasattr(
             self.browser_transport, "iter_all_ozon_reviews"
         ):
@@ -604,7 +706,7 @@ class OzonAdapter(MarketplaceAdapter):
                 "Ozon: transport does not implement "
                 "iter_all_ozon_reviews; using adapter-level fallback."
             )
-            async for fallback_review in (
+            async with closing_iterator(
                 self._iter_all_reviews_adapter_fallback(
                     product=product,
                     product_path=product_path,
@@ -613,11 +715,12 @@ class OzonAdapter(MarketplaceAdapter):
                     pagination_start_page=pagination_start_page,
                     retry_attempts=retry_attempts,
                 )
-            ):
-                yield fallback_review
+            ) as stream:
+                async for fallback_review in stream:
+                    yield fallback_review
             return
 
-        async for strategy_name, node in (
+        async with closing_iterator(
             self.browser_transport.iter_all_ozon_reviews(
                 product_path=product_path,
                 max_reviews=max_reviews,
@@ -628,46 +731,55 @@ class OzonAdapter(MarketplaceAdapter):
                 scroll_pause_seconds=scroll_pause_seconds,
                 retry_attempts=retry_attempts,
             )
-        ):
-            review: Review | None
-            if strategy_name == "pagination":
-                review = map_ozon_review_node(
-                    node=node,
-                    product=product,
+        ) as stream:
+            async for strategy_name, node in stream:
+                review: Review | None
+                if strategy_name == "pagination":
+                    review = map_ozon_review_node(
+                        node=node,
+                        product=product,
+                    )
+                else:
+                    review = self.parse_ozon_dom_card(
+                        card=node,
+                        product=product,
+                    )
+
+                if review is None:
+                    continue
+
+                # Available before the first yield, including when the
+                # caller stops immediately at --max-reviews.
+                self._reported_review_count()
+                if self.last_product_title is None:
+                    self.last_product_title = getattr(
+                        self.browser_transport, "last_product_title", None,
+                    )
+
+                key = review.review_id or build_review_key(
+                    review,
+                    page_number=0,
+                    position=yielded,
                 )
-            else:
-                review = self.parse_ozon_dom_card(
-                    card=node,
-                    product=product,
-                )
 
-            if review is None:
-                continue
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
 
-            key = review.review_id or build_review_key(
-                review,
-                page_number=0,
-                position=yielded,
-            )
+                yield review
+                yielded += 1
 
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
+                if (
+                    max_reviews is not None
+                    and yielded >= max_reviews
+                ):
+                    log.info(
+                        "Ozon: reached max_reviews={}, stopping",
+                        max_reviews,
+                    )
+                    return
 
-            yield review
-            yielded += 1
-
-            if (
-                max_reviews is not None
-                and yielded >= max_reviews
-            ):
-                log.info(
-                    "Ozon: reached max_reviews={}, stopping",
-                    max_reviews,
-                )
-                return
-
-        # PublicPageTransport discovers this during the product-page
+        # the browser transport discovers this during the product-page
         # warmup inside its unified iterator. Read it after that
         # iterator is exhausted: its first review is yielded before
         # the transport assigns the captured count.
@@ -690,31 +802,35 @@ class OzonAdapter(MarketplaceAdapter):
                 )
                 stream_new = 0
                 try:
-                    async for review in self.iter_reviews(
-                        product_url=product_url,
-                        start_page=1,
-                        max_pages=pagination_max_pages,
-                        extra_query=f"&sort={sort_value}",
-                    ):
-                        key = (
-                            review.review_id
-                            or build_review_key(
-                                review,
-                                page_number=0,
-                                position=yielded,
-                            )
+                    async with closing_iterator(
+                        self.iter_reviews(
+                            product_url=product_url,
+                            start_page=1,
+                            max_pages=pagination_max_pages,
+                            extra_query=f"&sort={sort_value}",
+                            retry_attempts=retry_attempts,
                         )
-                        if key in seen_keys:
-                            continue
-                        seen_keys.add(key)
-                        stream_new += 1
-                        yielded += 1
-                        yield review
-                        if (
-                            max_reviews is not None
-                            and yielded >= max_reviews
-                        ):
-                            return
+                    ) as stream:
+                        async for review in stream:
+                            key = (
+                                review.review_id
+                                or build_review_key(
+                                    review,
+                                    page_number=0,
+                                    position=yielded,
+                                )
+                            )
+                            if key in seen_keys:
+                                continue
+                            seen_keys.add(key)
+                            stream_new += 1
+                            yielded += 1
+                            yield review
+                            if (
+                                max_reviews is not None
+                                and yielded >= max_reviews
+                            ):
+                                return
                 except Exception as exc:
                     log.warning(
                         "Ozon: стрим sort={} не удался: {} — "
@@ -739,6 +855,7 @@ class OzonAdapter(MarketplaceAdapter):
             max_reviews: int | None,
             pagination_max_pages: int | None,
             dup_streak_stop: int = 300,
+            retry_attempts: int | None = None,
     ) -> AsyncIterator[Review]:
         """Run ALL review streams concurrently and merge by review_id.
 
@@ -753,10 +870,9 @@ class OzonAdapter(MarketplaceAdapter):
         default window). Wall time ≈ the slowest stream instead of
         the sum of the streams.
 
-        A failed stream is logged and skipped — the others keep
-        going. When ``max_reviews`` is reached (or the consumer stops
-        iterating), the remaining workers are cancelled in ``finally``
-        so no browser session is leaked.
+        Healthy streams are drained before a sibling failure is raised.
+        When a limit is reached or the consumer stops, remaining workers
+        are cancelled and all child generators close before returning.
         """
         import asyncio
 
@@ -764,13 +880,13 @@ class OzonAdapter(MarketplaceAdapter):
 
         log = get_logger("marketplaces.ozon")
 
-        queue: asyncio.Queue[Review | None] = asyncio.Queue()
+        queue: asyncio.Queue[Review | None] = asyncio.Queue(maxsize=256)
         total_streams = len(streams)
-        # Shared claim set; the event loop is single-threaded, and
-        # ``queue.put`` on an unbounded queue never suspends, so the
-        # check-claim-put sequence in a worker is atomic.
+        # Claim before the first await; backpressure bounds memory
+        # without allowing two workers to enqueue the same review.
         seen_keys: set[str] = set()
         yielded = 0
+        failures: list[tuple[str, BaseException]] = []
 
         async def worker(
             extra_query: str,
@@ -780,34 +896,39 @@ class OzonAdapter(MarketplaceAdapter):
             stream_new = 0
             dup_streak = 0
             try:
-                async for review in self.iter_reviews(
-                    product_url=product_url,
-                    start_page=start_page,
-                    max_pages=pagination_max_pages,
-                    extra_query=extra_query,
-                ):
-                    key = review.review_id or build_review_key(
-                        review,
-                        page_number=0,
-                        position=yielded,
+                async with closing_iterator(
+                    self.iter_reviews(
+                        product_url=product_url,
+                        start_page=start_page,
+                        max_pages=pagination_max_pages,
+                        extra_query=extra_query,
+                        retry_attempts=retry_attempts,
                     )
-                    if key in seen_keys:
-                        if dup_streak_stop > 0:
-                            dup_streak += 1
-                            if dup_streak >= dup_streak_stop:
-                                print(
-                                    f"Ozon: стрим {label}: "
-                                    f"{dup_streak} подряд "
-                                    f"дубликатов — останавливаю "
-                                    f"стрим"
-                                )
-                                break
-                        continue
-                    dup_streak = 0
-                    seen_keys.add(key)
-                    stream_new += 1
-                    await queue.put(review)
+                ) as stream:
+                    async for review in stream:
+                        key = review.review_id or build_review_key(
+                            review,
+                            page_number=0,
+                            position=yielded,
+                        )
+                        if key in seen_keys:
+                            if dup_streak_stop > 0:
+                                dup_streak += 1
+                                if dup_streak >= dup_streak_stop:
+                                    print(
+                                        f"Ozon: стрим {label}: "
+                                        f"{dup_streak} подряд "
+                                        f"дубликатов — останавливаю "
+                                        f"стрим"
+                                    )
+                                    break
+                            continue
+                        dup_streak = 0
+                        seen_keys.add(key)
+                        stream_new += 1
+                        await queue.put(review)
             except Exception as exc:  # noqa: BLE001
+                failures.append((label, exc))
                 log.warning(
                     "Ozon: параллельный стрим {} не удался: {} — "
                     "пропускаю",
@@ -819,7 +940,6 @@ class OzonAdapter(MarketplaceAdapter):
                     f"Ozon: стрим {label} завершён "
                     f"(+{stream_new} новых)"
                 )
-                await queue.put(None)
 
         tasks = [
             asyncio.create_task(
@@ -831,13 +951,16 @@ class OzonAdapter(MarketplaceAdapter):
             f"Ozon: запускаю {total_streams} стрима параллельно"
         )
 
-        finished = 0
+        async def finish() -> None:
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await queue.put(None)
+
+        finisher = asyncio.create_task(finish())
         try:
-            while finished < total_streams:
+            while True:
                 review = await queue.get()
                 if review is None:
-                    finished += 1
-                    continue
+                    break
 
                 # Workers claim reviews into shared seen_keys BEFORE
                 # pushing, so every queued review is unique — count
@@ -850,15 +973,26 @@ class OzonAdapter(MarketplaceAdapter):
                     and yielded >= max_reviews
                 ):
                     return
+                if self._has_collected_reported_total(yielded):
+                    self._print_total_reached(yielded)
+                    return
         finally:
+            finisher.cancel()
             for task in tasks:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(
+                finisher, *tasks, return_exceptions=True,
+            )
             print(
                 f"Ozon: параллельный сбор завершён, "
                 f"всего уникальных: {yielded}"
             )
+        if failures:
+            labels = ", ".join(label for label, _ in failures)
+            raise OzonParallelStreamsError(
+                f"ошибка в параллельных стримах Ozon: {labels}"
+            ) from failures[0][1]
 
 
     async def _iter_all_reviews_adapter_fallback(
@@ -884,32 +1018,33 @@ class OzonAdapter(MarketplaceAdapter):
 
         # --- pagination ---
         try:
-            async for page_num, payload in (
+            async with closing_iterator(
                 self.browser_transport.iter_ozon_reviews_json(
                     product_path=product_path,
                     start_page=pagination_start_page,
                     max_pages=pagination_max_pages,
                     retry_attempts=retry_attempts,
                 )
-            ):
-                reviews = extract_reviews_from_ozon_payload(
-                    payload=payload,
-                    product=product,
-                )
-                for review in reviews:
-                    key = review.review_id or build_review_key(
-                        review, page_number=page_num, position=yielded,
+            ) as stream:
+                async for page_num, payload in stream:
+                    reviews = extract_reviews_from_ozon_payload(
+                        payload=payload,
+                        product=product,
                     )
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-                    yield review
-                    yielded += 1
-                    if (
-                        max_reviews is not None
-                        and yielded >= max_reviews
-                    ):
-                        return
+                    for review in reviews:
+                        key = review.review_id or build_review_key(
+                            review, page_number=page_num, position=yielded,
+                        )
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        yield review
+                        yielded += 1
+                        if (
+                            max_reviews is not None
+                            and yielded >= max_reviews
+                        ):
+                            return
         except Exception as exc:
             log.warning(
                 "Ozon: pagination failed in fallback: {} — "
@@ -919,31 +1054,32 @@ class OzonAdapter(MarketplaceAdapter):
 
         # --- scroll ---
         try:
-            async for cards in (
+            async with closing_iterator(
                 self.browser_transport.iter_ozon_reviews_by_scroll(
                     product_path=product_path,
                     max_reviews=None,
                 )
-            ):
-                for card in cards:
-                    review = self.parse_ozon_dom_card(
-                        card=card, product=product,
-                    )
-                    if review is None:
-                        continue
-                    key = review.review_id or build_review_key(
-                        review, page_number=0, position=yielded,
-                    )
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-                    yield review
-                    yielded += 1
-                    if (
-                        max_reviews is not None
-                        and yielded >= max_reviews
-                    ):
-                        return
+            ) as stream:
+                async for cards in stream:
+                    for card in cards:
+                        review = self.parse_ozon_dom_card(
+                            card=card, product=product,
+                        )
+                        if review is None:
+                            continue
+                        key = review.review_id or build_review_key(
+                            review, page_number=0, position=yielded,
+                        )
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        yield review
+                        yielded += 1
+                        if (
+                            max_reviews is not None
+                            and yielded >= max_reviews
+                        ):
+                            return
         except Exception as exc:
             log.error(
                 "Ozon: scroll failed in fallback: {}", exc,
@@ -968,12 +1104,15 @@ class OzonAdapter(MarketplaceAdapter):
 
         reviews: list[Review] = []
 
-        async for review in self.iter_reviews(
-            product_url=product_url,
-            start_page=start_page,
-            max_pages=max_pages,
-        ):
-            reviews.append(review)
+        async with closing_iterator(
+            self.iter_reviews(
+                product_url=product_url,
+                start_page=start_page,
+                max_pages=max_pages,
+            )
+        ) as stream:
+            async for review in stream:
+                reviews.append(review)
 
         return ReviewPage(
             product=product,

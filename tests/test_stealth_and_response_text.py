@@ -1,21 +1,4 @@
-"""Tests for stealth init script and raw response body extraction.
-
-Two production concerns addressed in this commit:
-
-1. ``response.text()`` is now used as the primary source for the
-   response body. Previously we read ``document.body.textContent``,
-   which returns the *rendered* body — when the browser's built-in
-   JSON viewer renders the API response (Firefox shows a tree UI
-   for ``application/json`` URLs), the rendered text contains
-   viewer UI strings (``JSONRaw DataHeadersSaveCopyCollapse All…``)
-   and is not parseable JSON.
-
-2. Stealth mode (``stealth=True`` by default) applies an init
-   script to every fresh page that patches ``navigator.webdriver``,
-   ``chrome.runtime``, ``Notification.permission``, plugins,
-   mimeTypes, languages, and other signals Cloudflare uses to
-   detect automated browsers.
-"""
+"""Tests for engine-owned stealth and raw response body extraction."""
 from __future__ import annotations
 
 import asyncio
@@ -23,113 +6,31 @@ from typing import Any
 
 import pytest
 
-from infrastructure.transports.browser_json import (
-    _STEALTH_INIT_SCRIPT,
-    BrowserJsonTransport,
-)
+from infrastructure.transports.browser_json import BrowserJsonTransport
 
-# Cache the real asyncio.sleep so test monkeypatches can call it
-# without infinite recursion.
 _REAL_SLEEP = asyncio.sleep
 
 
-async def _noop_sleep(*args, **kwargs):
-    return None
+def test_transport_stealth_is_engine_owned_by_default() -> None:
+    assert BrowserJsonTransport().stealth is True
 
 
-# ---------------------------------------------------------------------------
-# Stealth init script
-# ---------------------------------------------------------------------------
-
-
-def test_stealth_init_script_is_non_empty_string():
-    """The stealth init script must be a non-empty JS string."""
-    assert isinstance(_STEALTH_INIT_SCRIPT, str)
-    assert len(_STEALTH_INIT_SCRIPT) > 100
-
-
-def test_stealth_init_script_patches_navigator_webdriver():
-    """The init script must patch ``navigator.webdriver`` to
-    undefined — Cloudflare's primary bot-detection signal."""
-    assert "navigator" in _STEALTH_INIT_SCRIPT
-    assert "webdriver" in _STEALTH_INIT_SCRIPT
-    assert "undefined" in _STEALTH_INIT_SCRIPT
-
-
-def test_stealth_init_script_adds_chrome_runtime():
-    """The init script must add a fake ``window.chrome.runtime``
-    object — real Chrome browsers expose it."""
-    assert "window.chrome" in _STEALTH_INIT_SCRIPT
-    assert "runtime" in _STEALTH_INIT_SCRIPT
-
-
-def test_stealth_init_script_patches_notification_permission():
-    """The init script must patch ``Notification.permission`` to
-    'default' — headless browsers report 'denied'."""
-    assert "Notification" in _STEALTH_INIT_SCRIPT
-    assert "permission" in _STEALTH_INIT_SCRIPT
-    assert "default" in _STEALTH_INIT_SCRIPT
-
-
-def test_stealth_init_script_adds_plugins():
-    """The init script must add fake plugins (PDF viewer) — real
-    browsers have at least one."""
-    assert "plugins" in _STEALTH_INIT_SCRIPT
-    assert "PDF" in _STEALTH_INIT_SCRIPT
-
-
-def test_stealth_init_script_patches_languages():
-    """The init script must set navigator.languages to a realistic
-    list (ru, ru-RU, en-US, en)."""
-    assert "languages" in _STEALTH_INIT_SCRIPT
-    assert "ru" in _STEALTH_INIT_SCRIPT
-
-
-def test_stealth_init_script_patches_outer_dimensions():
-    """The init script must patch window.outerWidth / outerHeight
-    to non-zero — headless browsers report 0."""
-    assert "outerWidth" in _STEALTH_INIT_SCRIPT
-    assert "outerHeight" in _STEALTH_INIT_SCRIPT
-
-
-# ---------------------------------------------------------------------------
-# Transport stealth configuration
-# ---------------------------------------------------------------------------
-
-
-def test_transport_stealth_enabled_by_default():
-    """Stealth mode is on by default."""
-    transport = BrowserJsonTransport()
-    assert transport.stealth is True
-
-
-def test_transport_stealth_can_be_disabled():
-    """Stealth can be disabled via constructor arg."""
-    transport = BrowserJsonTransport(stealth=False)
-    assert transport.stealth is False
-
-
-# ---------------------------------------------------------------------------
-# page.add_init_script is called for new pages when stealth is enabled
-# ---------------------------------------------------------------------------
+def test_transport_stealth_compatibility_flag_is_retained() -> None:
+    assert BrowserJsonTransport(stealth=False).stealth is False
 
 
 class _FakePageWithInitScript:
-    """Stand-in page that records whether add_init_script was called."""
-
     def __init__(self) -> None:
         self.init_scripts_added: list[str] = []
-        self.goto_calls: list[str] = []
         self.closed = False
 
     async def add_init_script(self, script: str) -> None:
         self.init_scripts_added.append(script)
 
-    async def goto(self, url: str, **kwargs) -> Any:
-        self.goto_calls.append(url)
+    async def goto(self, url: str, **kwargs: Any) -> Any:
         return None
 
-    async def evaluate(self, expression: str, *args) -> Any:
+    async def evaluate(self, expression: str, *args: Any) -> Any:
         return ""
 
     async def wait_for_timeout(self, ms: int) -> None:
@@ -140,16 +41,14 @@ class _FakePageWithInitScript:
 
 
 class _FakeBrowserWithNewPage:
-    """Stand-in browser that returns fresh fake pages."""
-
     def __init__(self) -> None:
         self.pages_created = 0
         self.pages: list[_FakePageWithInitScript] = []
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> _FakeBrowserWithNewPage:
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: Any) -> None:
         return None
 
     async def new_page(self) -> _FakePageWithInitScript:
@@ -160,124 +59,40 @@ class _FakeBrowserWithNewPage:
 
 
 @pytest.mark.asyncio
-async def test_stealth_init_script_applied_to_every_new_page(monkeypatch):
-    """When stealth is enabled, ``page.add_init_script`` must be
-    called for every fresh page created via ``page_factory``.
-    """
+async def test_transport_does_not_add_a_page_level_fingerprint_shim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     transport = BrowserJsonTransport(stealth=True)
-
     fake_browser = _FakeBrowserWithNewPage()
-
-    # We can't easily test the full iter_ozon_reviews_json loop
-    # because it requires a real Ozon payload. Instead, we test the
-    # page_factory logic by simulating its behavior.
-
-    # Reach into the transport's iter_ozon_reviews_json to extract
-    # the page_factory closure. The simplest way is to monkeypatch
-    # the invisible-playwright import to return our fake browser,
-    # then drive the iterator until it tries to fetch.
-
     monkeypatch.setattr(
-        "infrastructure.transports.browser_json."
-        "_import_invisible_playwright",
+        "infrastructure.transports.browser_json._import_invisible_playwright",
         lambda: lambda **kw: fake_browser,
     )
 
-    # Also stub _fetch_json_with_retry to immediately raise, so the
-    # iterator creates the initial page (triggering add_init_script)
-    # but stops before fetching anything.
-    async def fake_fetch(*args, **kwargs):
+    async def fake_fetch(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("stop early")
 
-    monkeypatch.setattr(
-        BrowserJsonTransport,
-        "_fetch_json_with_retry",
-        fake_fetch,
-    )
+    async def fake_goto(*args: Any, **kwargs: Any) -> Any:
+        return fake_browser.pages[-1]
 
-    # Also stub _goto_with_retry so it doesn't try to navigate
-    async def fake_goto_retry(*args, **kwargs):
-        # Return the most recent page (simulating _goto_with_retry
-        # returning the page that completed the goto)
-        return fake_browser.pages[-1] if fake_browser.pages else None
-
-    monkeypatch.setattr(
-        BrowserJsonTransport,
-        "_goto_with_retry",
-        fake_goto_retry,
-    )
-
-    # Also stub _save_debug
-    async def fake_save_debug(*args, **kwargs):
+    async def fake_debug(*args: Any, **kwargs: Any) -> None:
         return None
-    monkeypatch.setattr(
-        BrowserJsonTransport, "_save_debug", fake_save_debug,
-    )
 
-    # Drive the iterator — it creates the initial page, the fetch
-    # fails, the page is recreated for the single retry, the retry
-    # also fails, and the iterator stops the stream silently
-    # (no exception propagates; yielding nothing).
-    collected = [
-        payload
-        async for _, payload in transport.iter_ozon_reviews_json(
-            product_path="/product/foo-123",
-            retry_attempts=1,
-        )
-    ]
-    assert collected == []
-
-    # At least one page should have been created
-    assert fake_browser.pages_created >= 1
-    # The init script should have been applied to that page
-    assert len(fake_browser.pages[0].init_scripts_added) == 1
-    # The applied script should be _STEALTH_INIT_SCRIPT
-    assert fake_browser.pages[0].init_scripts_added[0] == _STEALTH_INIT_SCRIPT
-
-
-@pytest.mark.asyncio
-async def test_stealth_not_applied_when_disabled(monkeypatch):
-    """When stealth=False, add_init_script must NOT be called."""
-    transport = BrowserJsonTransport(stealth=False)
-
-    fake_browser = _FakeBrowserWithNewPage()
-
-    monkeypatch.setattr(
-        "infrastructure.transports.browser_json."
-        "_import_invisible_playwright",
-        lambda: lambda **kw: fake_browser,
-    )
-
-    async def fake_fetch(*args, **kwargs):
-        raise RuntimeError("stop early")
     monkeypatch.setattr(
         BrowserJsonTransport, "_fetch_json_with_retry", fake_fetch,
     )
+    monkeypatch.setattr(BrowserJsonTransport, "_goto_with_retry", fake_goto)
+    monkeypatch.setattr(BrowserJsonTransport, "_save_debug", fake_debug)
 
-    async def fake_goto_retry(*args, **kwargs):
-        return fake_browser.pages[-1] if fake_browser.pages else None
-    monkeypatch.setattr(
-        BrowserJsonTransport, "_goto_with_retry", fake_goto_retry,
-    )
-
-    async def fake_save_debug(*args, **kwargs):
-        return None
-    monkeypatch.setattr(
-        BrowserJsonTransport, "_save_debug", fake_save_debug,
-    )
-
-    collected = [
-        payload
-        async for _, payload in transport.iter_ozon_reviews_json(
-            product_path="/product/foo-123",
-            retry_attempts=1,
-        )
-    ]
-    assert collected == []
-
+    with pytest.raises(RuntimeError, match="browser recreation"):
+        [
+            payload
+            async for _, payload in transport.iter_ozon_reviews_json(
+                product_path="/product/foo-123", retry_attempts=1,
+            )
+        ]
     assert fake_browser.pages_created >= 1
-    # No init scripts should have been applied
-    assert len(fake_browser.pages[0].init_scripts_added) == 0
+    assert fake_browser.pages[0].init_scripts_added == []
 
 
 # ---------------------------------------------------------------------------

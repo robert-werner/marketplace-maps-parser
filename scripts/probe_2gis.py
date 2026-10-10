@@ -5,7 +5,7 @@ Answers (for the upcoming TwoGisTransport):
 1. Is ``/firm/<id>/tab/reviews`` a direct URL that renders reviews?
 2. Which endpoints serve the review list (URL, params, response)?
 3. How the list paginates (limit/offset? page? key required?).
-4. Does the API answer plain curl_cffi too (no browser)?
+4. Inspect the API responses observed by the browser.
 
 Run::
 

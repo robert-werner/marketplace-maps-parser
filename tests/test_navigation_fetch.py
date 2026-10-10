@@ -867,7 +867,7 @@ class _FakePageRecordingWaits:
 
 @pytest.mark.asyncio
 async def test_settle_after_goto_is_short_for_navigation():
-    """Navigation strategy waits only a 500ms beacon grace, not the
+    """Navigation strategy waits only a short beacon grace, not the
     full settle_ms — the API goto replaces the page content anyway."""
     transport = BrowserJsonTransport(
         settle_ms=5000,
@@ -877,7 +877,7 @@ async def test_settle_after_goto_is_short_for_navigation():
 
     await transport._settle_after_goto(page)
 
-    assert page.wait_calls == [500]
+    assert page.wait_calls == [150]
 
 
 @pytest.mark.asyncio

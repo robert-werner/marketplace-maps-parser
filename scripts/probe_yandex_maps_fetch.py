@@ -2,7 +2,7 @@
 """Call fetchReviews from INSIDE the Maps page (page.evaluate).
 
 Isolates the 400 puzzle: the same minimal param set that fails over
-curl_cffi — does it work from the page's own JS context (real
+a browserless client — does it work from the page's JS context (real
 browser headers + cookies)?
 
 Run::
