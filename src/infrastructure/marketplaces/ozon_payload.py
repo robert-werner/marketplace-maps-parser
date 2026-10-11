@@ -270,6 +270,25 @@ def _ozon_author_name(author: Any) -> str | None:
     return None
 
 
+def extract_ozon_media_urls(media_list: list[dict[str, Any]]) -> list[str]:
+    """Extract URLs from a list of media objects (photos or videos)."""
+    if not isinstance(media_list, list):
+        return []
+    urls: list[str] = []
+    for item in media_list:
+        if isinstance(item, dict):
+            for key in ("url", "src", "imageUrl", "image_url"):
+                url = item.get(key)
+                if isinstance(url, str) and url.strip():
+                    urls.append(url.strip())
+                    break
+        elif isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                urls.append(stripped)
+    return urls
+
+
 def map_ozon_review_node(
     node: dict[str, Any],
     product: ProductRef,
@@ -315,6 +334,12 @@ def map_ozon_review_node(
         rating=rating,
     ):
         return None
+
+    # Extract photos and videos from content (Ozon API nesting).
+    photos_raw = content.get("photos") or []
+    videos_raw = content.get("videos") or []
+    photos = extract_ozon_media_urls(photos_raw) if isinstance(photos_raw, list) else []
+    videos = extract_ozon_media_urls(videos_raw) if isinstance(videos_raw, list) else []
 
     return Review(
         review_id=review_id,
@@ -364,6 +389,7 @@ def map_ozon_review_node(
             )
         ),
         seller_answer=extract_seller_answer(node),
+        photos=photos,
         raw=node,
     )
 
@@ -549,6 +575,52 @@ def parse_ozon_date(value: Any) -> datetime | None:
             ).replace(tzinfo=UTC)
         except ValueError:
             continue
+
+    return None
+
+
+def parse_video_duration(value: Any) -> float | None:
+    """Parse video duration from the source card.
+
+    Supports numeric seconds and ISO 8601 duration / MM:SS strings
+    (e.g. ``"00:24"``, ``"01:31"``).
+    """
+    if value is None:
+        return None
+
+    # Numeric seconds
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if value > 0 else None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # ISO 8601 duration (PT0H0M24S or similar)
+    if text.startswith("P"):
+        # Simple manual parse: PT1M24S → 84s
+        import re as _re
+        m = _re.search(r"(?:^|[\s])PT\s*([\d.]+)[\s]*[SM]", text)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+
+    # MM:SS or HH:MM:SS
+    parts = text.split(":")
+    try:
+        if len(parts) == 2:  # MM:SS
+            minutes = float(parts[0])
+            seconds = float(parts[1])
+            return minutes * 60 + seconds
+        elif len(parts) == 3:  # HH:MM:SS
+            hours = float(parts[0])
+            minutes = float(parts[1])
+            seconds = float(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+    except (ValueError, IndexError):
+        pass
 
     return None
 

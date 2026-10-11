@@ -103,7 +103,16 @@ def market_cards(
             if len(matching) == 1:
                 date = matching[0]
         photos = []
+        videos = []
         for media in node.get("media") or []:
+            video = media.get("video") or {}
+            if isinstance(video, dict) and video.get("videoId"):
+                dur = video.get("duration")
+                if isinstance(dur, (int, float)) and dur > 0:
+                    # Duration is in milliseconds — convert to seconds
+                    videos.append(dur / 1000.0)
+                else:
+                    videos.append(video.get("shortId") or video.get("videoId"))
             picture = media.get("picture") or {}
             if all(picture.get(k) for k in (
                 "namespace", "groupId", "imageName",
@@ -117,7 +126,8 @@ def market_cards(
             "uuid": str(node["id"]), "author": author, "date": date,
             "rating": node.get("rating"), "text": node.get("comment"),
             "pros": node.get("pro"), "cons": node.get("contra"),
-            "photos": photos, "offer_id": str(offer_id or product_id),
+            "photos": photos, "videos": videos,
+            "offer_id": str(offer_id or product_id),
             "structured": True,
         })
     return cards

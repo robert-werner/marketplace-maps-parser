@@ -314,6 +314,19 @@ _READ_CARDS_JS = """
                 photos.push(src);
             }
         });
+        // Extract video iframes from review-gallery-video-player elements.
+        const videos = [];
+        root.querySelectorAll(
+            '[data-auto="review-gallery-video-player"] iframe',
+        ).forEach((iframe) => {
+            let src = iframe.getAttribute('src') || '';
+            if (src) {
+                // Extract video ID from URL: .../player/video/{id}?...
+                const match = src.match(/\/player\/video\/([^?&]+)/);
+                const videoId = match ? match[1] : null;
+                videos.push(videoId || src);
+            }
+        });
         const body = get('[data-auto="review-description"]')
             || get('[data-auto="review-comment"]');
         out.cards.push({
@@ -325,6 +338,7 @@ _READ_CARDS_JS = """
             cons: get('[data-auto="review-contra"]'),
             offer_id: offerId,
             photos: photos.slice(0, 8),
+            videos: videos,
         });
     });
 

@@ -36,6 +36,12 @@ Contract rules (2026-09-19):
 - ``video_len`` is seconds when the source card carries a duration
   (``videos``/``media`` items with a duration-ish field), ``null``
   when there is no video or no known duration.
+- ``video_count`` is the number of video items in the raw card
+  (0 when absent or empty); works with both string URLs and
+  object payloads.
+- ``video_durations`` is a list of numeric durations (seconds)
+  collected from every video item that exposes a duration key;
+  empty list ``[]`` when there are no video objects with durations.
 - A failed run (captcha, block, transport error) yields
   ``reviews: []`` — or the partial batch collected before the
   failure — with the reason in ``diagnostics``; a captcha page is
@@ -64,6 +70,8 @@ UNIFIED_REVIEW_FIELDS = (
     "rating",
     "review_date",
     "photos",
+    "video_count",
+    "video_durations",
     "video_len",
     "text_len",
     "raw",
@@ -93,26 +101,126 @@ def compose_review_text(review: Review) -> str | None:
     return "\n".join(parts) or None
 
 
-def video_len_from_raw(raw: dict[str, Any]) -> float | None:
-    """Video duration (seconds) best-effort from the source card."""
-    if not isinstance(raw, dict):
+def _parse_duration_value(value: Any) -> float | None:
+    """Parse a duration value to seconds.
+
+    Handles numeric seconds, ISO 8601 ``PT1M24S``, and ``MM:SS`` /
+    ``HH:MM:SS`` strings.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if value > 0 else None
+
+    text = str(value).strip()
+    if not text:
         return None
+
+    # ISO 8601 duration (e.g. PT1M24S) — grab the numeric part
+    if text.startswith("P"):
+        import re as _re
+        m = _re.search(r"(?:^|[\s])PT\s*([\d.]+)[\s]*[SM]", text)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+
+    # MM:SS or HH:MM:SS (Ozon style: ``"00:24"``, ``"01:31"``)
+    parts = text.split(":")
+    try:
+        if len(parts) == 2:  # MM:SS
+            return float(parts[0]) * 60 + float(parts[1])
+        elif len(parts) == 3:  # HH:MM:SS
+            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+    except (ValueError, IndexError):
+        pass
+
+    return None
+
+
+def _find_video_items(raw: Any) -> list[Any]:
+    """Collect video items from a raw review dict.
+
+    Works with top-level ``videos``/``video``/``media`` (Yandex, WB)
+    and nested ``content.videos`` (Ozon).
+
+    Also handles the Yandex.Market fast path where videos is a list
+    of numeric durations (seconds) or video IDs (strings).
+    """
+    items: list[Any] = []
+    if not isinstance(raw, dict):
+        return items
+    # Top-level containers
     for key in _VIDEO_CONTAINERS:
-        items = raw.get(key)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
+        val = raw.get(key)
+        if isinstance(val, list):
+            items.extend(val)
+    # Nested content (Ozon)
+    content = raw.get("content")
+    if isinstance(content, dict):
+        for key in _VIDEO_CONTAINERS:
+            val = content.get(key)
+            if isinstance(val, list):
+                items.extend(val)
+    return items
+
+
+
+
+def video_len_from_raw(raw: dict[str, Any]) -> float | None:
+    """Video duration (seconds) best-effort from the source card.
+
+    Handles both video-object lists and numeric-duration lists
+    (Yandex.Market fast path).
+    """
+    items = _find_video_items(raw)
+    for item in items:
+        # Direct numeric value (fast path)
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            if item > 0:
+                return float(item)
+        # Video object with duration key
+        elif isinstance(item, dict):
+            for duration_key in _VIDEO_DURATION_KEYS:
+                parsed = _parse_duration_value(item.get(duration_key))
+                if parsed is not None and parsed > 0:
+                    return parsed
+    return None
+
+
+def video_count_from_raw(raw: Any) -> int:
+    """Count of video items in the source card.
+
+    Works with both string URLs (as emitted by the WB browser
+    transport) and object payloads (as emitted by Ozon / Yandex).
+    """
+    items = _find_video_items(raw)
+    return len(items)
+
+
+def video_durations_from_raw(raw: Any) -> list[float]:
+    """Collect every duration (seconds) from video objects in the
+    source card.
+
+    Handles both video-object lists and numeric-duration lists
+    (Yandex.Market fast path).
+    """
+    items = _find_video_items(raw)
+    durations: list[float] = []
+    for item in items:
+        # Direct numeric value (fast path)
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            if item > 0:
+                durations.append(float(item))
                 continue
+        # Video object with duration key
+        if isinstance(item, dict):
             for duration_key in _VIDEO_DURATION_KEYS:
                 value = item.get(duration_key)
-                if (
-                    isinstance(value, (int, float))
-                    and not isinstance(value, bool)
-                    and value > 0
-                ):
-                    return float(value)
-    return None
+                parsed = _parse_duration_value(value)
+                if parsed is not None and parsed > 0:
+                    durations.append(parsed)
+                    break  # one duration per video item
+    return durations
 
 
 def normalize_unified_rating(
@@ -153,6 +261,8 @@ def build_unified_review(
             else None
         ),
         "photos": len(review.photos or []),
+        "video_count": video_count_from_raw(review.raw or {}),
+        "video_durations": video_durations_from_raw(review.raw or {}),
         "video_len": video_len_from_raw(review.raw or {}),
         "text_len": len(text.strip()) if text else 0,
         "raw": raw,
@@ -208,5 +318,7 @@ __all__ = [
     "compose_review_text",
     "normalize_unified_rating",
     "unified_review_id",
+    "video_count_from_raw",
+    "video_durations_from_raw",
     "video_len_from_raw",
 ]
