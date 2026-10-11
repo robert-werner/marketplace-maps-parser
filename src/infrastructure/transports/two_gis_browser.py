@@ -7,6 +7,10 @@ An unresolved hasMore/total mismatch remains partial, not a successful EOF.
 """
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("infrastructure.transports.two_gis_browser")
+
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path

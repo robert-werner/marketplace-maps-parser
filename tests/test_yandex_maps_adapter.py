@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from domain.entities import Review
+from shared.entities import Review
 from infrastructure.marketplaces.yandex_maps import (
     YandexMapsAdapter,
 )

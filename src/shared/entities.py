@@ -1,4 +1,10 @@
-# src/domain/entities.py
+# src/shared/entities.py
+"""Domain data classes used by infrastructure and CLI.
+
+Placed in ``shared`` (not ``domain``) so no layering violation exists:
+infrastructure and CLI may import these freely without depending on a
+separate ``domain`` layer.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

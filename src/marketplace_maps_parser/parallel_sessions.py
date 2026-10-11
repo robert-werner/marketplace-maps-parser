@@ -23,6 +23,10 @@ pure and unit-tested; ``run_parallel_sessions`` /
 """
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("marketplace_maps_parser.parallel_sessions")
+
 import asyncio
 import json
 import os

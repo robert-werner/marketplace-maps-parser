@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from domain.entities import ProductRef, Review, ReviewPage
+from shared.entities import ProductRef, Review, ReviewPage
 from infrastructure.marketplaces.base import MarketplaceAdapter
 from shared.async_iterators import closing_iterator
 from shared.url_parsers import extract_nm_id

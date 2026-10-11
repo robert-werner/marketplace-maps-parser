@@ -138,14 +138,14 @@ class FreeProxyPool:
             try:
                 raw_list = fp.get_proxy_list(repeat=False)
             except Exception as exc:
-                print(
+                self.logger.info(
                     f"FreeProxyPool: не удалось получить proxy "
                     f"для стран {countries}: {exc}"
                 )
                 continue
 
             if raw_list:
-                print(
+                self.logger.info(
                     f"FreeProxyPool: получено {len(raw_list)} proxy "
                     f"для стран {countries}"
                 )
@@ -178,7 +178,7 @@ class FreeProxyPool:
         # Don't clear blocked set — blocked proxies from the
         # previous batch might reappear in the new batch. Keep
         # them blocked so we don't retry a known-bad proxy.
-        print(
+        self.logger.info(
             f"FreeProxyPool: загружено {len(new_proxies)} proxy "
             f"(round {self._refill_round - 1})"
         )

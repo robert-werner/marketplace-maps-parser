@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
-from domain.entities import ProductRef, Review
+from shared.entities import ProductRef, Review
 
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-"

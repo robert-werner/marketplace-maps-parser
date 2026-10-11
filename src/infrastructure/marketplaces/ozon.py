@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
-from domain.entities import ProductRef, Review, ReviewPage
+from shared.entities import ProductRef, Review, ReviewPage
 from infrastructure.marketplaces.base import MarketplaceAdapter
 from infrastructure.marketplaces.ozon_payload import (  # noqa: F401
     UUID_RE as UUID_RE,
@@ -52,6 +52,10 @@ from shared.url_parsers import (
     extract_ozon_product_id,
     extract_ozon_product_path,
 )
+
+from shared.logging import get_logger
+
+log = get_logger("marketplaces.ozon")
 
 
 class OzonBrowserTransport(Protocol):
@@ -172,7 +176,7 @@ class OzonAdapter(MarketplaceAdapter):
     def _print_total_reached(self, yielded: int) -> None:
         total = self._reported_review_count()
         if total is not None:
-            print(
+            log.info(
                 f"Ozon: собрано {yielded} из {total} заявленных "
                 "отзывов — дополнительные стримы не нужны"
             )
@@ -314,7 +318,7 @@ class OzonAdapter(MarketplaceAdapter):
                     new_count += 1
                     yield review
 
-                print(
+                log.info(
                     f"Ozon: страница {page_number}; "
                     f"получено={len(reviews)}; "
                     f"новых={new_count}"
@@ -541,7 +545,7 @@ class OzonAdapter(MarketplaceAdapter):
                     self._print_total_reached(yielded)
                     return
                 if label != "default":
-                    print(
+                    log.info(
                         f"Ozon: дополнительный стрим {label} — "
                         "ищу отзывы вне дефолтного окна"
                     )
@@ -574,7 +578,7 @@ class OzonAdapter(MarketplaceAdapter):
                             if dup_streak_stop > 0:
                                 dup_streak += 1
                                 if dup_streak >= dup_streak_stop:
-                                    print(
+                                    log.info(
                                         f"Ozon: стрим {label}: "
                                         f"{dup_streak} подряд дубликатов "
                                         f"— останавливаю стрим"
@@ -594,7 +598,7 @@ class OzonAdapter(MarketplaceAdapter):
                         if self._has_collected_reported_total(yielded):
                             self._print_total_reached(yielded)
                             return
-                print(
+                log.info(
                     f"Ozon: стрим {label}: +{stream_new} новых "
                     f"(всего уникальных: {yielded})"
                 )
@@ -796,7 +800,7 @@ class OzonAdapter(MarketplaceAdapter):
                     and yielded >= max_reviews
                 ):
                     return
-                print(
+                log.info(
                     f"Ozon: дополнительный стрим sort={sort_value} — "
                     "ищу отзывы вне дефолтного окна"
                 )
@@ -837,7 +841,7 @@ class OzonAdapter(MarketplaceAdapter):
                         "пропускаю",
                         sort_value, exc,
                     )
-                print(
+                log.info(
                     f"Ozon: стрим {sort_value}: +{stream_new} новых "
                     f"(всего уникальных: {yielded})"
                 )
@@ -915,7 +919,7 @@ class OzonAdapter(MarketplaceAdapter):
                             if dup_streak_stop > 0:
                                 dup_streak += 1
                                 if dup_streak >= dup_streak_stop:
-                                    print(
+                                    log.info(
                                         f"Ozon: стрим {label}: "
                                         f"{dup_streak} подряд "
                                         f"дубликатов — останавливаю "
@@ -936,7 +940,7 @@ class OzonAdapter(MarketplaceAdapter):
                     exc,
                 )
             finally:
-                print(
+                log.info(
                     f"Ozon: стрим {label} завершён "
                     f"(+{stream_new} новых)"
                 )
@@ -947,7 +951,7 @@ class OzonAdapter(MarketplaceAdapter):
             )
             for extra_query, label, start_page in streams
         ]
-        print(
+        log.info(
             f"Ozon: запускаю {total_streams} стрима параллельно"
         )
 
@@ -984,7 +988,7 @@ class OzonAdapter(MarketplaceAdapter):
             await asyncio.gather(
                 finisher, *tasks, return_exceptions=True,
             )
-            print(
+            log.info(
                 f"Ozon: параллельный сбор завершён, "
                 f"всего уникальных: {yielded}"
             )

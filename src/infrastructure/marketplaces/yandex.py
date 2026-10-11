@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Protocol
 
-from domain.entities import (
+from shared.entities import (
     ProductRef,
     Review,
     ReviewPage,

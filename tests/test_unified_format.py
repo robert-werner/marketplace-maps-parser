@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from domain.entities import ProductRef, Review
+from shared.entities import ProductRef, Review
 from shared.unified_format import (
     UNIFIED_REVIEW_FIELDS,
     build_unified_document,

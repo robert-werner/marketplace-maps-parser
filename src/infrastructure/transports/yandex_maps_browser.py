@@ -50,6 +50,10 @@ Flow (measured 2026-09-18 against a live org page):
 """
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("infrastructure.transports.yandex_maps_browser")
+
 import asyncio
 import json
 import re
@@ -1163,7 +1167,7 @@ class YandexMapsBrowserTransport:
                 await handle.dispose()
                 return
             except Exception:
-                pass
+                log.debug("Yandex Maps API failed")
         if self.settle_ms > 0:
             await page.wait_for_timeout(min(self.settle_ms, 750))
 

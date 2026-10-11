@@ -6,6 +6,10 @@ marketplace/transport/proxy/pacing option the CLI supports.
 """
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("cli_args")
+
 import argparse
 
 
@@ -525,7 +529,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     f"{parsed.url!r} — pass --marketplace explicitly"
                 )
             parsed.marketplace = detected
-            print(
+            log.info(
                 f"Маркетплейс определён по ссылке: {detected}"
             )
         else:

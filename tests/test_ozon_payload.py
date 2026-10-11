@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from domain.entities import ProductRef
+from shared.entities import ProductRef
 from infrastructure.marketplaces.ozon import (
     build_review_key,
     extract_ozon_rating_summary,

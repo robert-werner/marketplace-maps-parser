@@ -18,6 +18,10 @@ import json
 from typing import Any
 from urllib.parse import urlencode
 
+from shared.logging import get_logger
+
+log = get_logger("infrastructure.transports.base")
+
 OZON_BASE_URL = "https://www.ozon.ru"
 OZON_API_ENDPOINT = f"{OZON_BASE_URL}/api/entrypoint-api.bx/page/json/v2"
 
@@ -142,7 +146,7 @@ class OzonTransportMixin:
             try:
                 payload = json.loads(body)
             except ValueError:
-                pass
+                log.debug("malformed JSON challenge body")
             else:
                 # Review text may mention JavaScript/challenges; only
                 # top-level challenge metadata is a JSON interstitial.

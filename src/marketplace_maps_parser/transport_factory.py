@@ -4,6 +4,10 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from shared.logging import get_logger
+
+log = get_logger("transport_factory")
+
 
 async def _build_ozon_transport(
     args: argparse.Namespace,
@@ -31,7 +35,7 @@ async def _build_ozon_transport(
             load_cookies_file,
         )
         cookies = load_cookies_file(args.cookies)
-        print(
+        log.info(
             f"Ozon: загружено cookies из {args.cookies}: "
             f"{len(cookies)} шт."
         )
@@ -84,7 +88,7 @@ async def _build_proxy_pool(
                 c.strip() for c in args.free_proxy_country.split(",")
                 if c.strip()
             ]
-        print(
+        log.info(
             "[info] --free-proxy: загружаю бесплатные публичные "
             "proxy через free-proxy package..."
             + (f" (country={country_id})" if country_id else "")

@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, TextIO
 
-from domain.entities import Review
+from shared.entities import Review
 from marketplace_maps_parser.run_state import atomic_write_json, status_path
 from shared.unified_format import build_unified_review, unified_review_id
 

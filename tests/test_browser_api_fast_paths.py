@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from domain.entities import ProductRef
+from shared.entities import ProductRef
 from infrastructure.marketplaces.avito import AvitoAdapter
 from infrastructure.marketplaces.wildberries import WildberriesAdapter
 from infrastructure.transports import avito_browser, two_gis_browser

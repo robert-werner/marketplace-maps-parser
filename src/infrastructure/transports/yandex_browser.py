@@ -99,6 +99,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+from shared.logging import get_logger
+
 from infrastructure.transports.browser_common import (
     import_invisible_playwright,
     install_resource_blocker,
@@ -427,6 +429,7 @@ class YandexBrowserTransport:
         dup_pages_stop: int = 3,
         use_api: bool = True,
     ) -> None:
+        self.logger = get_logger("infrastructure.transports.yandex_browser")
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
         self.debug_dir = Path(debug_dir)
@@ -610,7 +613,7 @@ class YandexBrowserTransport:
                 try:
                     await page.close()
                 except Exception:
-                    pass
+                    self.logger.debug("browser action failed")
 
     async def _iter_with_browser(
         self,
@@ -993,7 +996,7 @@ class YandexBrowserTransport:
                 try:
                     await page.close()
                 except Exception:
-                    pass
+                    self.logger.debug("browser action failed")
 
     # ------------------------------------------------------------------
     # Navigation, warmup, captcha
@@ -1070,7 +1073,7 @@ class YandexBrowserTransport:
                 random.randint(100, height - 100),
             )
         except Exception:
-            pass
+            self.logger.debug("browser action failed")
         
         # 2-3 scroll rounds with mouse movements
         for _ in range(random.randint(2, 3)):
@@ -1082,7 +1085,7 @@ class YandexBrowserTransport:
                 )
                 await page.wait_for_timeout(random.randint(120, 380))
             except Exception:
-                pass
+                self.logger.debug("browser action failed")
             
             # Main scroll down
             try:
@@ -1090,7 +1093,7 @@ class YandexBrowserTransport:
                 await page.mouse.wheel(0, delta)
                 await page.wait_for_timeout(random.randint(400, 950))
             except Exception:
-                pass
+                self.logger.debug("browser action failed")
             
             # 30% chance of micro-scroll back (reading previous line)
             if random.random() < 0.3:
@@ -1098,7 +1101,7 @@ class YandexBrowserTransport:
                     await page.mouse.wheel(0, -random.randint(50, 200))
                     await page.wait_for_timeout(random.randint(200, 500))
                 except Exception:
-                    pass
+                    self.logger.debug("browser action failed")
 
     async def _goto_reviews(
         self,
@@ -1169,7 +1172,7 @@ class YandexBrowserTransport:
                         )
                         await handle.dispose()
                     except Exception:
-                        pass
+                        self.logger.debug("browser action failed")
                 else:
                     await page.wait_for_timeout(
                         min(self.settle_ms, 500),
@@ -1338,7 +1341,7 @@ class YandexBrowserTransport:
                     if not await link.is_visible():
                         continue
                 except Exception:
-                    pass
+                    self.logger.debug("browser action failed")
                 await link.click(timeout=3_000)
                 # A pager link occasionally rides a target=_blank
                 # wrapper — close any tab it popped.
@@ -1434,7 +1437,7 @@ class YandexBrowserTransport:
                 # ONLY try frames, not the main page yet
                 frames.extend(extra)
         except Exception:
-            pass
+            self.logger.debug("browser action failed")
 
         for frame in frames:
             for selector in self._CAPTCHA_CHECKBOX_SELECTORS:
@@ -1894,19 +1897,19 @@ class YandexBrowserTransport:
                                 random.randint(20, 80)
                             )
                     except Exception:
-                        pass
+                        self.logger.debug("browser action failed")
             else:
                 # Small scroll in one go
                 try:
                     await page.mouse.wheel(0, delta)
                 except Exception:
-                    pass
+                    self.logger.debug("browser action failed")
         else:
             delta = step
             try:
                 await page.mouse.wheel(0, delta)
             except Exception:
-                pass
+                self.logger.debug("browser action failed")
         
         # Main pause after scroll (variable, right-skewed)
         if self.scroll_pause_ms > 0:
@@ -1920,7 +1923,7 @@ class YandexBrowserTransport:
             try:
                 await page.wait_for_timeout(pause)
             except Exception:
-                pass
+                self.logger.debug("browser action failed")
 
     async def _click_show_more(self, page: Any) -> bool:
         """Some AB variants paginate with a button instead of
@@ -1959,7 +1962,7 @@ class YandexBrowserTransport:
             try:
                 await tab.close()
             except Exception:
-                pass
+                self.logger.debug("browser action failed")
 
     @staticmethod
     def _card_key(card: dict[str, Any]) -> str:
@@ -2031,7 +2034,7 @@ class YandexBrowserTransport:
                 html, encoding="utf-8",
             )
         except Exception:
-            pass
+            self.logger.debug("browser action failed")
 
 
 _INT_RE = re.compile(r"\d+")

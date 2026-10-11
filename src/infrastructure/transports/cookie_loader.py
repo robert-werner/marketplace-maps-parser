@@ -17,6 +17,10 @@ session unlocks the full list.
 """
 from __future__ import annotations
 
+
+from shared.logging import get_logger
+
+log = get_logger("src.infrastructure.transports.cookie_loader", quiet=True)
 import json
 from pathlib import Path
 from typing import Any

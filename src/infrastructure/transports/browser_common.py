@@ -17,6 +17,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.logging import get_logger
+
+log = get_logger("infrastructure.transports.browser_common")
+
 
 def import_invisible_playwright() -> type:
     """Lazy import of invisible-playwright, wrapped with
@@ -118,7 +122,7 @@ async def install_resource_blocker(
             else:
                 await route.continue_()
         except Exception:
-            pass
+            log.debug("resource route failed")
 
     for pattern in BLOCKED_URL_PATTERNS:
         try:
@@ -126,4 +130,4 @@ async def install_resource_blocker(
             # calling it without await silently drops the route.
             await page.route(pattern, _route)
         except Exception:
-            pass
+            log.debug("page.route() subscription failed")

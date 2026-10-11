@@ -1,6 +1,10 @@
 """Legacy Ozon aggregate rating export (not individual source reviews)."""
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("marketplace_maps_parser.rating_summary")
+
 import json
 from pathlib import Path
 from typing import Any

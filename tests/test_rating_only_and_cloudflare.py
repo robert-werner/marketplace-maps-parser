@@ -22,7 +22,7 @@ import asyncio
 
 import pytest
 
-from domain.entities import ProductRef
+from shared.entities import ProductRef
 from infrastructure.marketplaces.ozon import (
     OzonAdapter,
     is_review_node,

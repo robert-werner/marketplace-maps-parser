@@ -52,9 +52,13 @@ Contract rules (2026-09-19):
 """
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("shared.unified_format")
+
 from typing import Any
 
-from domain.entities import Review
+from shared.entities import Review
 
 _TEXT_PART_LABELS = (
     ("pros", "Достоинства"),

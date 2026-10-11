@@ -1,5 +1,8 @@
 """Unified CLI entrypoint for marketplace-maps-parser.
 
+from shared.logging import get_logger
+
+log = get_logger("main")
 Consolidates the four legacy ``main*.py`` scripts into a single argparse-driven
 program supporting the Ozon pagination strategy, Ozon DOM-scroll strategy, and
 the Wildberries DOM adapter.
@@ -81,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_products_parallel,
             )
             count = asyncio.run(run_products_parallel(args))
-            print(f"Собрано отзывов: {count}")
+            log.info(f"Собрано отзывов: {count}")
             return _exit_code_for_status(
                 getattr(args, "_run_status", None),
             )
@@ -97,17 +100,17 @@ def main(argv: list[str] | None = None) -> int:
                 run_parallel_sessions,
             )
             count = asyncio.run(run_parallel_sessions(args))
-            print(f"Собрано отзывов: {count}")
+            log.info(f"Собрано отзывов: {count}")
             return _exit_code_for_status(
                 getattr(args, "_run_status", None),
             )
 
         count = asyncio.run(_run(args))
     except KeyboardInterrupt:
-        print("\nПрервано пользователем.", file=sys.stderr)
+        log.info("\nПрервано пользователем.", file=sys.stderr)
         return 130
 
-    print(f"Сбор завершён. Всего отзывов: {count}")
+    log.info(f"Сбор завершён. Всего отзывов: {count}")
     return _exit_code_for_status(
         getattr(args, "_run_status", None),
     )

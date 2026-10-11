@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from domain.entities import ReviewPage
+from shared.entities import ReviewPage
 from infrastructure.marketplaces.wildberries import (
     WildberriesAdapter,
 )

@@ -3,7 +3,7 @@ name = "marketplace-maps-parser"
 version = "0.1.0"
 description = "Async review collector for marketplaces and maps using Invisible Playwright."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 license = { text = "Proprietary" }
 authors = [
     { name = "Leonid Kolesnichenko", email = "xperience439@gmail.com" },
@@ -36,7 +36,6 @@ build-backend = "hatchling.build"
 # (matching the existing `from domain...`, `from infrastructure...` imports).
 packages = [
     "src/marketplace_maps_parser",
-    "src/domain",
     "src/infrastructure",
     "src/shared",
 ]
@@ -48,13 +47,13 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 79
-target-version = "py314"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from domain.entities import ProductRef, Review
+from shared.entities import ProductRef, Review
 from marketplace_maps_parser.merging import merge_parts
 from marketplace_maps_parser.run_state import status_path
 from marketplace_maps_parser.runner import run_collection

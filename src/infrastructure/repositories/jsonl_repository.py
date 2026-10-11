@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from domain.entities import Review
+from shared.entities import Review
 
 
 class JsonlReviewRepository:

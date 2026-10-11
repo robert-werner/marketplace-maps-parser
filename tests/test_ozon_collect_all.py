@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from domain.entities import ProductRef
+from shared.entities import ProductRef
 from infrastructure.marketplaces.ozon import OzonAdapter
 
 PRODUCT_URL = (

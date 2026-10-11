@@ -5,7 +5,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from domain.entities import ProductRef, Review
+from shared.entities import ProductRef, Review
 
 HELPFUL_VOTES_RE = re.compile(
     r"Да\s+(\d+)\s+Нет\s+(\d+)"

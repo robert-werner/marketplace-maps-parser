@@ -15,6 +15,10 @@ Two output formats (``--format``):
 """
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("marketplace_maps_parser.collectors")
+
 import argparse
 import json
 from pathlib import Path
@@ -158,7 +162,7 @@ async def _collect_ozon_once(args: argparse.Namespace) -> int:
             try:
                 await close()
             except Exception:
-                pass
+                log.debug("collection step failed")
 
     # Ozon: rating histogram summary. Rating-only «оценки» (stars
     # without text) are not exposed individually by Ozon — only as

@@ -8,9 +8,11 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
-from domain.entities import Review
+from shared.entities import Review
 from marketplace_maps_parser.output import ReviewWriter
 from marketplace_maps_parser.run_state import infer_status
+
+from shared.logging import get_logger
 
 
 async def run_collection(
@@ -85,7 +87,7 @@ async def run_collection(
                 writer.checkpoint(snapshot())
                 last_saved = writer.total
             if count % 100 == 0:
-                print(f"Собрано отзывов: {count}")
+                self.logger.info(f"Собрано отзывов: {count}")
             if args.max_reviews is not None and count >= args.max_reviews:
                 stopped_by_limit = True
                 break
@@ -99,7 +101,7 @@ async def run_collection(
         raise
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
-        print(f"Сбор прерван ошибкой: {error}")
+        self.logger.info(f"Сбор прерван ошибкой: {error}")
     finally:
         ticker.cancel()
         ticker_result = await asyncio.gather(ticker, return_exceptions=True)

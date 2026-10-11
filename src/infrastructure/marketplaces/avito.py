@@ -5,7 +5,7 @@ import hashlib
 from collections.abc import AsyncIterator
 from typing import Any
 
-from domain.entities import ProductRef, Review, ReviewPage
+from shared.entities import ProductRef, Review, ReviewPage
 from infrastructure.marketplaces.base import MarketplaceAdapter
 from infrastructure.marketplaces.wildberries import WildberriesAdapter
 from shared.async_iterators import closing_iterator

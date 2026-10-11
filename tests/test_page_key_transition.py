@@ -718,7 +718,7 @@ def test_map_node_pdp_reviews_shape():
     {comment, score, positive, negative}. The mapper must unpack it
     (the whole-review dict must NOT leak into Review.text) and
     flatten the author object."""
-    from domain.entities import ProductRef
+    from shared.entities import ProductRef
     from infrastructure.marketplaces.ozon import map_ozon_review_node
 
     product = ProductRef(

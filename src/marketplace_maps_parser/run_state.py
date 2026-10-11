@@ -1,6 +1,10 @@
 """Durable run state and atomic checkpoint helpers."""
 from __future__ import annotations
 
+from shared.logging import get_logger
+
+log = get_logger("marketplace_maps_parser.run_state")
+
 import json
 import os
 from pathlib import Path

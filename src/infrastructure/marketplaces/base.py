@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from domain.entities import ReviewPage
+from shared.entities import ReviewPage
 
 
 class MarketplaceAdapter(ABC):
