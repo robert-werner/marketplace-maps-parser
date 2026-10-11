@@ -23,6 +23,10 @@ import asyncio
 import threading
 from typing import Any
 
+from shared.logging import get_logger
+
+log = get_logger("infrastructure.transports.free_proxy_pool")
+
 
 def _import_free_proxy():
     """Lazy import of the free-proxy package."""
@@ -138,14 +142,14 @@ class FreeProxyPool:
             try:
                 raw_list = fp.get_proxy_list(repeat=False)
             except Exception as exc:
-                self.logger.info(
+                log.info(
                     f"FreeProxyPool: не удалось получить proxy "
                     f"для стран {countries}: {exc}"
                 )
                 continue
 
             if raw_list:
-                self.logger.info(
+                log.info(
                     f"FreeProxyPool: получено {len(raw_list)} proxy "
                     f"для стран {countries}"
                 )
@@ -178,7 +182,7 @@ class FreeProxyPool:
         # Don't clear blocked set — blocked proxies from the
         # previous batch might reappear in the new batch. Keep
         # them blocked so we don't retry a known-bad proxy.
-        self.logger.info(
+        log.info(
             f"FreeProxyPool: загружено {len(new_proxies)} proxy "
             f"(round {self._refill_round - 1})"
         )
