@@ -1,8 +1,5 @@
 """Unified CLI entrypoint for marketplace-maps-parser.
 
-from shared.logging import get_logger
-
-log = get_logger("main")
 Consolidates the four legacy ``main*.py`` scripts into a single argparse-driven
 program supporting the Ozon pagination strategy, Ozon DOM-scroll strategy, and
 the Wildberries DOM adapter.
@@ -21,13 +18,13 @@ here for backward compatibility (tests import ``parse_args`` and
 Usage (--marketplace is optional when --url is given — it is
 detected from the URL's domain + path)::
 
-    python -m marketplace_maps_parser \
-        --url "https://www.ozon.ru/product/..." \
+    python -m marketplace_maps_parser \\
+        --url "https://www.ozon.ru/product/..." \\
         --output ozon_reviews.jsonl
 
-    python -m marketplace_maps_parser \
-        --url "https://market.yandex.ru/card/<slug>/<id>" \
-        --output yandex_reviews.jsonl \
+    python -m marketplace_maps_parser \\
+        --url "https://market.yandex.ru/card/<slug>/<id>" \\
+        --output yandex_reviews.jsonl \\
         --cookies yandex_cookies.json
 """
 from __future__ import annotations
@@ -35,6 +32,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+
+from shared.logging import get_logger
+
+log = get_logger("marketplace_maps_parser")
 
 from marketplace_maps_parser.cli_args import parse_args as parse_args
 from marketplace_maps_parser.collectors import (
