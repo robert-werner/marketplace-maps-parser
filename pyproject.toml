@@ -10,7 +10,7 @@ authors = [
 ]
 dependencies = [
     "free-proxy>=1.1.0",
-    "invisible-playwright>=0.31.0",
+    "invisible-playwright",
     "loguru>=0.7.3",
     "typing_extensions>=4.12",
 ]
