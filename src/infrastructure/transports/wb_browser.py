@@ -126,6 +126,7 @@ class WildberriesBrowserTransport:
         proxy_pool: Any = None,
         proxy_rotate_max_restarts: int = 3,
         use_api_only: bool = False,
+        use_stealth: bool = True,
     ) -> None:
         self.product_url = product_url
         self.timeout_ms = timeout_ms
@@ -140,6 +141,7 @@ class WildberriesBrowserTransport:
         self.proxy_pool = proxy_pool
         self.proxy_rotate_max_restarts = proxy_rotate_max_restarts
         self.use_api_only = use_api_only
+        self.use_stealth = use_stealth
         self.collection_path = "dom"
         self._capture: ResponseCapture | None = None
         self.last_product_title: str | None = None
@@ -167,6 +169,18 @@ class WildberriesBrowserTransport:
             self._browser_ctx = None
             self._capture = None
 
+    async def _apply_stealth(self, page: Any) -> None:
+        """Inject stealth overrides into the page context."""
+        if not self.use_stealth:
+            return
+        try:
+            await page.add_init_script(_WB_STEALTH_JS)
+        except Exception as exc:
+            import logging
+            logging.getLogger("wb_browser").warning(
+                f"Stealth injection failed: {exc}"
+            )
+
     async def iter_review_batches(
         self, product_url: str,
     ) -> AsyncIterator[list[dict[str, Any]]]:
@@ -192,6 +206,8 @@ class WildberriesBrowserTransport:
             )
             browser = await self._browser_ctx.__aenter__()
             self._page = await browser.new_page()
+            if self.use_stealth:
+                await self._apply_stealth(self._page)
             if current_cookies:
                 await self._page.context.add_cookies(current_cookies)
             self._capture = ResponseCapture(self._page, is_feedback_url)
@@ -461,6 +477,8 @@ class WildberriesBrowserTransport:
         try:
             browser = await self._browser_ctx.__aenter__()
             self._page = await browser.new_page()
+            if self.use_stealth:
+                await self._apply_stealth(self._page)
             if self.cookies:
                 await self._page.context.add_cookies(self.cookies)
             self._capture = ResponseCapture(self._page, is_feedback_url)
@@ -474,3 +492,22 @@ class WildberriesBrowserTransport:
         await self._cleanup()
 
 __all__ = ['WildberriesBrowserTransport']
+
+_WB_STEALTH_JS = """
+(() => {
+    const props = {
+        'webdriver': false,
+        'languages': ['ru', 'en'],
+        'hardwareConcurrency': 16,
+        'deviceMemory': 8,
+    };
+    for (const [key, val] of Object.entries(props)) {
+        try {
+            Object.defineProperty(
+                navigator, key,
+                { get: () => val, configurable: true }
+            );
+        } catch (e) { /* ignore */ }
+    }
+})();
+"""
