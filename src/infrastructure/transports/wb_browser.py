@@ -171,6 +171,10 @@ class WildberriesBrowserTransport:
         self, product_url: str,
     ) -> AsyncIterator[list[dict[str, Any]]]:
         """Yield review batches, rotating proxy on WB block."""
+        if self.use_api_only:
+            async for batch in self._iter_api_only(product_url):
+                yield batch
+            return
         restarts = 0
         current_cookies = self.cookies
 
@@ -390,6 +394,61 @@ class WildberriesBrowserTransport:
                 await page.wait_for_timeout(max(self.settle_ms, 500))
         else:
             self.incomplete_reason = "Wildberries: max_scrolls reached"
+
+    async def _iter_api_only(
+        self, product_url: str,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Direct httpx call to WB reviews API; no browser."""
+        nm_id = extract_nm_id(product_url)
+        size = 200
+        seen_api: set[str] = set()
+        seen_urls: set[str] = set()
+        try:
+            import httpx
+        except ImportError:
+            raise RuntimeError("httpx not installed for API-only mode")
+
+        proxy_str = None
+        if self.proxy and isinstance(self.proxy, dict):
+            proxy_str = self.proxy.get("server")
+
+        with httpx.Client(
+            proxy=proxy_str,
+            timeout=self.timeout_ms / 1000.0,
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True,
+        ) as client:
+            current = (
+                f"https://www.wildberries.ru/api/v2/catalog/"
+                f"{nm_id}/reviews?size={size}"
+            )
+            while True:
+                if current in seen_urls:
+                    raise RuntimeError("WB API repeated cursor")
+                seen_urls.add(current)
+                resp = client.get(current, follow_redirects=True)
+                if resp.status_code >= 400:
+                    if self.proxy_pool and self.proxy_pool.all_blocked():
+                        raise _wb_error(resp.status_code)
+                    raise _wb_error(resp.status_code)
+                payload = resp.json()
+                self.collection_path = "api_only"
+                api_cards = feedback_cards(payload, nm_id)
+                fresh = []
+                for card in api_cards:
+                    if card["id"] not in seen_api:
+                        seen_api.add(card["id"])
+                        fresh.append(card)
+                for offset in range(0, len(fresh), 100):
+                    yield fresh[offset:offset + 100]
+                next_url = feedback_next_url(current, payload)
+                if not next_url or not fresh:
+                    self.incomplete_reason = (
+                        "WB API window: full review coverage unverified"
+                    )
+                    return
+                current = next_url
+        self.incomplete_reason = "WB API page limit reached"
 
     async def __aenter__(self) -> "WildberriesBrowserTransport":
         """Backward-compatible: enter creates a single browser context."""
