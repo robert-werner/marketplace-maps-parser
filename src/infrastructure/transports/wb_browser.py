@@ -27,6 +27,32 @@ from infrastructure.transports.wb_api import (
 from shared.async_iterators import closing_iterator
 from shared.url_parsers import extract_nm_id
 
+
+class WildberriesBlockError(RuntimeError):
+    """Raised when WB actively blocks access (498, 403, captcha)."""
+
+
+class HTTP498Error(WildberriesBlockError):
+    """Raised on HTTP 498 (browser challenge)."""
+
+
+class HTTP403Error(WildberriesBlockError):
+    """Raised on HTTP 403 (account blocked)."""
+
+
+class CaptchaError(WildberriesBlockError):
+    """Raised on captcha challenge."""
+
+
+def _wb_error(status: int) -> WildberriesBlockError:
+    """Map HTTP status to a specific WB block error type."""
+    if status == 498:
+        return HTTP498Error(f"HTTP {status}")
+    if status == 403:
+        return HTTP403Error(f"HTTP {status}")
+    return WildberriesBlockError(f"HTTP {status}")
+
+
 _READ_PAGE_JS = """() => {
     const clean = (el) => el?.textContent?.trim() || null;
     const cards = [...document.querySelectorAll(
@@ -97,16 +123,23 @@ class WildberriesBrowserTransport:
         cookies: list[dict[str, Any]] | None = None,
         use_api: bool = True,
         max_pages: int | None = None,
+        proxy_pool: Any = None,
+        proxy_rotate_max_restarts: int = 3,
+        use_api_only: bool = False,
     ) -> None:
         self.product_url = product_url
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
         self.proxy = proxy
+        self._proxy = proxy
         self.humanize = humanize
         self.max_scrolls = max_scrolls
         self.cookies = cookies
         self.use_api = use_api
         self.max_pages = max_pages
+        self.proxy_pool = proxy_pool
+        self.proxy_rotate_max_restarts = proxy_rotate_max_restarts
+        self.use_api_only = use_api_only
         self.collection_path = "dom"
         self._capture: ResponseCapture | None = None
         self.last_product_title: str | None = None
@@ -116,29 +149,19 @@ class WildberriesBrowserTransport:
         self._page: Any = None
         self._browser_ctx: Any = None
 
-    async def __aenter__(self) -> WildberriesBrowserTransport:
-        browser_cls = import_invisible_playwright()
-        self._browser_ctx = browser_cls(
-            proxy=self.proxy, seed=None, humanize=self.humanize,
-        )
-        try:
-            browser = await self._browser_ctx.__aenter__()
-            self._page = await browser.new_page()
-            if self.cookies:
-                await self._page.context.add_cookies(self.cookies)
-            self._capture = ResponseCapture(self._page, is_feedback_url)
-            self._capture.__enter__()
-            return self
-        except BaseException:
-            await self.__aexit__(None, None, None)
-            raise
+    def _next_proxy(self) -> dict[str, str] | None:
+        """Pull the next proxy from the pool (None if no pool)."""
+        if self.proxy_pool is None:
+            return None
+        return self.proxy_pool.next()
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    async def _cleanup(self) -> None:
+        """Close any existing browser context."""
         try:
             if self._capture is not None:
                 self._capture.__exit__()
             if self._browser_ctx is not None:
-                await self._browser_ctx.__aexit__(exc_type, exc, tb)
+                await self._browser_ctx.__aexit__(None, None, None)
         finally:
             self._page = None
             self._browser_ctx = None
@@ -147,14 +170,61 @@ class WildberriesBrowserTransport:
     async def iter_review_batches(
         self, product_url: str,
     ) -> AsyncIterator[list[dict[str, Any]]]:
-        if self._page is None:
-            async with self:
-                async with closing_iterator(
-                    self.iter_review_batches(product_url),
-                ) as stream:
-                    async for batch in stream:
-                        yield batch
-            return
+        """Yield review batches, rotating proxy on WB block."""
+        restarts = 0
+        current_cookies = self.cookies
+
+        while True:
+            await self._cleanup()
+
+            proxy = self._proxy
+            if proxy is None and self.proxy_pool is not None:
+                proxy = self._next_proxy()
+                self._proxy = proxy
+
+            browser_cls = import_invisible_playwright()
+            self._browser_ctx = browser_cls(
+                proxy=proxy, seed=None, humanize=self.humanize,
+            )
+            browser = await self._browser_ctx.__aenter__()
+            self._page = await browser.new_page()
+            if current_cookies:
+                await self._page.context.add_cookies(current_cookies)
+            self._capture = ResponseCapture(self._page, is_feedback_url)
+            self._capture.__enter__()
+
+            try:
+                async for batch in self._iter_product_and_reviews(
+                    product_url,
+                ):
+                    yield batch
+                return
+            except WildberriesBlockError as exc:
+                restarts += 1
+                if (
+                    self.proxy_pool is None
+                    or restarts > self.proxy_rotate_max_restarts
+                ):
+                    raise
+                self._proxy = self._next_proxy()
+                if self._proxy is None:
+                    raise WildberriesBlockError(
+                        f"{exc} (proxy pool exhausted)",
+                    ) from exc
+                current_cookies = None
+                print(
+                    f"WB: block — restart "
+                    f"(proxy={self._proxy.get('server', '?')}), "
+                    f"attempt {restarts}/"
+                    f"{self.proxy_rotate_max_restarts}",
+                )
+            finally:
+                await self._cleanup()
+
+    async def _iter_product_and_reviews(
+        self, product_url: str,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Main iteration logic (one browser session)."""
         nm_id = extract_nm_id(product_url)
         page = self._page
         product_response = await page.goto(
@@ -177,10 +247,7 @@ class WildberriesBrowserTransport:
                 if product_response is not None and (
                     product_response.status >= 400
                 ):
-                    raise RuntimeError(
-                        "Wildberries product blocked "
-                        f"(HTTP {product_response.status})",
-                    ) from exc
+                    raise _wb_error(product_response.status) from exc
         if not urlsplit(page.url).path.rstrip('/').endswith('/feedbacks'):
             title = page.locator('h1').first
             if await title.count():
@@ -210,9 +277,7 @@ class WildberriesBrowserTransport:
                         timeout=min(8_000, self.timeout_ms),
                     )
                 except Exception as exc:
-                    raise RuntimeError(
-                        f"Wildberries blocked (HTTP {response.status})",
-                    ) from exc
+                    raise _wb_error(response.status) from exc
         selector = '[data-testid="feedbacks-list-item"]'
         cards = page.locator(selector)
         try:
@@ -275,7 +340,7 @@ class WildberriesBrowserTransport:
                 ).strip() or None
         if not self.last_product_title:
             match = re.match(
-                r'^Отзывы на (.+?) в интернет[‑-]магазине',
+                r'^Отзывы на (.+?) в интернет[\-–]магазине',
                 await page.title(),
             )
             if match:
@@ -326,5 +391,27 @@ class WildberriesBrowserTransport:
         else:
             self.incomplete_reason = "Wildberries: max_scrolls reached"
 
+    async def __aenter__(self) -> "WildberriesBrowserTransport":
+        """Backward-compatible: enter creates a single browser context."""
+        await self._cleanup()
+        self._page = None
+        browser_cls = import_invisible_playwright()
+        self._browser_ctx = browser_cls(
+            proxy=self.proxy, seed=None, humanize=self.humanize,
+        )
+        try:
+            browser = await self._browser_ctx.__aenter__()
+            self._page = await browser.new_page()
+            if self.cookies:
+                await self._page.context.add_cookies(self.cookies)
+            self._capture = ResponseCapture(self._page, is_feedback_url)
+            self._capture.__enter__()
+            return self
+        except BaseException:
+            await self.__aexit__(None, None, None)
+            raise
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        await self._cleanup()
 
 __all__ = ['WildberriesBrowserTransport']
