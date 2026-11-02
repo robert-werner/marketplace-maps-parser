@@ -9,6 +9,8 @@ from shared.async_iterators import closing_iterator
 
 from shared.logging import get_logger
 
+logger = get_logger(__name__)
+
 
 class PartialCollectionError(RuntimeError):
     """A parallel run yielded data but at least one session failed."""
@@ -34,7 +36,7 @@ async def _iter_parallel_reviews(
                     await queue.put(review)
         except Exception as exc:
             failures.append(exc)
-            self.logger.info(f"[warning] Я.Маркет: сессия остановилась: {exc}")
+            logger.info(f"[warning] Я.Маркет: сессия остановилась: {exc}")
 
     tasks = [
         asyncio.create_task(pump(adapter))

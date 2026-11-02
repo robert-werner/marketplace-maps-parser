@@ -335,11 +335,9 @@ def map_ozon_review_node(
     ):
         return None
 
-    # Extract photos and videos from content (Ozon API nesting).
+    # Extract photos from content (Ozon API nesting).
     photos_raw = content.get("photos") or []
-    videos_raw = content.get("videos") or []
     photos = extract_ozon_media_urls(photos_raw) if isinstance(photos_raw, list) else []
-    videos = extract_ozon_media_urls(videos_raw) if isinstance(videos_raw, list) else []
 
     return Review(
         review_id=review_id,
