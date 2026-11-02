@@ -634,7 +634,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "free-proxy", specifier = ">=1.1.0" },
-    { name = "invisible-playwright", specifier = ">=0.31.0" },
+    { name = "invisible-playwright" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=9.0.1" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3.1" },

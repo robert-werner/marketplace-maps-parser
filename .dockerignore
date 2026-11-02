@@ -1,0 +1,10 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+debug_*/
+*cookies.json
+*.jsonl
+*.log

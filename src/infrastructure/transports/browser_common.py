@@ -30,6 +30,12 @@ def import_invisible_playwright() -> type:
     and absent in some environments that import this module;
     transports call this inside the async generators that
     actually need a browser.
+
+    Every session is launched ``headless=True``: on Linux this makes
+    invisible-playwright spin up a private ``Xvfb`` and point the
+    browser at it — exactly what a Docker container (no X server)
+    needs; without it Firefox exits with "no DISPLAY". A caller may
+    still pass ``headless=...`` explicitly (setdefault preserves it).
     """
     from invisible_playwright.async_api import (
         InvisiblePlaywright,
@@ -38,7 +44,17 @@ def import_invisible_playwright() -> type:
     from infrastructure.transports.gpu_safety import (
         make_gpu_safe,
     )
-    return make_gpu_safe(InvisiblePlaywright)
+
+    base = make_gpu_safe(InvisiblePlaywright)
+
+    class _HeadlessInvisiblePlaywright(base):
+        """All sessions run on the engine's hidden virtual display."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs.setdefault("headless", True)
+            super().__init__(*args, **kwargs)
+
+    return _HeadlessInvisiblePlaywright
 
 def _get_retryable_errors() -> tuple[type[BaseException], ...]:
     """Return the tuple of exception types that should trigger a retry.
