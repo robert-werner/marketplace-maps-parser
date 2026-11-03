@@ -125,6 +125,8 @@ class WildberriesBrowserTransport:
         max_pages: int | None = None,
         proxy_pool: Any = None,
         proxy_rotate_max_restarts: int = 3,
+        cookie_pool: Any = None,
+        cookie_rotate_max_restarts: int = 3,
         use_api_only: bool = False,
         use_stealth: bool = True,
     ) -> None:
@@ -140,6 +142,8 @@ class WildberriesBrowserTransport:
         self.max_pages = max_pages
         self.proxy_pool = proxy_pool
         self.proxy_rotate_max_restarts = proxy_rotate_max_restarts
+        self.cookie_pool = cookie_pool
+        self.cookie_rotate_max_restarts = cookie_rotate_max_restarts
         self.use_api_only = use_api_only
         self.use_stealth = use_stealth
         self.collection_path = "dom"
@@ -184,13 +188,18 @@ class WildberriesBrowserTransport:
     async def iter_review_batches(
         self, product_url: str,
     ) -> AsyncIterator[list[dict[str, Any]]]:
-        """Yield review batches, rotating proxy on WB block."""
+        """Yield review batches, rotating proxy and cookies on WB
+        block."""
         if self.use_api_only:
             async for batch in self._iter_api_only(product_url):
                 yield batch
             return
         restarts = 0
-        current_cookies = self.cookies
+        current_cookies = (
+            self.cookie_pool.next_jar()
+            if self.cookie_pool is not None
+            else self.cookies
+        )
 
         while True:
             await self._cleanup()
@@ -221,22 +230,48 @@ class WildberriesBrowserTransport:
                 return
             except WildberriesBlockError as exc:
                 restarts += 1
+                max_restarts = max(
+                    self.proxy_rotate_max_restarts,
+                    self.cookie_rotate_max_restarts,
+                )
                 if (
                     self.proxy_pool is None
-                    or restarts > self.proxy_rotate_max_restarts
-                ):
+                    and self.cookie_pool is None
+                ) or restarts > max_restarts:
                     raise
-                self._proxy = self._next_proxy()
-                if self._proxy is None:
+                if self.proxy_pool is not None:
+                    self._proxy = self._next_proxy()
+                jar_available = (
+                    self.cookie_pool is None
+                    or not self.cookie_pool.all_blocked()
+                )
+                if (
+                    self.proxy_pool is not None
+                    and self._proxy is None
+                    and not jar_available
+                ):
                     raise WildberriesBlockError(
-                        f"{exc} (proxy pool exhausted)",
+                        f"{exc} (proxy pool and cookie pool exhausted)",
                     ) from exc
-                current_cookies = None
+                current_cookies = (
+                    self.cookie_pool.next_jar()
+                    if self.cookie_pool is not None
+                    else None
+                )
+                proxy_part = (
+                    f"proxy={self._proxy.get('server', '?')}"
+                    if self._proxy is not None
+                    else "proxy=none"
+                )
+                jar_part = (
+                    f" + новые cookies"
+                    if self.cookie_pool is not None
+                    and jar_available
+                    else ""
+                )
                 print(
-                    f"WB: block — restart "
-                    f"(proxy={self._proxy.get('server', '?')}), "
-                    f"attempt {restarts}/"
-                    f"{self.proxy_rotate_max_restarts}",
+                    f"WB: block — restart {proxy_part}{jar_part}, "
+                    f"attempt {restarts}/{max_restarts},",
                 )
             finally:
                 await self._cleanup()
@@ -479,8 +514,13 @@ class WildberriesBrowserTransport:
             self._page = await browser.new_page()
             if self.use_stealth:
                 await self._apply_stealth(self._page)
-            if self.cookies:
-                await self._page.context.add_cookies(self.cookies)
+            entry_cookies = (
+                self.cookie_pool.next_jar()
+                if self.cookie_pool is not None
+                else self.cookies
+            )
+            if entry_cookies:
+                await self._page.context.add_cookies(entry_cookies)
             self._capture = ResponseCapture(self._page, is_feedback_url)
             self._capture.__enter__()
             return self

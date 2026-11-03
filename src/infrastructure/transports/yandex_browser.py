@@ -424,6 +424,8 @@ class YandexBrowserTransport:
         auto_captcha_wait_s: float = 6.0,
         proxy_pool: Any | None = None,
         proxy_rotate_max_restarts: int = 3,
+        cookie_pool: Any | None = None,
+        cookie_rotate_max_restarts: int = 3,
         start_page: int = 1,
         max_pages: int | None = None,
         dup_pages_stop: int = 3,
@@ -449,6 +451,8 @@ class YandexBrowserTransport:
         self.auto_captcha_wait_s = auto_captcha_wait_s
         self.proxy_pool = proxy_pool
         self.proxy_rotate_max_restarts = proxy_rotate_max_restarts
+        self.cookie_pool = cookie_pool
+        self.cookie_rotate_max_restarts = cookie_rotate_max_restarts
         #: Page-range bounds (--parallel-sessions splits, targeted
         #: re-walks): the walk starts at ``start_page`` and stops
         #: after ``max_pages`` productive pages even without an
@@ -493,11 +497,14 @@ class YandexBrowserTransport:
         the ``max_pages`` range runs out, or a captcha kills the
         run.
 
-        When a captcha survives the whole escalation ladder and a
-        ``proxy_pool`` is available, the browser is RESTARTED with
-        the next proxy and a FRESH cookie jar (a jar that already
-        saw a challenge is a liability on a new IP) — up to
-        ``proxy_rotate_max_restarts`` times.
+        When a captcha survives the whole escalation ladder and at
+        least one rotation resource is available
+        (``proxy_pool`` and/or ``cookie_pool``), the browser is
+        RESTARTED with the next proxy and a FRESH cookie jar (a
+        jar that already saw a challenge is a liability on a new
+        IP) — up to
+        ``max(proxy_rotate_max_restarts,
+        cookie_rotate_max_restarts)`` times.
         """
         card_path = extract_yandex_market_card_path(product_url)
 
@@ -505,15 +512,17 @@ class YandexBrowserTransport:
         self.debug_dir.mkdir(parents=True, exist_ok=True)
 
         restarts = 0
+        restart_cookies = self.cookies
         state: dict[str, Any] = {
             "seen": set(), "page_no": self.start_page,
             "dup_pages": 0,
         }
         while True:
-            # A restart rotates the egress IP; cookies are NOT
-            # carried over on rotation (see docstring). On the
-            # first launch self.cookies is the user-supplied jar.
-            restart_cookies = None if restarts else self.cookies
+            # A restart rotates the egress IP; the jar is not
+            # carried over (see docstring): on rotation the next jar
+            # from the pool is used, or no cookies at all when there
+            # is no pool. On the first launch self.cookies is the
+            # user-supplied jar.
             try:
                 async with closing_iterator(
                     self._iter_with_browser(
@@ -525,22 +534,39 @@ class YandexBrowserTransport:
                 return
             except YandexCaptchaError as exc:
                 restarts += 1
+                max_restarts = max(
+                    self.proxy_rotate_max_restarts,
+                    self.cookie_rotate_max_restarts,
+                )
                 if (
                     self.proxy_pool is None
-                    or restarts > self.proxy_rotate_max_restarts
-                ):
+                    and self.cookie_pool is None
+                ) or restarts > max_restarts:
                     raise
                 proxy = await self._next_proxy()
-                if proxy is None:
+                jar_available = (
+                    self.cookie_pool is None
+                    or not self.cookie_pool.all_blocked()
+                )
+                if proxy is None and not jar_available:
                     raise YandexCaptchaError(
-                        f"{exc} (proxy pool exhausted)"
+                        f"{exc} (proxy pool and cookie pool exhausted)"
                     ) from exc
+                if self.cookie_pool is not None:
+                    restart_cookies = self.cookie_pool.next_jar()
+                else:
+                    restart_cookies = None
+                restart_with = []
+                if proxy is not None:
+                    restart_with.append(
+                        f"proxy ({proxy.get('server', '?')})"
+                    )
+                if self.cookie_pool is not None and jar_available:
+                    restart_with.append("новые cookies")
                 print(
-                    f"Я.Маркет: капча пережила эскалацию — "
-                    f"рестарт браузера с новым proxy "
-                    f"({proxy.get('server', '?')}), "
-                    f"попытка {restarts}/"
-                    f"{self.proxy_rotate_max_restarts}"
+                    f"Я.Маркет: капча пережила эскалацию — рестарт "
+                    f"браузера{' с ' + 'и '.join(restart_with) if restart_with else ''}, "
+                    f"попытка {restarts}/{max_restarts}"
                 )
 
     async def _next_proxy(self) -> dict[str, str] | None:
@@ -554,6 +580,23 @@ class YandexBrowserTransport:
             return self.proxy_pool.next()
         except Exception:
             return None
+
+    async def _next_session_cookies(
+        self,
+    ) -> list[dict[str, Any]] | None:
+        """Cookie jar for the next session.
+
+        Pool: the next jar (None if exhausted). Otherwise — the
+        user's single jar (self.cookies, possibly None).
+        """
+        if self.cookie_pool is None:
+            return self.cookies
+        next_jar_async = getattr(self.cookie_pool, "next_jar_async", None)
+        return (
+            await next_jar_async()
+            if next_jar_async is not None
+            else self.cookie_pool.next_jar()
+        )
 
     async def fetch_total_count(
         self,
@@ -576,6 +619,12 @@ class YandexBrowserTransport:
         if proxy is None and self.proxy_pool is not None:
             proxy = await self._next_proxy()
 
+        cookies = self.cookies
+        if self.cookie_pool is not None:
+            fresh = self.cookie_pool.next_jar()
+            if fresh is not None:
+                cookies = fresh
+
         async with browser_cls(
             proxy=proxy,
             seed=self.seed,
@@ -583,9 +632,9 @@ class YandexBrowserTransport:
         ) as browser:
             page = await browser.new_page()
             try:
-                if self.cookies:
+                if cookies:
                     try:
-                        await page.context.add_cookies(self.cookies)
+                        await page.context.add_cookies(cookies)
                     except Exception as exc:
                         print(
                             "Я.Маркет: не удалось внедрить cookies: "

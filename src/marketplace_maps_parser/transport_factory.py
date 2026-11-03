@@ -39,6 +39,9 @@ async def _build_ozon_transport(
             f"Ozon: загружено cookies из {args.cookies}: "
             f"{len(cookies)} шт."
         )
+    # Cookie jar pool: only when the single --cookies jar is not pinned,
+    # same logic as the proxy pool (--pinned proxy bypasses the pool).
+    cookie_pool = None if args.cookies else await _build_cookie_pool(args)
 
     if args.transport != "playwright":
         raise ValueError(f"Unknown browser transport: {args.transport!r}")
@@ -52,6 +55,7 @@ async def _build_ozon_transport(
         debug_dir=args.debug_dir,
         proxy=single_proxy,
         proxy_pool=proxy_pool,
+        cookie_pool=cookie_pool,
         humanize=not args.no_humanize,
         fetch_strategy=args.fetch_strategy,
         stealth=not args.no_stealth,
@@ -61,6 +65,23 @@ async def _build_ozon_transport(
         debug_dumps=getattr(args, "debug_dumps", False),
         page_delay_seconds=args.page_delay_seconds,
     )
+
+
+async def _build_cookie_pool(
+    args: argparse.Namespace,
+) -> Any:
+    """Build a cookie jar pool from --cookies-pool (directory of jar
+    files). Returns None if the flag is absent or the pool is empty."""
+    if not getattr(args, "cookies_pool", None):
+        return None
+    from infrastructure.transports.cookie_pool import CookiePool
+    try:
+        return CookiePool.from_directory(args.cookies_pool)
+    except (FileNotFoundError, ValueError) as exc:
+        log.warning(
+            f"[warning] --cookies-pool: {exc} — cookie rotation disabled"
+        )
+        return None
 
 
 async def _build_proxy_pool(

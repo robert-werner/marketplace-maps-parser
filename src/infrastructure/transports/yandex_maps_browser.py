@@ -423,6 +423,7 @@ class YandexMapsBrowserTransport:
         debug_dir: str | Path = "debug_yandex_maps",
         proxy: dict[str, str] | None = None,
         proxy_pool: Any = None,
+        cookie_pool: Any = None,
         cookies: list[dict[str, Any]] | None = None,
         humanize: bool = True,
         cookies_path: str | Path | None = None,
@@ -438,6 +439,7 @@ class YandexMapsBrowserTransport:
         self.debug_dir = Path(debug_dir)
         self.proxy = proxy
         self.proxy_pool = proxy_pool
+        self.cookie_pool = cookie_pool
         self.cookies = cookies
         self.humanize = humanize
         self.cookies_path = (
@@ -492,15 +494,21 @@ class YandexMapsBrowserTransport:
                     f"{proxy.get('server', '?')}"
                 )
 
+        cookies = self.cookies
+        if self.cookie_pool is not None:
+            fresh = self.cookie_pool.next_jar()
+            if fresh is not None:
+                cookies = fresh
+
         async with browser_cls(
             proxy=proxy,
             seed=None,
             humanize=self.humanize,
         ) as browser:
             page = await browser.new_page()
-            if self.cookies:
+            if cookies:
                 try:
-                    await page.context.add_cookies(self.cookies)
+                    await page.context.add_cookies(cookies)
                 except Exception as exc:
                     print(
                         f"Я.Карты: не удалось внедрить cookies: {exc}"

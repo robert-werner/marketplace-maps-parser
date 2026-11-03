@@ -334,6 +334,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--cookies-pool",
+        default=None,
+        help=(
+            "Directory of logged-in session cookie jars for rotation — "
+            "one jar per *.json file (Playwright/DevTools JSON or "
+            "Netscape format). Jars are consumed round-robin: between "
+            "sessions (parallel streams) and between restart attempts; "
+            "failed jars are marked blocked and skipped. Same idea as "
+            "--proxy-list. Build the pool by exporting working sessions "
+            "with --save-cookies or a cookie-extension export. A single "
+            "--cookies takes priority over the pool."
+        ),
+    )
+    parser.add_argument(
+        "--cookie-attempts",
+        type=int,
+        default=3,
+        help=(
+            "Ozon with --cookies-pool: retry an errored collection with "
+            "a new browser session and the next jar (default: 3, bounded "
+            "by the pool size). With --cookie-attempts 1 jars are rotated "
+            "per session, not per retry."
+        ),
+    )
+    parser.add_argument(
+        "--cookie-rotate-max-restarts",
+        type=int,
+        default=3,
+        help=(
+            "Yandex / Yandex.Maps / WB: max browser restarts with the "
+            "next jar from --cookies-pool after a captcha or block "
+            "(default: 3, mirrors --proxy-rotate-max-restarts)."
+        ),
+    )
+    parser.add_argument(
         "--parallel-sessions",
         type=int,
         default=1,

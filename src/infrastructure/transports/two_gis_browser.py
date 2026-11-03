@@ -106,6 +106,7 @@ class TwoGisBrowserTransport:
         debug_dir: str | Path = "debug_2gis",
         proxy: dict[str, str] | None = None,
         proxy_pool: Any = None,
+        cookie_pool: Any = None,
         cookies: list[dict[str, Any]] | None = None,
         humanize: bool = True,
         use_api: bool = True,
@@ -117,6 +118,7 @@ class TwoGisBrowserTransport:
         self.debug_dir = Path(debug_dir)
         self.proxy = proxy
         self.proxy_pool = proxy_pool
+        self.cookie_pool = cookie_pool
         self.cookies = cookies
         self.humanize = humanize
         self.use_api = use_api
@@ -149,15 +151,21 @@ class TwoGisBrowserTransport:
         if proxy is None and self.proxy_pool is not None:
             proxy = await self._next_proxy()
 
+        cookies = self.cookies
+        if self.cookie_pool is not None:
+            fresh = self.cookie_pool.next_jar()
+            if fresh is not None:
+                cookies = fresh
+
         async with browser_cls(
             proxy=proxy,
             seed=None,
             humanize=self.humanize,
         ) as browser:
             page = await browser.new_page()
-            if self.cookies:
+            if cookies:
                 try:
-                    await page.context.add_cookies(self.cookies)
+                    await page.context.add_cookies(cookies)
                 except Exception as exc:
                     print(
                         f"2ГИС: не удалось внедрить cookies: {exc}"

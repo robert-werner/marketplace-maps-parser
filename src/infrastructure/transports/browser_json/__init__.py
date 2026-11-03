@@ -65,6 +65,7 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin):
         debug_dir: str = "debug_ozon",
         proxy: dict[str, str] | None = None,
         proxy_pool: Any | None = None,
+        cookie_pool: Any | None = None,
         seed: int | None = None,
         pin: dict[str, Any] | None = None,
         humanize: bool = True,
@@ -92,6 +93,8 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin):
         self.debug_dir = Path(debug_dir)
         self.proxy = proxy
         self.proxy_pool = proxy_pool
+        self.cookie_pool = cookie_pool
+        self._session_cookies: list[dict[str, Any]] | None = None
         self.seed = seed
         self.pin = pin
         self.humanize = humanize
@@ -128,10 +131,26 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin):
             else self.proxy_pool.next(),
         )
 
+    async def _next_session_cookies(self) -> list[dict[str, Any]] | None:
+        """Next cookie jar for a new session.
+
+        Pool: the next jar (None if exhausted). Otherwise — the
+        user's single jar (self.cookies, possibly None).
+        """
+        if self.cookie_pool is None:
+            return self.cookies
+        next_jar_async = getattr(self.cookie_pool, "next_jar_async", None)
+        return (
+            await next_jar_async()
+            if next_jar_async is not None
+            else self.cookie_pool.next_jar()
+        )
+
     @asynccontextmanager
     async def _browser_context(self) -> AsyncIterator[Any]:
         """Create an Invisible Playwright session for pagination or scroll."""
         proxy = await self._next_session_proxy()
+        self._session_cookies = await self._next_session_cookies()
         async with _import_invisible_playwright()(
             proxy=proxy,
             seed=self.seed,
@@ -144,10 +163,11 @@ class BrowserJsonTransport(FetchMixin, CardReadingMixin):
         """Logged-in session cookies into the page's context BEFORE
         the first navigation (no-op without cookies; a failure is a
         warning, not fatal)."""
-        if not self.cookies:
+        if not (self._session_cookies or self.cookies):
             return
+        cookies = self._session_cookies or self.cookies
         try:
-            await page.context.add_cookies(self.cookies)
+            await page.context.add_cookies(cookies)
         except Exception as exc:
             print(
                 "Ozon (playwright): WARNING — не удалось подставить "
