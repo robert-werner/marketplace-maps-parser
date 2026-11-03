@@ -43,6 +43,25 @@ from marketplace_maps_parser.collectors import (
 )
 
 
+async def _verify_proxy_if_used(args: argparse.Namespace) -> None:
+    """Pre-flight: verify the egress IP through the proxy before any browser
+    session starts. A down proxy would otherwise make every session launch
+    raise ``GeoTimezoneError``; a blip is tolerated by the retry inside
+    ``verify_proxy_egress``. Only checks ``--proxy`` (a single pinned proxy);
+    a ``--proxy-list``/``--free-proxy`` pool is handled by the per-collector
+    rotation logic.
+    """
+    if not getattr(args, "proxy", None):
+        return
+    from marketplace_maps_parser.collectors import _build_single_proxy
+    from infrastructure.transports.browser_common import verify_proxy_egress
+
+    proxy = _build_single_proxy(args)
+    if proxy is None:
+        return
+    await verify_proxy_egress(proxy)
+
+
 async def _run(args: argparse.Namespace) -> int:
     from marketplace_maps_parser.collectors import (
         _collect_2gis,
@@ -52,6 +71,8 @@ async def _run(args: argparse.Namespace) -> int:
         _collect_yandex,
         _collect_yandex_maps,
     )
+
+    await _verify_proxy_if_used(args)
 
     if args.marketplace == "ozon":
         return await _collect_ozon(args)

@@ -15,6 +15,7 @@ or manual User-Agent overrides are installed here.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from shared.logging import get_logger
@@ -147,3 +148,66 @@ async def install_resource_blocker(
             await page.route(pattern, _route)
         except Exception:
             log.debug("page.route() subscription failed")
+
+
+async def verify_proxy_egress(
+    proxy: dict[str, str],
+    *,
+    attempts: int = 3,
+    delay_s: float = 5.0,
+    timeout: float = 10.0,
+    budget: float = 15.0,
+) -> str:
+    """Verify a proxy is live by discovering its public egress IP.
+
+    Reuses invisible_playwright's own egress-discovery (same three echo
+    endpoints, same per-request timeout/budget), so a pass here is a real
+    signal that the upcoming browser launch will NOT die with ``GeoTimezoneError``
+    on every page.
+
+    Each probe runs in a worker thread (``discover_egress_ip`` is a blocking
+    ``requests``-based call) so the event loop is never stalled. A failing
+    proxy is retried with a growing pause, so a restart/rate-limit blip is
+    tolerated instead of being treated as a fatal failure.
+
+    Returns the public egress IP (str). Raises ``GeoTimezoneError`` after
+    ``attempts`` failed probes, or ``ValueError`` if the proxy dict is
+    malformed. Callers should only invoke this when a proxy is actually used
+    (no proxy → no check needed).
+    """
+    from invisible_core._geo import discover_egress_ip
+    from invisible_playwright import GeoTimezoneError
+
+    last_exc: GeoTimezoneError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            ip = await asyncio.to_thread(
+                discover_egress_ip,
+                proxy,
+                timeout=timeout,
+                budget=budget,
+            )
+            log.info(f"proxy egress IP verified: {ip}")
+            return ip
+        except GeoTimezoneError as exc:
+            last_exc = exc
+        except Exception as exc:  # e.g. a proxy dict without a port
+            raise ValueError(
+                f"proxy egress check: malformed proxy {proxy!r}: {exc}"
+            ) from exc
+        if attempt < attempts:
+            delay = delay_s * attempt
+            log.warning(
+                f"proxy egress check failed (attempt {attempt}/{attempts}) "
+                f"after {delay:.0f}s — retrying in {delay:.0f}s: "
+                f"{str(last_exc)[:160]}"
+            )
+            await asyncio.sleep(delay)
+
+    assert last_exc is not None
+    raise GeoTimezoneError(
+        f"Proxy not reachable after {attempts} egress-IP probes "
+        "(the pool is likely down or rate-limited; every browser session "
+        "would fail on page load). "
+        f"Last error: {last_exc}"
+    ) from last_exc

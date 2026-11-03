@@ -326,17 +326,15 @@ class WildberriesBrowserTransport:
                 channel_max = self.proxy_rotate_max_restarts
                 if channel_restarts > channel_max:
                     log.warning(
-                        "WB: channel error after %d retries, giving up: %s",
-                        channel_max, exc,
+                        f"WB: channel error after {channel_max} retries, "
+                        f"giving up: {exc}"
                     )
                     raise
                 if self.proxy_pool is not None:
                     self._proxy = self._next_proxy()
                 log.info(
-                    "WB: channel error — restart %d/%d, %s",
-                    channel_restarts,
-                    channel_max,
-                    str(exc)[:120],
+                    f"WB: channel error — restart {channel_restarts}/"
+                    f"{channel_max}, {str(exc)[:120]}"
                 )
                 await asyncio.sleep(2.0)
             finally:
