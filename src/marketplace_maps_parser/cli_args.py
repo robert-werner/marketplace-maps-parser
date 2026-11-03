@@ -3,14 +3,59 @@
 
 One function: :func:`parse_args` — the ~40-flag argparse tree for every
 marketplace/transport/proxy/pacing option the CLI supports.
+
+Environment variables (the ``MMP_`` prefix is read when the matching CLI
+flag is **not** provided on the command line — CLI always wins):
+
+    MMP_PROXY                 --proxy
+    MMP_PROXY_LIST            --proxy-list
+    MMP_PROXY_ATTEMPTS        --proxy-attempts
+    MMP_FREE_PROXY            --free-proxy        (1/true/yes/on = on)
+    MMP_COOKIES               --cookies
+    MMP_SAVE_COOKIES          --save-cookies
+    MMP_COOKIES_POOL          --cookies-pool
+    MMP_COOKIE_ATTEMPTS       --cookie-attempts
+    MMP_COOKIE_ROTATE_MAX_RESTARTS  --cookie-rotate-max-restarts
+    MMP_FREE_PROXY_COUNTRY    --free-proxy-country
+    MMP_FREE_PROXY_ELITE      --free-proxy-elite  (1/true/yes/on = on)
 """
 from __future__ import annotations
+
+import os
+from typing import Any
 
 from shared.logging import get_logger
 
 log = get_logger("cli_args")
 
 import argparse
+
+
+def _env_or(name: str, default: Any):
+    """Return ``os.environ[name]`` if it is set and non-empty, else
+    ``default``. Empty-string env vars count as "not set"."""
+    val = os.environ.get(name)
+    if val is None or val == "":
+        return default
+    return val
+
+
+def _env_int(name: str, default: int) -> int:
+    """Return ``os.environ[name]`` as an int, falling back to ``default``
+    when the variable is unset or not a valid integer."""
+    val = os.environ.get(name)
+    if val is None or val == "":
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        log.warning(f"Env var {name}={val!r} is not an int; using default {default}")
+        return default
+
+
+def _env_bool(name: str) -> bool:
+    """Return ``True`` when the env var is 1/true/yes/on (case-insensitive)."""
+    return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -261,7 +306,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--proxy",
-        default=None,
+        default=_env_or("MMP_PROXY", None),
         help=(
             "Single proxy URL for all requests. Format: "
             "'http://host:port' or 'http://user:pass@host:port' "
@@ -271,7 +316,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--proxy-list",
-        default=None,
+        default=_env_or("MMP_PROXY_LIST", None),
         help=(
             "Path to a file with proxy URLs (one per line, '#'"
             "comments allowed). Proxies are rotated per page — "
@@ -284,7 +329,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--proxy-attempts",
         type=int,
-        default=3,
+        default=_env_int("MMP_PROXY_ATTEMPTS", 3),
         help=(
             "Ozon with --proxy-list: retry an errored collection with "
             "a new browser session and the next proxy (default: 3 "
@@ -309,7 +354,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--cookies",
-        default=None,
+        default=_env_or("MMP_COOKIES", None),
         help=(
             "Path to cookies of a LOGGED-IN Ozon session, injected "
             "into every browser page. Unlocks the full review list "
@@ -321,7 +366,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--save-cookies",
-        default=None,
+        default=_env_or("MMP_SAVE_COOKIES", None),
         help=(
             "Yandex flows only: persist the browser session "
             "cookies to this file (default: yandex_cookies.json "
@@ -335,7 +380,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--cookies-pool",
-        default=None,
+        default=_env_or("MMP_COOKIES_POOL", None),
         help=(
             "Directory of logged-in session cookie jars for rotation — "
             "one jar per *.json file (Playwright/DevTools JSON or "
@@ -350,7 +395,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cookie-attempts",
         type=int,
-        default=3,
+        default=_env_int("MMP_COOKIE_ATTEMPTS", 3),
         help=(
             "Ozon with --cookies-pool: retry an errored collection with "
             "a new browser session and the next jar (default: 3, bounded "
@@ -361,7 +406,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cookie-rotate-max-restarts",
         type=int,
-        default=3,
+        default=_env_int("MMP_COOKIE_ROTATE_MAX_RESTARTS", 3),
         help=(
             "Yandex / Yandex.Maps / WB: max browser restarts with the "
             "next jar from --cookies-pool after a captcha or block "
@@ -402,7 +447,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--free-proxy-country",
-        default=None,
+        default=_env_or("MMP_FREE_PROXY_COUNTRY", None),
         help=(
             "--free-proxy only: filter proxies by country. "
             "Comma-separated ISO country codes, e.g. 'RU' or "
@@ -580,4 +625,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--products-file supports only --marketplace ozon"
         )
+
+    # Boolean flags (store_true has no --no-* form): apply the env var
+    # value only when the flag itself was NOT passed on the command line
+    # (argparse leaves it at its default — False — in that case).
+    if not parsed.free_proxy and _env_bool("MMP_FREE_PROXY"):
+        parsed.free_proxy = True
+    if not parsed.free_proxy_elite and _env_bool("MMP_FREE_PROXY_ELITE"):
+        parsed.free_proxy_elite = True
+
     return parsed
