@@ -288,15 +288,25 @@ class WildberriesBrowserTransport:
         )
         # Wait for the route link rather than an unconditional page sleep.
         link = page.locator(f'a[href*="/catalog/{nm_id}/feedbacks"]').first
-        if self.settle_ms > 0 or (
-            product_response is not None and product_response.status >= 400
-        ):
+        # A 498 response means the JS challenge gate is up; it can take
+        # tens of seconds to resolve, so track it explicitly.
+        challenge = (
+            product_response is not None
+            and product_response.status >= 400
+        )
+        if self.settle_ms > 0 or challenge:
             try:
                 # Don't replace an interstitial before the site completes
-                # its own redirect. Ready pages pay no extra fixed delay.
+                # its own redirect. Ready pages pay no extra fixed delay;
+                # a challenge gate may take up to tens of seconds, so use a
+                # longer bound to avoid misfiring HTTP498 on slow solves.
+                challenge_wait = min(self.timeout_ms, 30_000)
                 await link.wait_for(
                     state="attached",
-                    timeout=min(self.timeout_ms, 8_000),
+                    timeout=(
+                        challenge_wait if challenge
+                        else min(self.timeout_ms, 8_000)
+                    ),
                 )
             except Exception as exc:
                 if product_response is not None and (
@@ -323,13 +333,14 @@ class WildberriesBrowserTransport:
             )
             if response is not None and response.status >= 400:
                 # Allow the site a bounded chance to finish a redirect, but
-                # never mistake an empty challenge document for EOF.
+                # never mistake an empty challenge document for EOF. The
+                # challenge gate can resolve slowly, so use a longer bound.
                 try:
                     await page.locator(
                         '[data-testid="feedbacks-list-item"]',
                     ).first.wait_for(
                         state="attached",
-                        timeout=min(8_000, self.timeout_ms),
+                        timeout=min(30_000, self.timeout_ms),
                     )
                 except Exception as exc:
                     raise _wb_error(response.status) from exc
