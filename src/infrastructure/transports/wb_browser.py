@@ -5,6 +5,7 @@ No guessed product-root/shard mapping; API URLs come from this page's traffic.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from typing import Any
@@ -25,7 +26,10 @@ from infrastructure.transports.wb_api import (
     is_feedback_url,
 )
 from shared.async_iterators import closing_iterator
+from shared.logging import get_logger
 from shared.url_parsers import extract_nm_id
+
+log = get_logger("infrastructure.transports.wb_browser")
 
 
 class WildberriesBlockError(RuntimeError):
@@ -154,6 +158,7 @@ class WildberriesBrowserTransport:
         self.incomplete_reason: str | None = None
         self._page: Any = None
         self._browser_ctx: Any = None
+        self._seen_review_keys: set[str] = set()
 
     def _next_proxy(self) -> dict[str, str] | None:
         """Pull the next proxy from the pool (None if no pool)."""
@@ -172,6 +177,42 @@ class WildberriesBrowserTransport:
             self._page = None
             self._browser_ctx = None
             self._capture = None
+
+    def _review_key(self, card: Any) -> str:
+        """Stable key for cross-restart dedupe.
+
+        API cards carry a stable ``id``; DOM cards do not, so fall back to a
+        content-based composite (same key used for in-session DOM dedupe).
+        """
+        if isinstance(card, dict):
+            rid = card.get("id")
+            if rid is not None:
+                return f"id:{rid}"
+            return "c:" + repr(
+                (
+                    card.get("author"),
+                    card.get("date"),
+                    card.get("rating"),
+                    card.get("text"),
+                    card.get("sections"),
+                )
+            )
+        return f"raw:{id(card)}"
+
+    def _dedupe(self, cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return ``cards`` minus any already emitted this transport run.
+
+        Keeps the per-transport ``_seen_review_keys`` set as the source of
+        truth across browser-session restarts, so a channel-error restart can
+        never emit the same review twice.
+        """
+        fresh: list[dict[str, Any]] = []
+        for card in cards:
+            key = self._review_key(card)
+            if key not in self._seen_review_keys:
+                self._seen_review_keys.add(key)
+                fresh.append(card)
+        return fresh
 
     async def _apply_stealth(self, page: Any) -> None:
         """Inject stealth overrides into the page context."""
@@ -195,6 +236,7 @@ class WildberriesBrowserTransport:
                 yield batch
             return
         restarts = 0
+        channel_restarts = 0
         current_cookies = (
             self.cookie_pool.next_jar()
             if self.cookie_pool is not None
@@ -273,6 +315,30 @@ class WildberriesBrowserTransport:
                     f"WB: block — restart {proxy_part}{jar_part}, "
                     f"attempt {restarts}/{max_restarts},",
                 )
+            except Exception as exc:
+                # Browser/channel-level failure: the session is broken
+                # (Playwright channel error, a crashed browser, a reset
+                # connection mid-fetch). Re-create the session and retry.
+                # A single proxy needs no rotation — just re-open the page
+                # — which is what turns a flaky proxy connection into a
+                # reliable run.
+                channel_restarts += 1
+                channel_max = self.proxy_rotate_max_restarts
+                if channel_restarts > channel_max:
+                    log.warning(
+                        "WB: channel error after %d retries, giving up: %s",
+                        channel_max, exc,
+                    )
+                    raise
+                if self.proxy_pool is not None:
+                    self._proxy = self._next_proxy()
+                log.info(
+                    "WB: channel error — restart %d/%d, %s",
+                    channel_restarts,
+                    channel_max,
+                    str(exc)[:120],
+                )
+                await asyncio.sleep(2.0)
             finally:
                 await self._cleanup()
 
@@ -379,6 +445,10 @@ class WildberriesBrowserTransport:
                         if card["id"] not in seen_api:
                             seen_api.add(card["id"])
                             fresh.append(card)
+                    # Cross-restart dedupe: the same review id could be
+                    # re-fetched after a browser-session restart; the
+                    # per-transport _seen_review_keys set filters it out.
+                    fresh = self._dedupe(fresh)
                     # Small batches keep --max-reviews/cancellation cheap
                     # even if WB delivered a large cached response.
                     for offset in range(0, len(fresh), 100):
@@ -433,6 +503,8 @@ class WildberriesBrowserTransport:
                     seen.add(key)
                     dom_fresh.append(item)
             if dom_fresh:
+                # Cross-restart dedupe (per-transport _seen_review_keys).
+                dom_fresh = self._dedupe(dom_fresh)
                 stalled = 0
                 yield dom_fresh
             else:
