@@ -98,7 +98,7 @@ class CookiePool:
         cls,
         path: str | Path,
         recursive: bool = False,
-    ) -> "CookiePool":
+    ) -> CookiePool:
         """Build a pool from a directory: each ``*.json`` file is one jar.
 
         Both formats supported (see :mod:`cookie_loader`):
@@ -123,7 +123,7 @@ class CookiePool:
     def from_entries(
         cls,
         entries: list[tuple[Path | None, list[dict[str, Any]]]],
-    ) -> "CookiePool":
+    ) -> CookiePool:
         """Build a pool from explicit ``(source, jar)`` pairs."""
         return cls(entries)
 
@@ -131,7 +131,7 @@ class CookiePool:
     def from_list(
         cls,
         jars: list[list[dict[str, Any]]],
-    ) -> "CookiePool":
+    ) -> CookiePool:
         """In-memory pool (no source files)."""
         return cls.from_entries([(None, jar) for jar in jars])
 
@@ -157,6 +157,26 @@ class CookiePool:
                 if _jar_key(self._cookies[idx]) not in self._blocked:
                     return idx
             return None
+
+    def _current_index(self) -> int | None:
+        """Index of the next non-blocked jar without advancing the
+        rotation pointer."""
+        with self._lock:
+            if self.available_count == 0:
+                return None
+            idx = self._index
+            for _ in range(len(self._cookies)):
+                if _jar_key(self._cookies[idx]) not in self._blocked:
+                    return idx
+                idx = (idx + 1) % len(self._cookies)
+            return None
+
+    def peek_jar(self) -> list[dict[str, Any]] | None:
+        """Next available jar without advancing the pointer. Used to
+        learn which jar the next run consumed so a failed run's jar
+        can be marked blocked on rotation."""
+        idx = self._current_index()
+        return self._cookies[idx] if idx is not None else None
 
     def next(self) -> Path | None:
         """Source file of the next jar, or ``None`` if all are blocked."""
@@ -194,7 +214,9 @@ class CookiePool:
             if isinstance(jar, (str, Path)):
                 source = str(Path(jar).resolve())
                 key = None
-                for src, cookies in zip(self._sources, self._cookies):
+                for src, cookies in zip(
+                    self._sources, self._cookies, strict=True,
+                ):
                     if src is not None and str(src.resolve()) == source:
                         key = _jar_key(cookies)
                         break

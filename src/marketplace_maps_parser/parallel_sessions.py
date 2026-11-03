@@ -131,6 +131,24 @@ def merge_jsonl_dedup(
     return count
 
 
+def _jar_files_for_sessions(
+    args: Any, sessions: int
+) -> list[str | None]:
+    """One cookie jar file per child session, taken round-robin from
+    --cookies-pool (the same idea as _proxy_urls_for_sessions). A
+    pinned --cookies or no pool -> Nones (direct / pinned jar)."""
+    if (
+        not getattr(args, "cookies_pool", None)
+        or args.cookies
+    ):
+        return [None] * sessions
+    jars = sorted(Path(args.cookies_pool).glob("*.json"))
+    return [
+        str(jars[i % len(jars)]) if jars else None
+        for i in range(sessions)
+    ]
+
+
 def _proxy_urls_for_sessions(
     args: Any, sessions: int
 ) -> list[str | None]:
@@ -166,8 +184,14 @@ def _proxy_urls_for_sessions(
 def _child_command(
     args: Any, part_path: Path, start_page: int,
     max_pages: int, proxy_url: str | None,
+    jar_url: str | None = None,
 ) -> list[str]:
     cmd = _product_child_command(args, args.url, part_path, proxy_url)
+    # Each child owns precisely one page range and, when --cookies-pool
+    # is set, its own jar (the parent distributes jars so parallel
+    # sessions don't consume one jar in lockstep).
+    if jar_url:
+        cmd += ["--cookies", jar_url]
     # Override parent scope: each child owns precisely one page range.
     cmd += [
         "--strategy", "pagination", "--start-page", str(start_page),
@@ -238,6 +262,7 @@ async def run_parallel_sessions(args: Any) -> int:
         args.start_page, args.max_pages, args.parallel_sessions,
     )
     proxies = _proxy_urls_for_sessions(args, len(chunks))
+    jars = _jar_files_for_sessions(args, len(chunks))
     out = Path(args.output)
     parts = [out.with_name(f"{out.name}.part{i}.jsonl")
              for i in range(len(chunks))]
@@ -249,7 +274,10 @@ async def run_parallel_sessions(args: Any) -> int:
         start, size = chunks[i]
         try:
             exits[i] = await _run_child(
-                _child_command(args, parts[i], start, size, proxies[i]), env,
+                _child_command(
+                    args, parts[i], start, size,
+                    proxies[i], jars[i],
+                ), env,
             )
         except OSError as exc:
             print(f"Child {i} could not start: {exc}")

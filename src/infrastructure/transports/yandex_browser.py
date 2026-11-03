@@ -563,10 +563,12 @@ class YandexBrowserTransport:
                     )
                 if self.cookie_pool is not None and jar_available:
                     restart_with.append("новые cookies")
+                suffix = (
+                    f" с {'и '.join(restart_with)}" if restart_with else ""
+                )
                 print(
                     f"Я.Маркет: капча пережила эскалацию — рестарт "
-                    f"браузера{' с ' + 'и '.join(restart_with) if restart_with else ''}, "
-                    f"попытка {restarts}/{max_restarts}"
+                    f"браузера{suffix}, попытка {restarts}/{max_restarts}"
                 )
 
     async def _next_proxy(self) -> dict[str, str] | None:

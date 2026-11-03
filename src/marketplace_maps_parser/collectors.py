@@ -50,6 +50,9 @@ from marketplace_maps_parser.transport_factory import (
 from marketplace_maps_parser.transport_factory import (
     _build_single_proxy as _build_single_proxy,
 )
+from marketplace_maps_parser.transport_factory import (
+    _build_cookie_pool as _build_cookie_pool,
+)
 
 
 async def _draw_session_proxies(
@@ -111,7 +114,10 @@ def _load_existing_reviews(
     return seen
 
 
-async def _collect_ozon_once(args: argparse.Namespace) -> int:
+async def _collect_ozon_once(
+    args: argparse.Namespace,
+    shared_cookie_pool: Any = None,
+) -> int:
     # Lazy import: heavy transport modules are imported only when
     # the user selects them.
     from infrastructure.marketplaces.ozon import OzonAdapter
@@ -119,7 +125,7 @@ async def _collect_ozon_once(args: argparse.Namespace) -> int:
     if not args.debug_dir:
         args.debug_dir = "debug_ozon"
 
-    transport = await _build_ozon_transport(args)
+    transport = await _build_ozon_transport(args, shared_cookie_pool)
     adapter = OzonAdapter(browser_transport=transport)
 
 
@@ -192,19 +198,50 @@ async def _collect_ozon_once(args: argparse.Namespace) -> int:
 
 
 async def _collect_ozon(args: argparse.Namespace) -> int:
-    """Retry failed runs on distinct proxies with fresh browser sessions.
+    """Retry failed runs on distinct proxies or cookie jars with fresh
+    browser sessions.
 
     Keep already-written records via --resume; do not reuse a fingerprint
-    or cookies within one poisoned browser session. A partial run without
-    an exception (e.g. --max-reviews) is not automatically retried.
-    """
-    if (
-        not args.proxy_list
-        or args.proxy
-        or getattr(args, "proxy_attempts", 1) == 1
-    ):
+    or cookies within one poisoned session. A partial run without
+    an exception (e.g. --max-reviews) is not automatically retried."""
+    proxy_retry = (
+        bool(args.proxy_list)
+        and not args.proxy
+        and getattr(args, "proxy_attempts", 1) > 1
+    )
+    cookie_retry = (
+        not args.cookies
+        and bool(getattr(args, "cookies_pool", None))
+        and getattr(args, "cookie_attempts", 3) > 1
+    )
+    if not proxy_retry and not cookie_retry:
         return await _collect_ozon_once(args)
+    if proxy_retry:
+        return await _collect_ozon_proxy_retries(args)
+    return await _collect_ozon_cookie_retries(args)
 
+
+def _run_status_has_error(args: argparse.Namespace) -> bool:
+    """True when the status report names an error; False when the run
+    stopped without one (e.g. partial). Unreadable metadata is treated
+    as no error (same leniency as the original loop)."""
+    from marketplace_maps_parser.run_state import status_path
+    try:
+        import json
+
+        metadata = json.loads(
+            status_path(args.output).read_text(encoding="utf-8"),
+        )
+    except (OSError, ValueError):
+        return False
+    return bool(metadata.get("error"))
+
+
+async def _collect_ozon_proxy_retries(
+    args: argparse.Namespace,
+) -> int:
+    """Retry failed runs on distinct proxies with fresh sessions (the
+    original --proxy-attempts behaviour)."""
     from infrastructure.transports.proxy_pool import ProxyPool
 
     pool = ProxyPool.from_file(args.proxy_list)
@@ -224,17 +261,7 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
             status = getattr(args, "_run_status", "failed")
             if status == "complete":
                 return count
-            from marketplace_maps_parser.run_state import status_path
-
-            try:
-                import json
-
-                metadata = json.loads(
-                    status_path(args.output).read_text(encoding="utf-8"),
-                )
-            except (OSError, ValueError):
-                metadata = {}
-            if not metadata.get("error"):
+            if not _run_status_has_error(args):
                 return count
             pool.mark_blocked(pinned_proxy)
             if index + 1 < attempts:
@@ -247,6 +274,49 @@ async def _collect_ozon(args: argparse.Namespace) -> int:
         args.resume = original_resume
         if hasattr(args, "_pinned_proxy"):
             delattr(args, "_pinned_proxy")
+
+
+async def _collect_ozon_cookie_retries(
+    args: argparse.Namespace,
+) -> int:
+    """Retry failed runs on distinct cookie jars with fresh sessions.
+
+    One jar per run: the jar consumed by a failed run is marked
+    blocked, so rotation skips it on later attempts (same rule as
+    proxies). A pinned single --cookies jar is handled by
+    _collect_ozon_once instead (no rotation)."""
+    from marketplace_maps_parser.transport_factory import (
+        _build_cookie_pool,
+    )
+
+    pool = await _build_cookie_pool(args)
+    if pool is None:
+        return await _collect_ozon_once(args)
+    attempts = min(getattr(args, "cookie_attempts", 3), pool.size)
+    original_resume = args.resume
+    count = 0
+    try:
+        for index in range(attempts):
+            failed_jar = pool.peek_jar()
+            args.resume = original_resume or index > 0
+            count += await _collect_ozon_once(
+                args, shared_cookie_pool=pool,
+            )
+            status = getattr(args, "_run_status", "failed")
+            if status == "complete":
+                return count
+            if not _run_status_has_error(args):
+                return count
+            if failed_jar is not None:
+                pool.mark_blocked(failed_jar)
+            if index + 1 < attempts:
+                print(
+                    f"Ozon: ошибка с cookies #{index + 1}; "
+                    "пробую новую браузерную сессию с новыми cookies"
+                )
+        return count
+    finally:
+        args.resume = original_resume
 
 
 async def _probe_yandex_page_count(
@@ -340,6 +410,17 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
             f"{len(cookies)} шт."
         )
 
+    # Cookie jar pool for rotation: a single pinned --cookies jar
+    # bypasses the pool (same rule as a pinned proxy).
+    cookie_pool = None
+    if not cookies and getattr(args, "cookies_pool", None):
+        cookie_pool = await _build_cookie_pool(args)
+        if cookie_pool is None:
+            print(
+                "[warning] yandex: cookie-пул пуст — запуск без "
+                "ротации cookies"
+            )
+
     debug_dir = args.debug_dir or "debug_yandex"
 
     parallel = max(
@@ -405,6 +486,7 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
                 proxy=session_proxy,
                 cookies=cookies,
                 humanize=not args.no_humanize,
+                cookie_pool=cookie_pool,
                 # Only session 0 checkpoints the cookie jar — N
                 # sessions writing one file would clobber it.
                 cookies_path=(
@@ -439,6 +521,7 @@ async def _collect_yandex(args: argparse.Namespace) -> int:
             debug_dir=debug_dir,
             proxy=proxy,
             proxy_pool=proxy_pool,
+            cookie_pool=cookie_pool,
             cookies=cookies,
             humanize=not args.no_humanize,
             dup_pages_stop=getattr(args, "dup_pages_stop", 3),
@@ -502,6 +585,15 @@ async def _collect_yandex_maps(args: argparse.Namespace) -> int:
             f"{len(cookies)} шт."
         )
 
+    cookie_pool = None
+    if not cookies and getattr(args, "cookies_pool", None):
+        cookie_pool = await _build_cookie_pool(args)
+        if cookie_pool is None:
+            print(
+                "[warning] yandex_maps: cookie-пул пуст — запуск без "
+                "ротации cookies"
+            )
+
     debug_dir = args.debug_dir or "debug_yandex_maps"
 
     transport = YandexMapsBrowserTransport(
@@ -511,6 +603,7 @@ async def _collect_yandex_maps(args: argparse.Namespace) -> int:
         debug_dir=debug_dir,
         proxy=proxy,
         proxy_pool=proxy_pool,
+        cookie_pool=cookie_pool,
         cookies=cookies,
         humanize=not args.no_humanize,
         cookies_path=(
@@ -577,6 +670,15 @@ async def _collect_2gis(args: argparse.Namespace) -> int:
             f"{len(cookies)} шт."
         )
 
+    cookie_pool = None
+    if not cookies and getattr(args, "cookies_pool", None):
+        cookie_pool = await _build_cookie_pool(args)
+        if cookie_pool is None:
+            print(
+                "[warning] 2gis: cookie-пул пуст — запуск без "
+                "ротации cookies"
+            )
+
     debug_dir = args.debug_dir or "debug_2gis"
 
     transport = TwoGisBrowserTransport(
@@ -588,6 +690,7 @@ async def _collect_2gis(args: argparse.Namespace) -> int:
         debug_dir=debug_dir,
         proxy=proxy,
         proxy_pool=proxy_pool,
+        cookie_pool=cookie_pool,
         cookies=cookies,
         humanize=not args.no_humanize,
     )
@@ -617,14 +720,19 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
     )
 
     proxy = _build_single_proxy(args) if args.proxy else None
+    proxy_pool = None
     if proxy is None:
-        selected = await _draw_session_proxies(
-            await _build_proxy_pool(args), 1,
-        )
-        proxy = selected[0] if selected else None
+        proxy_pool = await _build_proxy_pool(args)
+    cookie_pool = None
+    if not args.cookies and getattr(args, "cookies_pool", None):
+        cookie_pool = await _build_cookie_pool(args)
+        if cookie_pool is None:
+            print("[warning] wb: cookie-пул пуст")
     transport = WildberriesBrowserTransport(
         product_url=args.url, timeout_ms=args.timeout_ms,
         settle_ms=args.settle_ms, proxy=proxy,
+        proxy_pool=proxy_pool,
+        cookie_pool=cookie_pool,
         humanize=not args.no_humanize,
         cookies=load_cookies_file(args.cookies) if args.cookies else None,
         use_api=not getattr(args, "no_browser_api", False),

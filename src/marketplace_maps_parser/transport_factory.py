@@ -11,6 +11,7 @@ log = get_logger("transport_factory")
 
 async def _build_ozon_transport(
     args: argparse.Namespace,
+    shared_cookie_pool: Any = None,
 ) -> Any:
     """Construct the Ozon transport based on --transport.
 
@@ -39,9 +40,14 @@ async def _build_ozon_transport(
             f"Ozon: загружено cookies из {args.cookies}: "
             f"{len(cookies)} шт."
         )
-    # Cookie jar pool: only when the single --cookies jar is not pinned,
-    # same logic as the proxy pool (--pinned proxy bypasses the pool).
-    cookie_pool = None if args.cookies else await _build_cookie_pool(args)
+    # Cookie jar pool: a caller-side shared pool wins (retry loops
+    # need ONE pool so each attempt consumes the next jar); when the
+    # single --cookies jar is pinned, the pool is bypassed entirely
+    # (same logic as the pinned proxy).
+    if shared_cookie_pool is not None:
+        cookie_pool = shared_cookie_pool
+    else:
+        cookie_pool = None if args.cookies else await _build_cookie_pool(args)
 
     if args.transport != "playwright":
         raise ValueError(f"Unknown browser transport: {args.transport!r}")

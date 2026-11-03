@@ -264,7 +264,7 @@ class WildberriesBrowserTransport:
                     else "proxy=none"
                 )
                 jar_part = (
-                    f" + новые cookies"
+                    " + новые cookies"
                     if self.cookie_pool is not None
                     and jar_available
                     else ""
