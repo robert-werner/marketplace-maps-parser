@@ -79,17 +79,26 @@ async def test_api_only_skips_browser():
 
 @pytest.mark.asyncio
 async def test_api_only_raises_http_error():
-    """API-only should raise _wb_error on HTTP >= 400."""
+    """API-only raises _wb_error on HTTP >= 400.
+
+    The anti-bot gate (``_check_api_available``) is forced to pass so the
+    test exercises the API-only path; the API itself returns 498.
+    """
+    import types
+
+    from unittest.mock import patch, MagicMock
+
     with patch("httpx.Client") as mock_client:
-        import httpx
+        import httpx  # noqa: F401
+
         mock_resp = MagicMock()
         mock_resp.status_code = 498
         mock_resp.json.return_value = {}
 
         mock_client_instance = MagicMock()
         mock_client_instance.get.return_value = mock_resp
-        mock_client.return_value.__enter__.return_value = mock_client_instance
         mock_client_instance.__exit__.side_effect = lambda *a: None
+        mock_client.return_value.__enter__.return_value = mock_client_instance
 
         from infrastructure.transports.wb_browser import (
             WildberriesBrowserTransport,
@@ -101,8 +110,15 @@ async def test_api_only_raises_http_error():
             use_api_only=True,
         )
 
+        async def _check_pass(self, url):
+            return True
+
+        transport._check_api_available = types.MethodType(
+            _check_pass, transport
+        )
+
         with pytest.raises(HTTP498Error):
             async for _ in transport.iter_review_batches(
-                "https://www.wildberries.ru/catalog/245236068/detail.aspx",
+                "https://www.wildberries.ru/catalog/245236068/detail.aspx"
             ):
                 pass

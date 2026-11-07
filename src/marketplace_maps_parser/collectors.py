@@ -737,6 +737,8 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
         cookies=load_cookies_file(args.cookies) if args.cookies else None,
         use_api=not getattr(args, "no_browser_api", False),
         max_pages=args.max_pages,
+        use_api_only=getattr(args, "wb_api_only", False),
+        session_seconds=getattr(args, "wb_session_seconds", 0),
     )
     adapter = WildberriesAdapter(transport)
     return await _run_unified_json(

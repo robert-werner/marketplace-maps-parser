@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -133,6 +134,7 @@ class WildberriesBrowserTransport:
         cookie_rotate_max_restarts: int = 3,
         use_api_only: bool = False,
         use_stealth: bool = True,
+        session_seconds: int = 0,
     ) -> None:
         self.product_url = product_url
         self.timeout_ms = timeout_ms
@@ -150,6 +152,7 @@ class WildberriesBrowserTransport:
         self.cookie_rotate_max_restarts = cookie_rotate_max_restarts
         self.use_api_only = use_api_only
         self.use_stealth = use_stealth
+        self.session_seconds = session_seconds
         self.collection_path = "dom"
         self._capture: ResponseCapture | None = None
         self.last_product_title: str | None = None
@@ -214,6 +217,39 @@ class WildberriesBrowserTransport:
                 fresh.append(card)
         return fresh
 
+    async def _check_api_available(self, product_url: str) -> bool:
+        """Anti-bot gate: is the WB reviews API reachable right now?
+
+        API-only mode is only safe *after* the anti-bot check passes. A
+        quick probe to the reviews endpoint confirms it; a 403/498/5xx
+        (or any network failure) means the WAF has this proxy blocked,
+        so the browser path (which can solve the challenge) is preferred.
+        """
+        try:
+            import httpx
+        except ImportError:
+            return False
+        nm_id = extract_nm_id(product_url)
+        proxy_str = None
+        if self.proxy and isinstance(self.proxy, dict):
+            proxy_str = self.proxy.get("server")
+        url = (
+            f"https://www.wildberries.ru/api/v2/catalog/"
+            f"{nm_id}/reviews?size=1"
+        )
+        try:
+            with httpx.Client(
+                proxy=proxy_str, timeout=min(self.timeout_ms, 20_000) / 1000.0,
+                follow_redirects=True,
+            ) as client:
+                resp = client.get(url, follow_redirects=True)
+        except Exception as exc:
+            log.warning(
+                f"WB API pre-check failed (network): {exc}"
+            )
+            return False
+        return resp.status_code == 200
+
     async def _apply_stealth(self, page: Any) -> None:
         """Inject stealth overrides into the page context."""
         if not self.use_stealth:
@@ -232,9 +268,15 @@ class WildberriesBrowserTransport:
         """Yield review batches, rotating proxy and cookies on WB
         block."""
         if self.use_api_only:
-            async for batch in self._iter_api_only(product_url):
-                yield batch
-            return
+            # API-only is only used AFTER the anti-bot check passes.
+            if await self._check_api_available(product_url):
+                async for batch in self._iter_api_only(product_url):
+                    yield batch
+                return
+            log.warning(
+                "WB API unavailable (anti-bot blocked); "
+                "falling back to browser path"
+            )
         restarts = 0
         channel_restarts = 0
         current_cookies = (
@@ -482,7 +524,18 @@ class WildberriesBrowserTransport:
 
         seen: set[str] = set()
         stalled = 0
+        session_start = time.monotonic()
         for _ in range(self.max_scrolls + 1):
+            if (
+                self.session_seconds
+                and time.monotonic() - session_start
+                >= self.session_seconds
+            ):
+                self.incomplete_reason = (
+                    f"WB session cap {self.session_seconds}s reached "
+                    "before scroll finished"
+                )
+                return
             snapshot = await page.evaluate(_READ_PAGE_JS)
             if not isinstance(snapshot, dict):
                 raise RuntimeError('Wildberries: DOM отзывов недоступен')

@@ -18,6 +18,8 @@ flag is **not** provided on the command line — CLI always wins):
     MMP_COOKIE_ROTATE_MAX_RESTARTS  --cookie-rotate-max-restarts
     MMP_FREE_PROXY_COUNTRY    --free-proxy-country
     MMP_FREE_PROXY_ELITE      --free-proxy-elite  (1/true/yes/on = on)
+    MMP_WB_API_ONLY           --wb-api-only      (1/true/yes/on = on)
+    MMP_WB_SESSION_SECONDS    --wb-session-seconds
 """
 from __future__ import annotations
 
@@ -275,6 +277,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Disable optional API fast paths for WB, Yandex.Market, "
             "Avito, Maps and 2GIS; keep browser DOM/SSR for comparison."
+        ),
+    )
+    parser.add_argument(
+        "--wb-api-only",
+        action="store_true",
+        default=_env_bool("MMP_WB_API_ONLY"),
+        help=(
+            "Wildberries only: collect reviews via the browserless reviews "
+            "API (httpx, no browser). Only used after an anti-bot pre-check "
+            "of the API passes; if the API is blocked (403/498/5xx or "
+            "network error), automatically falls back to the browser path "
+            "which can solve the WAF challenge. "
+            "Env: MMP_WB_API_ONLY."
+        ),
+    )
+    parser.add_argument(
+        "--wb-session-seconds",
+        type=int,
+        default=_env_int("MMP_WB_SESSION_SECONDS", 110),
+        help=(
+            "Wildberries only: hard cap (seconds) on a single browser "
+            "scroll session. 0 = no cap. Keeps the session short so the "
+            "proxy's egress IP is less likely to change mid-run. "
+            "Env: MMP_WB_SESSION_SECONDS."
         ),
     )
     parser.add_argument(
