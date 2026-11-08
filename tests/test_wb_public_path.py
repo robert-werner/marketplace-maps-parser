@@ -90,3 +90,21 @@ async def test_no_browser_api_flag_skips_public_api(monkeypatch):
 
 def test_stealth_shim_off_by_default():
     assert WildberriesBrowserTransport(product_url=URL).use_stealth is False
+
+
+async def test_missing_httpx_falls_back_to_browser(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def no_public_api(name, globals=None, locals=None, fromlist=(), level=0):
+        if fromlist and "wb_public_api" in fromlist:
+            raise ImportError("No module named 'httpx'")
+        return real_import(name, globals, locals, fromlist, level)
+    monkeypatch.setattr(builtins, "__import__", no_public_api)
+    t = WildberriesBrowserTransport(product_url=URL)
+    with patch(
+        "infrastructure.transports.wb_browser.import_invisible_playwright",
+        side_effect=RuntimeError("browser stub"),
+    ) as mock_ip, pytest.raises(RuntimeError, match="browser stub"):
+        await _collect(t)
+    assert mock_ip.called

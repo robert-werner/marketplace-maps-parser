@@ -107,3 +107,12 @@ def test_proxy_url_keeps_credentials():
         "server": "socks5://h:1", "username": "u@x", "password": "p:w",
     }) == "socks5://u%40x:p%3Aw@h:1"
     assert api.proxy_url({"server": "h:2", "username": "u"}) == "http://u@h:2"
+
+
+async def test_warm_cache_guesses_neighbour_basket():
+    calls: list[str] = []
+    api._basket_cache[NM // 100_000 - 3] = f"https://{BASKET}"
+    await api.collect(NM, transport=_router(calls=calls))
+    basket_calls = [c for c in calls if "wbbasket.ru" in c]
+    assert basket_calls[0].startswith(f"https://{BASKET}/")
+    assert len(basket_calls) <= 4  # guess wave only, no 64-host fan-out

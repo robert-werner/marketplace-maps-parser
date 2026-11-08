@@ -14,7 +14,6 @@ from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from infrastructure.transports import wb_public_api
 from infrastructure.transports.browser_api import ResponseCapture
 from infrastructure.transports.browser_common import (
     import_invisible_playwright,
@@ -442,6 +441,10 @@ class WildberriesBrowserTransport:
         consumed (the public hosts accept datacenter IPs).
         """
         try:
+            # Lazy: an image built without httpx (otzovik installs the
+            # package with --no-deps) must still reach the browser path.
+            from infrastructure.transports import wb_public_api
+
             result = await wb_public_api.collect(
                 extract_nm_id(product_url),
                 proxy=self.proxy,
@@ -465,7 +468,8 @@ class WildberriesBrowserTransport:
         if result.window_limited:
             self.incomplete_reason = (
                 f"WB public API serves only the newest ~"
-                f"{wb_public_api.FEEDBACK_WINDOW} reviews with text: "
+                f"{wb_public_api.FEEDBACK_WINDOW} reviews with text "
+                "(the site shows the same window): "
                 f"returned {result.returned} of {result.text_count} "
                 "(imt-wide)"
             )

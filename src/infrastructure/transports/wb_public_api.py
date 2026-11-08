@@ -133,6 +133,45 @@ async def resolve_card(
         except (httpx.HTTPError, ValueError):
             pass
 
+    guess = _guess_baskets(vol)
+    rest = [i for i in range(1, BASKET_MAX + 1) if i not in guess]
+    # Neighbouring vols live on the same or an adjacent basket, so a warm
+    # cache needs 1-4 requests instead of a 64-host fan-out (measured on
+    # 541 products: 34 wasted 404s per product without the guess).
+    for wave in (guess, rest):
+        hit = await _first_hit(client, [_basket_base(i) for i in wave], path)
+        if hit is not None:
+            _basket_cache[vol] = hit[0]
+            return hit[1]
+    raise WbPublicApiError(
+        f"card.json for nm {nm_id} not found on basket-01..{BASKET_MAX:02d}"
+    )
+
+
+def _basket_base(number: int) -> str:
+    return f"https://basket-{number:02d}.wbbasket.ru"
+
+
+def _guess_baskets(vol: int) -> list[int]:
+    """Basket numbers to try first: the nearest cached vol's and its +-1/2."""
+    if not _basket_cache:
+        return []
+    nearest = min(_basket_cache, key=lambda v: abs(v - vol))
+    try:
+        number = int(_basket_cache[nearest].split("basket-")[1].split(".")[0])
+    except (IndexError, ValueError):
+        return []
+    order = (number, number + 1, number - 1, number + 2)
+    return [n for n in order if 1 <= n <= BASKET_MAX]
+
+
+async def _first_hit(
+    client: httpx.AsyncClient, bases: list[str], path: str,
+) -> tuple[str, dict[str, Any]] | None:
+    """Probe ``bases`` concurrently; the first 200 wins, the rest cancel."""
+    if not bases:
+        return None
+
     async def probe(base: str) -> tuple[str, dict[str, Any]] | None:
         try:
             resp = await client.get(base + path, timeout=10.0)
@@ -142,23 +181,17 @@ async def resolve_card(
             return None
         return None
 
-    tasks = [
-        asyncio.create_task(probe(f"https://basket-{i:02d}.wbbasket.ru"))
-        for i in range(1, BASKET_MAX + 1)
-    ]
+    tasks = [asyncio.create_task(probe(base)) for base in bases]
     try:
         for fut in asyncio.as_completed(tasks):
             hit = await fut
             if hit is not None:
-                _basket_cache[vol] = hit[0]
-                return hit[1]
+                return hit
     finally:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    raise WbPublicApiError(
-        f"card.json for nm {nm_id} not found on basket-01..{BASKET_MAX:02d}"
-    )
+    return None
 
 
 def _is_feedback_payload(payload: Any) -> bool:
