@@ -34,7 +34,18 @@ log = get_logger("infrastructure.transports.wb_browser")
 
 
 class WildberriesBlockError(RuntimeError):
-    """Raised when WB actively blocks access (498, 403, captcha)."""
+    """Raised when WB actively blocks access (498, 403, captcha).
+
+    ``retryable`` distinguishes permanent IP/account blocks (False — the
+    proxy is burned) from transient failures (True — back off and retry
+    the same proxy without burning it).
+    """
+
+    retryable = False
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        self.retryable = retryable
+        super().__init__(message)
 
 
 class HTTP498Error(WildberriesBlockError):
@@ -49,12 +60,31 @@ class CaptchaError(WildberriesBlockError):
     """Raised on captcha challenge."""
 
 
+class RetryableHTTPError(WildberriesBlockError):
+    """Raised on a transient HTTP failure (429, 5xx).
+
+    Not an IP/account block: the same proxy is fine again after a short
+    pause, so it must not be burned.
+    """
+
+    retryable = True
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, retryable=True)
+
+
 def _wb_error(status: int) -> WildberriesBlockError:
-    """Map HTTP status to a specific WB block error type."""
+    """Map an HTTP status to the matching WB block error.
+
+    498/403 are permanent IP/account blocks; 429 and 5xx are transient
+    and must be retried (with backoff) rather than burning the proxy.
+    """
     if status == 498:
         return HTTP498Error(f"HTTP {status}")
     if status == 403:
         return HTTP403Error(f"HTTP {status}")
+    if status == 429 or 500 <= status < 600:
+        return RetryableHTTPError(f"HTTP {status}")
     return WildberriesBlockError(f"HTTP {status}")
 
 
@@ -320,6 +350,7 @@ class WildberriesBrowserTransport:
             except WildberriesBlockError as exc:
                 restarts += 1
                 failed_proxy = self._proxy
+                is_retryable = getattr(exc, "retryable", False)
                 max_restarts = max(
                     self.proxy_rotate_max_restarts,
                     self.cookie_rotate_max_restarts,
@@ -329,13 +360,14 @@ class WildberriesBrowserTransport:
                     and self.cookie_pool is None
                 ) or restarts > max_restarts:
                     raise
-                # Mark the proxy that just got blocked so future rotations
-                # skip it (the pool's round-robin only cycles through
-                # unblocked proxies). Without this, a single pinned proxy
-                # that is already 498'd is retried endlessly.
+                # Mark the proxy as burned only for permanent blocks
+                # (498/403). Transient errors (429, 5xx) leave the proxy
+                # usable for the next attempt — that is exactly what a
+                # rate-limit/server-blip means: retry it after a pause,
+                # do not burn it.
                 pool_stats = None
                 if self.proxy_pool is not None:
-                    if failed_proxy is not None:
+                    if failed_proxy is not None and not is_retryable:
                         self.proxy_pool.mark_blocked(failed_proxy)
                     pool_stats = self.proxy_pool.get_stats()
                     if self.proxy_pool.all_blocked():
@@ -344,7 +376,7 @@ class WildberriesBrowserTransport:
                             f"{pool_stats['blocked']}/{pool_stats['total']} "
                             "proxies blocked)",
                         ) from exc
-                if self.proxy_pool is not None:
+                if self.proxy_pool is not None and not is_retryable:
                     self._proxy = self._next_proxy()
                 jar_available = (
                     self.cookie_pool is None
@@ -383,8 +415,12 @@ class WildberriesBrowserTransport:
                 )
                 print(
                     f"WB: block — restart {proxy_part}{jar_part}"
-                    f"{pool_part}, attempt {restarts}/{max_restarts},",
+                    f"{pool_part}, attempt {restarts}/{max_restarts},"
+                    f"{' [transient]' if is_retryable else ''},",
                 )
+                # Back off so we do not hammer the same (possibly still
+                # rate-limited) IP and extend the WAF window.
+                await asyncio.sleep(2.0)
             except Exception as exc:
                 # Browser/channel-level failure: the session is broken
                 # (Playwright channel error, a crashed browser, a reset
