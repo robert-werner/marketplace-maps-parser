@@ -1,0 +1,231 @@
+{
+ "valuation": "4.9",
+ "valuationSum": 194,
+ "feedbackCount": 41,
+ "feedbackCountWithPhoto": 4,
+ "feedbackCountWithText": 27,
+ "feedbackCountWithVideo": 4,
+ "feedbacks": [
+  {
+   "id": "iLU8cwMBZrqoqg3mbDZk",
+   "wbUserDetails": {
+    "name": ""
+   },
+   "nmId": 831948063,
+   "text": "Нам на пункте выдачи сотрудник ответила, что надо оплатить товар и написать вам о возврате товара, а отказ она оформить не может. И что теперь делать?",
+   "pros": "",
+   "cons": "",
+   "matchingSize": "",
+   "matchingPhoto": "",
+   "matchingDescription": "",
+   "productValuation": 3,
+   "color": "Черный",
+   "size": "0",
+   "createdDate": "2026-10-24T09:19:19.555Z",
+   "updatedDate": "2026-11-01T08:59:11.306Z",
+   "answer": {
+    "text": "Здравствуйте! Нам очень жаль, что Вам пришлось столкнуться с данной ситуацией. При обнаружении следов влаги, плесени или иных дефектов на упаковке либо самом товаре до момента его оплаты в пункте выдачи заказов,  Вы имеете полное право отказаться от него. Пожалуйста, обратитесь по данному случаю в службу поддержки WB. Желаем комфортных и безопасных поездок!",
+    "state": "wbRu",
+    "lastUpdate": null,
+    "createDate": "2026-10-26T05:13:32.988Z",
+    "rejectReason": null,
+    "metadata": {
+     "editText": "",
+     "editRejectReason": 0
+    }
+   },
+   "video": null,
+   "votes": {
+    "pluses": 0,
+    "minuses": 0
+   },
+   "rank": 29.0,
+   "statusId": 16,
+   "reasons": {
+    "good": [],
+    "bad": []
+   },
+   "parentFeedbackId": "B6tOiaWMghQYsFw6En89",
+   "excludedFromRating": {
+    "isExcluded": true,
+    "reasons": [
+     "notProduct"
+    ]
+   }
+  },
+  {
+   "id": "B6tOiaWMghQYsFw6En89",
+   "wbUserDetails": {
+    "name": ""
+   },
+   "nmId": 831948063,
+   "text": "Не покупайте у этого продавца. Товар пришёл залитым. Плесень  отчетливо видно. Деньги и не малые не вернули, сказали, что это не заводской брак. А то что товар страшно использовать, вдруг замкнёт, это нормально. Так что покупать у этого продавца не советую",
+   "pros": "",
+   "cons": "",
+   "matchingSize": "",
+   "matchingPhoto": "",
+   "matchingDescription": "",
+   "productValuation": 1,
+   "color": "Черный",
+   "size": "0",
+   "createdDate": "2026-10-22T10:57:57.999Z",
+   "updatedDate": "2026-11-01T08:59:11.306Z",
+   "answer": {
+    "text": "Здравствуйте! Благодарим за выбор бренда RoadGo. Нам очень жаль, что Вам пришлось столкнуться с данной ситуацией. Все наши устройства отгружены на склады WB новые, в идеальном состоянии, в заводской упаковке и пленке. За дальнейшее хранение, транспортировку и логистику отвечает площадка. Мы, как продавец, никак не можем это проконтролировать. Обращаем Ваше внимание, что у всех покупателей есть возможность и право проверить товар при получении на пункте выдачи заказов. При обнаружении любых дефектов, следов влаги или брака, Вы могли сразу отказаться от него до оплаты — в таком случае товар зафиксировали бы как повреждённый.  Пожалуйста, обратитесь в службу поддержки WB. Желаем комфортных и безопасных поездок!",
+    "state": "wbRu",
+    "lastUpdate": null,
+    "createDate": "2026-10-22T12:33:14.945Z",
+    "rejectReason": null,
+    "metadata": {
+     "editText": "",
+     "editRejectReason": 0
+    }
+   },
+   "photos": [
+    {
+     "id": 0,
+     "key": "1/c4192dc9-4151-4384-bdd6-58ddd63f3067",
+     "isBlurred": false,
+     "isReady": true
+    },
+    {
+     "id": 0,
+     "key": "5/7635155a-4faf-4558-b786-c0213e7a91ce",
+     "isBlurred": false,
+     "isReady": true
+    },
+    {
+     "id": 0,
+     "key": "4/49c4d9c5-0207-4402-b30e-1b88d26ef69f",
+     "isBlurred": false,
+     "isReady": true
+    },
+    {
+     "id": 0,
+     "key": "4/8e488971-cc2a-493f-b875-392b7d3c5cec",
+     "isBlurred": false,
+     "isReady": true
+    },
+    {
+     "id": 0,
+     "key": "5/ead19769-3f95-4146-92af-1ad750444a09",
+     "isBlurred": false,
+     "isReady": true
+    }
+   ],
+   "video": null,
+   "votes": {
+    "pluses": 0,
+    "minuses": 0
+   },
+   "rank": 28.0,
+   "statusId": 16,
+   "reasons": {
+    "good": [],
+    "bad": []
+   },
+   "childFeedbackId": "iLU8cwMBZrqoqg3mbDZk",
+   "excludedFromRating": {
+    "isExcluded": false,
+    "reasons": []
+   },
+   "tags": [
+    {
+     "id": 8,
+     "status": "minus"
+    }
+   ]
+  },
+  {
+   "id": "svtqThsFrmkNiNL0PJEx",
+   "wbUserDetails": {
+    "name": "Юрий"
+   },
+   "nmId": 831948063,
+   "text": "Минус 1.нет аккумулятора.вместо него конденсатор Спутник ловит долго.Камеры видит. Снимает чисто",
+   "pros": "",
+   "cons": "",
+   "matchingSize": "",
+   "matchingPhoto": "",
+   "matchingDescription": "",
+   "productValuation": 4,
+   "color": "Черный",
+   "size": "0",
+   "createdDate": "2026-10-07T07:06:02.949Z",
+   "updatedDate": "2026-10-07T12:29:47.507Z",
+   "answer": {
+    "text": "Здравствуйте, Юрий! Благодарим за покупку и за выбор бренда RoadGo! В гибрид видеорегистратора с радар-детектором RoadGo Horizon встроен суперконденсатор, который служит для корректного завершения видеозаписи при выключении устройства, а также обеспечивает быстрое включение при перепадах температур. Мы уверены, что 2K видеорегистратор с радар-детектором Horizon позволит четко фиксировать детали в кадре, а компактная и мощная патч-антенна последнего поколения поможет справиться с маломощными радарами. Желаем комфортных и безопасных поездок!",
+    "state": "wbRu",
+    "lastUpdate": null,
+    "createDate": "2026-10-07T12:26:54.424Z",
+    "rejectReason": null,
+    "metadata": {
+     "editText": "",
+     "editRejectReason": 0
+    }
+   },
+   "video": null,
+   "votes": {
+    "pluses": 0,
+    "minuses": 0
+   },
+   "rank": 27.0,
+   "statusId": 16,
+   "reasons": {
+    "good": [],
+    "bad": []
+   },
+   "excludedFromRating": {
+    "isExcluded": false,
+    "reasons": []
+   }
+  },
+  {
+   "id": "other-variant-review",
+   "wbUserDetails": {
+    "name": ""
+   },
+   "nmId": 111,
+   "text": "Нам на пункте выдачи сотрудник ответила, что надо оплатить товар и написать вам о возврате товара, а отказ она оформить не может. И что теперь делать?",
+   "pros": "",
+   "cons": "",
+   "matchingSize": "",
+   "matchingPhoto": "",
+   "matchingDescription": "",
+   "productValuation": 3,
+   "color": "Черный",
+   "size": "0",
+   "createdDate": "2026-10-24T09:19:19.555Z",
+   "updatedDate": "2026-11-01T08:59:11.306Z",
+   "answer": {
+    "text": "Здравствуйте! Нам очень жаль, что Вам пришлось столкнуться с данной ситуацией. При обнаружении следов влаги, плесени или иных дефектов на упаковке либо самом товаре до момента его оплаты в пункте выдачи заказов,  Вы имеете полное право отказаться от него. Пожалуйста, обратитесь по данному случаю в службу поддержки WB. Желаем комфортных и безопасных поездок!",
+    "state": "wbRu",
+    "lastUpdate": null,
+    "createDate": "2026-10-26T05:13:32.988Z",
+    "rejectReason": null,
+    "metadata": {
+     "editText": "",
+     "editRejectReason": 0
+    }
+   },
+   "video": null,
+   "votes": {
+    "pluses": 0,
+    "minuses": 0
+   },
+   "rank": 29.0,
+   "statusId": 16,
+   "reasons": {
+    "good": [],
+    "bad": []
+   },
+   "parentFeedbackId": "B6tOiaWMghQYsFw6En89",
+   "excludedFromRating": {
+    "isExcluded": true,
+    "reasons": [
+     "notProduct"
+    ]
+   }
+  }
+ ]
+}

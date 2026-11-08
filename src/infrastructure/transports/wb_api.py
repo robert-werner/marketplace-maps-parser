@@ -28,6 +28,8 @@ def feedback_cards(
     if not isinstance(data, dict):
         data = payload
     feedbacks = data.get("feedbacks")
+    if feedbacks is None and "feedbacks" in data:
+        return []  # imt without reviews: WB sends "feedbacks": null
     if not isinstance(feedbacks, list):
         raise BrowserApiError("WB response contains no feedbacks array")
     cards = []

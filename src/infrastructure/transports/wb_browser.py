@@ -6,12 +6,15 @@ No guessed product-root/shard mapping; API URLs come from this page's traffic.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
+from pathlib import Path
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
+from infrastructure.transports import wb_public_api
 from infrastructure.transports.browser_api import ResponseCapture
 from infrastructure.transports.browser_common import (
     import_invisible_playwright,
@@ -58,6 +61,21 @@ class HTTP403Error(WildberriesBlockError):
 
 class CaptchaError(WildberriesBlockError):
     """Raised on captcha challenge."""
+
+
+class IPReputationError(WildberriesBlockError):
+    """WB passed the challenge but refuses this egress IP.
+
+    After the anti-bot token is issued the SPA shows «Возможно, нужно
+    выключить VPN» and loads no data (measured on an OVH datacenter IP).
+    Permanent for this proxy: burn it and rotate.
+    """
+
+
+# WBAAS anti-bot cookie issued once the JS challenge is solved (measured:
+# 10 s on a datacenter IP, ~21 s incl. SPA render on a residential one).
+WB_TOKEN_COOKIE = "x_wbaas_token"
+_VPN_BLOCK_MARKER = "выключить VPN"
 
 
 class RetryableHTTPError(WildberriesBlockError):
@@ -163,8 +181,9 @@ class WildberriesBrowserTransport:
         cookie_pool: Any = None,
         cookie_rotate_max_restarts: int = 3,
         use_api_only: bool = False,
-        use_stealth: bool = True,
+        use_stealth: bool = False,
         session_seconds: int = 0,
+        save_cookies_path: str | None = None,
     ) -> None:
         self.product_url = product_url
         self.timeout_ms = timeout_ms
@@ -183,7 +202,9 @@ class WildberriesBrowserTransport:
         self.use_api_only = use_api_only
         self.use_stealth = use_stealth
         self.session_seconds = session_seconds
+        self.save_cookies_path = save_cookies_path
         self.collection_path = "dom"
+        self.last_rating_only_count: int | None = None
         self._capture: ResponseCapture | None = None
         self.last_product_title: str | None = None
         self.last_total_count: int | None = None
@@ -247,39 +268,6 @@ class WildberriesBrowserTransport:
                 fresh.append(card)
         return fresh
 
-    async def _check_api_available(self, product_url: str) -> bool:
-        """Anti-bot gate: is the WB reviews API reachable right now?
-
-        API-only mode is only safe *after* the anti-bot check passes. A
-        quick probe to the reviews endpoint confirms it; a 403/498/5xx
-        (or any network failure) means the WAF has this proxy blocked,
-        so the browser path (which can solve the challenge) is preferred.
-        """
-        try:
-            import httpx
-        except ImportError:
-            return False
-        nm_id = extract_nm_id(product_url)
-        proxy_str = None
-        if self.proxy and isinstance(self.proxy, dict):
-            proxy_str = self.proxy.get("server")
-        url = (
-            f"https://www.wildberries.ru/api/v2/catalog/"
-            f"{nm_id}/reviews?size=1"
-        )
-        try:
-            with httpx.Client(
-                proxy=proxy_str, timeout=min(self.timeout_ms, 20_000) / 1000.0,
-                follow_redirects=True,
-            ) as client:
-                resp = client.get(url, follow_redirects=True)
-        except Exception as exc:
-            log.warning(
-                f"WB API pre-check failed (network): {exc}"
-            )
-            return False
-        return resp.status_code == 200
-
     async def _apply_stealth(self, page: Any) -> None:
         """Inject stealth overrides into the page context."""
         if not self.use_stealth:
@@ -297,16 +285,14 @@ class WildberriesBrowserTransport:
     ) -> AsyncIterator[list[dict[str, Any]]]:
         """Yield review batches, rotating proxy and cookies on WB
         block."""
-        if self.use_api_only:
-            # API-only is only used AFTER the anti-bot check passes.
-            if await self._check_api_available(product_url):
-                async for batch in self._iter_api_only(product_url):
-                    yield batch
+        if self.use_api or self.use_api_only:
+            # Public API first: no browser, no WBAAS token (the 498
+            # challenge guards only www.wildberries.ru).
+            public = await self._try_public_api(product_url)
+            if public is not None:
+                for offset in range(0, len(public), 100):
+                    yield public[offset:offset + 100]
                 return
-            log.warning(
-                "WB API unavailable (anti-bot blocked); "
-                "falling back to browser path"
-            )
         restarts = 0
         channel_restarts = 0
         current_cookies = (
@@ -446,6 +432,89 @@ class WildberriesBrowserTransport:
             finally:
                 await self._cleanup()
 
+    async def _try_public_api(
+        self, product_url: str,
+    ) -> list[dict[str, Any]] | None:
+        """Collect via the public API; None means "use the browser".
+
+        ``use_api_only`` turns a failure into an error instead of a
+        browser fallback. A single ``--proxy`` is reused; a pool is not
+        consumed (the public hosts accept datacenter IPs).
+        """
+        try:
+            result = await wb_public_api.collect(
+                extract_nm_id(product_url),
+                proxy=self.proxy,
+                timeout_s=min(self.timeout_ms, 30_000) / 1000.0,
+            )
+        except Exception as exc:
+            if self.use_api_only:
+                raise WildberriesBlockError(
+                    f"WB public API failed (--wb-api-only, no browser "
+                    f"fallback): {exc}"
+                ) from exc
+            log.warning(
+                f"WB public API failed, falling back to browser: {exc}"
+            )
+            return None
+        self.collection_path = "public_api"
+        self.last_product_title = result.title
+        self.last_total_count = result.total_count
+        self.last_average_rating = result.average_rating
+        self.last_rating_only_count = result.rating_only_count
+        if result.window_limited:
+            self.incomplete_reason = (
+                f"WB public API serves only the newest ~"
+                f"{wb_public_api.FEEDBACK_WINDOW} reviews with text: "
+                f"returned {result.returned} of {result.text_count} "
+                "(imt-wide)"
+            )
+        return self._dedupe(result.cards)
+
+    async def _wait_for_token(self, page: Any, timeout_ms: int) -> bool:
+        """Wait until the WBAAS challenge has issued its cookie."""
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while True:
+            try:
+                cookies = await page.context.cookies()
+            except Exception:
+                return False
+            if any(
+                isinstance(c, dict) and c.get("name") == WB_TOKEN_COOKIE
+                for c in cookies
+            ):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.5)
+
+    async def _ip_refused(self, page: Any) -> bool:
+        """True when the SPA shows WB's «turn off VPN» refusal."""
+        try:
+            text = await page.evaluate(
+                "document.body ? document.body.innerText : ''"
+            )
+        except Exception:
+            return False
+        return isinstance(text, str) and _VPN_BLOCK_MARKER in text
+
+    async def _save_session_cookies(self, page: Any) -> None:
+        """Persist the solved-challenge jar for reuse (--save-cookies)."""
+        if not self.save_cookies_path:
+            return
+        try:
+            cookies = await page.context.cookies()
+            Path(self.save_cookies_path).write_text(
+                json.dumps(cookies, ensure_ascii=False, indent=1),
+                encoding="utf-8",
+            )
+            log.info(
+                f"WB: saved {len(cookies)} cookies to "
+                f"{self.save_cookies_path}"
+            )
+        except Exception as exc:
+            log.warning(f"WB: cookie save failed: {exc}")
+
     async def _iter_product_and_reviews(
         self, product_url: str,
     ) -> AsyncIterator[list[dict[str, Any]]]:
@@ -460,29 +529,38 @@ class WildberriesBrowserTransport:
         link = page.locator(f'a[href*="/catalog/{nm_id}/feedbacks"]').first
         # A 498 response means the JS challenge gate is up; it can take
         # tens of seconds to resolve, so track it explicitly.
-        challenge = (
-            product_response is not None
-            and product_response.status >= 400
-        )
-        if self.settle_ms > 0 or challenge:
+        status = product_response.status if product_response else 0
+        challenge = status == 498
+        if challenge:
+            # The challenge is solved when its cookie appears — judge the
+            # stage by its own signal, not by a downstream selector.
+            if not await self._wait_for_token(
+                page, min(self.timeout_ms, 60_000),
+            ):
+                raise _wb_error(498)
+        if self.settle_ms > 0 or status >= 400:
             try:
-                # Don't replace an interstitial before the site completes
-                # its own redirect. Ready pages pay no extra fixed delay;
-                # a challenge gate may take up to tens of seconds, so use a
-                # longer bound to avoid misfiring HTTP498 on slow solves.
-                challenge_wait = min(self.timeout_ms, 30_000)
                 await link.wait_for(
                     state="attached",
                     timeout=(
-                        challenge_wait if challenge
+                        min(self.timeout_ms, 30_000) if status >= 400
                         else min(self.timeout_ms, 8_000)
                     ),
                 )
             except Exception as exc:
-                if product_response is not None and (
-                    product_response.status >= 400
-                ):
-                    raise _wb_error(product_response.status) from exc
+                if await self._ip_refused(page):
+                    raise IPReputationError(
+                        "WB refused this egress IP after the challenge "
+                        "(«выключить VPN»)"
+                    ) from exc
+                if challenge:
+                    # Token issued, page did not render: a session-level
+                    # failure (channel restart), not a burned proxy.
+                    raise RuntimeError(
+                        "WB: page did not render after the challenge"
+                    ) from exc
+                if status >= 400:
+                    raise _wb_error(status) from exc
         if not urlsplit(page.url).path.rstrip('/').endswith('/feedbacks'):
             title = page.locator('h1').first
             if await title.count():
@@ -513,6 +591,10 @@ class WildberriesBrowserTransport:
                         timeout=min(30_000, self.timeout_ms),
                     )
                 except Exception as exc:
+                    if await self._ip_refused(page):
+                        raise IPReputationError(
+                            "WB refused this egress IP («выключить VPN»)"
+                        ) from exc
                     raise _wb_error(response.status) from exc
         selector = '[data-testid="feedbacks-list-item"]'
         cards = page.locator(selector)
@@ -521,9 +603,14 @@ class WildberriesBrowserTransport:
                 state='visible', timeout=self.timeout_ms,
             )
         except Exception as exc:
+            if await self._ip_refused(page):
+                raise IPReputationError(
+                    "WB refused this egress IP («выключить VPN»)"
+                ) from exc
             raise RuntimeError(
                 'Wildberries: карточки отзывов не загрузились'
             ) from exc
+        await self._save_session_cookies(page)
         if self.use_api and self._capture is not None:
             for response in reversed(self._capture.responses):
                 try:
@@ -644,61 +731,6 @@ class WildberriesBrowserTransport:
         else:
             self.incomplete_reason = "Wildberries: max_scrolls reached"
 
-    async def _iter_api_only(
-        self, product_url: str,
-    ) -> AsyncIterator[list[dict[str, Any]]]:
-        """Direct httpx call to WB reviews API; no browser."""
-        nm_id = extract_nm_id(product_url)
-        size = 200
-        seen_api: set[str] = set()
-        seen_urls: set[str] = set()
-        try:
-            import httpx
-        except ImportError:
-            raise RuntimeError("httpx not installed for API-only mode")
-
-        proxy_str = None
-        if self.proxy and isinstance(self.proxy, dict):
-            proxy_str = self.proxy.get("server")
-
-        with httpx.Client(
-            proxy=proxy_str,
-            timeout=self.timeout_ms / 1000.0,
-            headers={"User-Agent": "Mozilla/5.0"},
-            follow_redirects=True,
-        ) as client:
-            current = (
-                f"https://www.wildberries.ru/api/v2/catalog/"
-                f"{nm_id}/reviews?size={size}"
-            )
-            while True:
-                if current in seen_urls:
-                    raise RuntimeError("WB API repeated cursor")
-                seen_urls.add(current)
-                resp = client.get(current, follow_redirects=True)
-                if resp.status_code >= 400:
-                    if self.proxy_pool and self.proxy_pool.all_blocked():
-                        raise _wb_error(resp.status_code)
-                    raise _wb_error(resp.status_code)
-                payload = resp.json()
-                self.collection_path = "api_only"
-                api_cards = feedback_cards(payload, nm_id)
-                fresh = []
-                for card in api_cards:
-                    if card["id"] not in seen_api:
-                        seen_api.add(card["id"])
-                        fresh.append(card)
-                for offset in range(0, len(fresh), 100):
-                    yield fresh[offset:offset + 100]
-                next_url = feedback_next_url(current, payload)
-                if not next_url or not fresh:
-                    self.incomplete_reason = (
-                        "WB API window: full review coverage unverified"
-                    )
-                    return
-                current = next_url
-        self.incomplete_reason = "WB API page limit reached"
-
     async def __aenter__(self) -> "WildberriesBrowserTransport":
         """Backward-compatible: enter creates a single browser context."""
         await self._cleanup()
@@ -729,7 +761,7 @@ class WildberriesBrowserTransport:
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         await self._cleanup()
 
-__all__ = ['WildberriesBrowserTransport']
+__all__ = ['IPReputationError', 'WildberriesBrowserTransport']
 
 _WB_STEALTH_JS = """
 (() => {

@@ -285,11 +285,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         default=_env_bool("MMP_WB_API_ONLY"),
         help=(
-            "Wildberries only: collect reviews via the browserless reviews "
-            "API (httpx, no browser). Only used after an anti-bot pre-check "
-            "of the API passes; if the API is blocked (403/498/5xx or "
-            "network error), automatically falls back to the browser path "
-            "which can solve the WAF challenge. "
+            "Wildberries only: use ONLY the public review API (card.json + "
+            "feedbacks1/2.wb.ru, no browser, no anti-bot token) and fail "
+            "instead of falling back to the browser. Without this flag the "
+            "public API is still tried first and the browser is the "
+            "fallback (disable both API paths with --no-browser-api). "
             "Env: MMP_WB_API_ONLY."
         ),
     )
@@ -409,14 +409,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--save-cookies",
         default=_env_or("MMP_SAVE_COOKIES", None),
         help=(
-            "Yandex flows only: persist the browser session "
+            "Yandex flows: persist the browser session "
             "cookies to this file (default: yandex_cookies.json "
             "for yandex, yandex_maps_cookies.json for "
             "yandex_maps). After a SmartCaptcha is solved — "
             "automatically or manually — the cookies are saved "
             "and auto-loaded on the next runs, so the challenge "
             "appears at most once per cookie lifetime. --cookies "
-            "takes priority when both are given."
+            "takes priority when both are given. Wildberries "
+            "browser fallback: saves the jar with the solved "
+            "x_wbaas_token (no default file; reuse via --cookies)."
         ),
     )
     parser.add_argument(

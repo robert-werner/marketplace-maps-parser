@@ -18,6 +18,20 @@ def _loguru_no_stderr() -> None:
     logger.remove()
 
 
+@pytest.fixture(autouse=True)
+def _no_wb_public_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WB transports try the public API first; keep unit tests offline.
+
+    Tests of that path patch ``wb_public_api.collect`` themselves.
+    """
+    from infrastructure.transports import wb_public_api
+
+    async def _offline(*_a: Any, **_k: Any) -> Any:
+        raise wb_public_api.WbPublicApiError("network disabled in tests")
+
+    monkeypatch.setattr(wb_public_api, "collect", _offline)
+
+
 # ---------------------------------------------------------------------------
 # Lightweight mocks for browser / HTTP layer
 # ---------------------------------------------------------------------------
