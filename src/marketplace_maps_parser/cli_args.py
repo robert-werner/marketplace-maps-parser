@@ -20,6 +20,7 @@ flag is **not** provided on the command line — CLI always wins):
     MMP_FREE_PROXY_ELITE      --free-proxy-elite  (1/true/yes/on = on)
     MMP_WB_API_ONLY           --wb-api-only      (1/true/yes/on = on)
     MMP_WB_SESSION_SECONDS    --wb-session-seconds
+    MMP_WB_PROXY_ROTATE_MAX_RESTARTS  --wb-proxy-rotate-max-restarts
 """
 from __future__ import annotations
 
@@ -301,6 +302,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "scroll session. 0 = no cap. Keeps the session short so the "
             "proxy's egress IP is less likely to change mid-run. "
             "Env: MMP_WB_SESSION_SECONDS."
+        ),
+    )
+    parser.add_argument(
+        "--wb-proxy-rotate-max-restarts",
+        type=int,
+        default=_env_int("MMP_WB_PROXY_ROTATE_MAX_RESTARTS", 3),
+        help=(
+            "Wildberries only: max browser-session restarts on a WB "
+            "block (498/403/captcha) before giving up. Each restarted "
+            "session takes the NEXT proxy from --proxy-list; the proxy "
+            "that got blocked is marked blocked and skipped on later "
+            "rotations. A pool that exhausts (all blocked) raises "
+            "immediately. Default: 3 (mirrors --cookie-rotate-max-restarts). "
+            "0 disables rotation. Env: MMP_WB_PROXY_ROTATE_MAX_RESTARTS."
         ),
     )
     parser.add_argument(

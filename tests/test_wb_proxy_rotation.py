@@ -143,3 +143,84 @@ class _FakeBrowser:
         pass
     async def new_page(self):
         return _FakePage()
+
+
+# --- Tests for proxy-blocking-on-rotation behaviour -----------------------
+
+@pytest.mark.asyncio
+async def test_blocked_proxy_not_retried():
+    """A proxy that got blocked is skipped on later rotations and pool
+    exhaustion raises cleanly (no further browser launch)."""
+    from infrastructure.transports.wb_browser import (
+        WildberriesBrowserTransport, WildberriesBlockError,
+        HTTP498Error,
+    )
+    from infrastructure.transports.proxy_pool import ProxyPool
+
+    pool = ProxyPool.from_list([
+        {"server": "http://a.b:1080"},
+        {"server": "http://c.d:2080"},
+    ])
+
+    with patch(
+        "infrastructure.transports.wb_browser.import_invisible_playwright",
+    ) as mock_ip:
+        created = []
+
+        def fake_ctor(proxy=None, seed=None, humanize=None):
+            created.append(proxy)
+            return _FakeBrowser()
+
+        mock_ip.return_value = fake_ctor
+        calls = [0]
+
+        async def _patched_iter(self, product_url):
+            calls[0] += 1
+            raise HTTP498Error(f"HTTP 498 (call {calls[0]})")
+            yield  # unreachable, keeps the async generator
+
+        with patch.object(
+            WildberriesBrowserTransport,
+            "_iter_product_and_reviews",
+            _patched_iter, create=True,
+        ):
+            transport = WildberriesBrowserTransport(
+                product_url="https://test.example.com",
+                proxy_pool=pool,
+            )
+            with pytest.raises(WildberriesBlockError) as excinfo:
+                async for _ in transport.iter_review_batches(
+                    "https://test.example.com",
+                ):
+                    pass
+
+    # Exactly the two distinct proxies are tried; the first one is never
+    # retried because it was marked blocked.
+    assert [p["server"] for p in created] == [
+        "http://a.b:1080", "http://c.d:2080",
+    ]
+    assert len(created) == 2
+
+    # Both proxies are now marked blocked; the pool is fully exhausted.
+    stats = pool.get_stats()
+    assert stats["blocked"] == 2
+    assert stats["available"] == 0
+    assert "exhausted" in str(excinfo.value).lower()
+
+
+def test_wb_proxy_rotate_max_restarts_flag():
+    """--wb-proxy-rotate-max-restarts is parsed; the default is 3."""
+    from marketplace_maps_parser.cli_args import parse_args
+
+    args = parse_args([
+        "--marketplace", "wildberries",
+        "--url", "https://www.wildberries.ru/c",
+        "--wb-proxy-rotate-max-restarts", "7",
+    ])
+    assert args.wb_proxy_rotate_max_restarts == 7
+
+    default_args = parse_args([
+        "--marketplace", "wildberries",
+        "--url", "https://www.wildberries.ru/c",
+    ])
+    assert default_args.wb_proxy_rotate_max_restarts == 3

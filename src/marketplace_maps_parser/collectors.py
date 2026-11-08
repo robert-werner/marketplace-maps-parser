@@ -739,6 +739,9 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
         max_pages=args.max_pages,
         use_api_only=getattr(args, "wb_api_only", False),
         session_seconds=getattr(args, "wb_session_seconds", 0),
+        proxy_rotate_max_restarts=getattr(
+            args, "wb_proxy_rotate_max_restarts", 3,
+        ),
     )
     adapter = WildberriesAdapter(transport)
     return await _run_unified_json(
@@ -748,6 +751,10 @@ async def _collect_wildberries(args: argparse.Namespace) -> int:
             "total_count": adapter.last_total_count,
             "average_rating": adapter.last_average_rating,
             "collection_path": transport.collection_path,
+            "proxy_pool": (
+                transport.proxy_pool.get_stats()
+                if transport.proxy_pool is not None else None
+            ),
         },
     )
 

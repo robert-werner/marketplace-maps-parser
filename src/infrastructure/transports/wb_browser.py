@@ -290,6 +290,11 @@ class WildberriesBrowserTransport:
 
             proxy = self._proxy
             if proxy is None and self.proxy_pool is not None:
+                if self.proxy_pool.all_blocked():
+                    raise WildberriesBlockError(
+                        "proxy pool exhausted — every proxy in the pool "
+                        "was already blocked; nothing left to try",
+                    )
                 proxy = self._next_proxy()
                 self._proxy = proxy
 
@@ -314,6 +319,7 @@ class WildberriesBrowserTransport:
                 return
             except WildberriesBlockError as exc:
                 restarts += 1
+                failed_proxy = self._proxy
                 max_restarts = max(
                     self.proxy_rotate_max_restarts,
                     self.cookie_rotate_max_restarts,
@@ -323,6 +329,21 @@ class WildberriesBrowserTransport:
                     and self.cookie_pool is None
                 ) or restarts > max_restarts:
                     raise
+                # Mark the proxy that just got blocked so future rotations
+                # skip it (the pool's round-robin only cycles through
+                # unblocked proxies). Without this, a single pinned proxy
+                # that is already 498'd is retried endlessly.
+                pool_stats = None
+                if self.proxy_pool is not None:
+                    if failed_proxy is not None:
+                        self.proxy_pool.mark_blocked(failed_proxy)
+                    pool_stats = self.proxy_pool.get_stats()
+                    if self.proxy_pool.all_blocked():
+                        raise WildberriesBlockError(
+                            f"{exc} (proxy pool exhausted — all "
+                            f"{pool_stats['blocked']}/{pool_stats['total']} "
+                            "proxies blocked)",
+                        ) from exc
                 if self.proxy_pool is not None:
                     self._proxy = self._next_proxy()
                 jar_available = (
@@ -347,6 +368,13 @@ class WildberriesBrowserTransport:
                     if self._proxy is not None
                     else "proxy=none"
                 )
+                pool_part = ""
+                if self.proxy_pool is not None and pool_stats is not None:
+                    pool_part = (
+                        f" pool={pool_stats['available']}/"
+                        f"{pool_stats['total']} "
+                        f"(blocked={pool_stats['blocked']})"
+                    )
                 jar_part = (
                     " + новые cookies"
                     if self.cookie_pool is not None
@@ -354,8 +382,8 @@ class WildberriesBrowserTransport:
                     else ""
                 )
                 print(
-                    f"WB: block — restart {proxy_part}{jar_part}, "
-                    f"attempt {restarts}/{max_restarts},",
+                    f"WB: block — restart {proxy_part}{jar_part}"
+                    f"{pool_part}, attempt {restarts}/{max_restarts},",
                 )
             except Exception as exc:
                 # Browser/channel-level failure: the session is broken
